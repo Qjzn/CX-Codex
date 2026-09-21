@@ -1098,7 +1098,15 @@ export async function clearThreadGoal(threadId: string): Promise<void> {
 }
 
 export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {
-  const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
+  const normalizedThreadId = threadId.trim()
+  const normalizedNumTurns = Math.floor(numTurns)
+  if (!normalizedThreadId || !Number.isFinite(normalizedNumTurns) || normalizedNumTurns < 1) {
+    throw new Error('thread/rollback requires a valid threadId and numTurns')
+  }
+  const payload = await callRpc<ThreadReadResponse>('thread/rollback', {
+    threadId: normalizedThreadId,
+    numTurns: normalizedNumTurns,
+  })
   return normalizeThreadMessagesV2(payload)
 }
 

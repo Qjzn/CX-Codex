@@ -1,5 +1,32 @@
 # Tests
 
+## 会话正文 LaTeX/数学公式渲染（2026-09-21）
+
+### Expected behavior
+
+1. 助手正文支持 `$...$` 与 `\\(...\\)` 行内公式，以及独立行的 `$$...$$` 与 `\\[...\\]` 块级公式。
+2. 公式使用 KaTeX 的 HTML + MathML 输出，并保留源公式的可访问标签；KaTeX `trust` 保持关闭，原始 HTML 仍不进入消息 DOM。
+3. 完整代码围栏和行内代码中的 `$...$` 必须保持代码文本，不得误判为公式；不完整或无法解析的公式必须回退为可读源文本。
+4. 长块级公式在桌面和手机端只能在消息内容内部横向滚动，不得造成页面级横向溢出。
+
+### Dependency impact
+
+- 新增 `katex` 作为唯一数学排版运行时依赖，替代维护不完整的自定义 TeX 排版器；生产构建会附带 KaTeX 字体与样式，公式能力因此增加固定前端体积。
+- `DOMPurify` 已是现有运行时依赖，本项复用它清理 KaTeX 生成的 HTML/MathML；KaTeX 的 `trust: false` 和 DOMPurify 不能被移除后直接使用 `v-html`。
+- 若后续不再需要公式能力，按本节 Rollback 一起移除 KaTeX 依赖、CSS 引入、解析模块和回归夹具，不影响会话协议或 Runtime 数据。
+
+### Verification
+
+- `npm run build:frontend`：验证 Vue 类型、主前端、本地预览和预压缩构建。
+- `npm run verify:frontend-normalizers`：验证两种行内/块级分隔符、代码围栏保护，以及 KaTeX HTML + MathML 输出。
+- `git diff --check`：验证源码和文档差异格式。
+- 打开 `/#/__regression/conversation-blocks?regression=frontend&markdownMath=1`，在桌面与 393px 手机宽度确认至少有两个 `.message-math-inline`、两个 `.message-math-block`，块级公式包含 KaTeX 输出，代码围栏仍显示 `$x$` 源文本，且页面无横向溢出。
+- 现有 `markdownSemantic=1`、图片、代码块、表格和附件夹具继续作为兼容性回归；本项尚未替代真实 7420 会话中的浏览器验证。
+
+### Rollback
+
+- 一起回退 `katex` 依赖及锁文件、`src/utils/conversationMath.ts`、Markdown/ThreadConversation 解析显示改动、KaTeX 样式引入和数学公式回归夹具；不迁移或清理会话、Runtime SQLite 或用户配置。
+
 ## Markdown 15 compatibility (2026-09-08)
 
 - Conversation ordered lists preserve their original starting number when parser attributes are numeric or textual. Headings, quotes and unfinished code fences retain their existing behavior.

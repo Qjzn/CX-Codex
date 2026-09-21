@@ -206,20 +206,35 @@
           </template>
           <template v-else>
             <button
-              class="live-overlay-compact-main"
+              v-if="liveOverlayCommandMessage"
+              class="live-overlay-compact-main live-overlay-compact-command-main"
               type="button"
-              :aria-label="`${liveOverlayCompactLabel}，${liveOverlayTailHint}`"
+              :aria-label="liveOverlayCommandCompactLabel"
               @click="openLiveOverlayDetail"
             >
               <span class="live-overlay-indicator" aria-hidden="true">
                 <span class="live-overlay-indicator-ring" />
                 <span class="live-overlay-indicator-core" />
               </span>
-              <div class="live-overlay-compact-copy">
-                <p class="live-overlay-compact-label">{{ liveOverlayCompactLabel }}</p>
-                <p class="live-overlay-compact-hint">{{ liveOverlayTailHint }}</p>
-              </div>
-              <span class="live-overlay-compact-chevron" aria-hidden="true">›</span>
+              <span class="live-overlay-compact-command-duration">
+                {{ liveOverlayElapsedLabel || '<1 秒' }}
+              </span>
+              <span class="live-overlay-compact-command-separator" aria-hidden="true">·</span>
+              <span class="live-overlay-compact-command-status">正在执行命令</span>
+              <span class="live-overlay-compact-command-separator" aria-hidden="true">·</span>
+              <code
+                class="live-overlay-compact-command-value"
+                :title="liveOverlayCommandText"
+              >{{ liveOverlayCommandText }}</code>
+            </button>
+            <button
+              v-else
+              class="live-overlay-compact-main live-overlay-compact-detail-main"
+              type="button"
+              :aria-label="liveOverlayTailHint"
+              @click="openLiveOverlayDetail"
+            >
+              <span class="live-overlay-compact-detail">{{ liveOverlayTailHint }}</span>
             </button>
           </template>
         </article>
@@ -806,6 +821,13 @@
                           >
                             {{ segment.value }}
                           </a>
+                          <span
+                            v-else-if="segment.kind === 'math'"
+                            class="message-math-inline"
+                            role="math"
+                            :aria-label="segment.value"
+                            v-html="segment.html"
+                          />
                           <code v-else class="message-inline-code">{{ segment.value }}</code>
                         </template>
                       </p>
@@ -843,6 +865,13 @@
                           >
                             {{ segment.value }}
                           </a>
+                          <span
+                            v-else-if="segment.kind === 'math'"
+                            class="message-math-inline"
+                            role="math"
+                            :aria-label="segment.value"
+                            v-html="segment.html"
+                          />
                           <code v-else class="message-inline-code">{{ segment.value }}</code>
                         </template>
                       </component>
@@ -882,6 +911,13 @@
                             >
                               {{ segment.value }}
                             </a>
+                            <span
+                              v-else-if="segment.kind === 'math'"
+                              class="message-math-inline"
+                              role="math"
+                              :aria-label="segment.value"
+                              v-html="segment.html"
+                            />
                             <code v-else class="message-inline-code">{{ segment.value }}</code>
                           </template>
                         </li>
@@ -915,9 +951,23 @@
                           >
                             {{ segment.value }}
                           </a>
+                          <span
+                            v-else-if="segment.kind === 'math'"
+                            class="message-math-inline"
+                            role="math"
+                            :aria-label="segment.value"
+                            v-html="segment.html"
+                          />
                           <code v-else class="message-inline-code">{{ segment.value }}</code>
                         </template>
                       </blockquote>
+                      <div
+                        v-else-if="block.kind === 'math'"
+                        class="message-math-block"
+                        role="math"
+                        :aria-label="block.value"
+                        v-html="block.html"
+                      />
                       <hr v-else-if="block.kind === 'thematicBreak'" class="message-markdown-divider" />
                       <div v-else-if="block.kind === 'table'" class="message-table-block">
                         <div
@@ -958,6 +1008,13 @@
                                     >
                                       {{ segment.value }}
                                     </a>
+                                    <span
+                                      v-else-if="segment.kind === 'math'"
+                                      class="message-math-inline"
+                                      role="math"
+                                      :aria-label="segment.value"
+                                      v-html="segment.html"
+                                    />
                                     <code v-else class="message-inline-code">{{ segment.value }}</code>
                                   </template>
                                 </th>
@@ -994,6 +1051,13 @@
                                     >
                                       {{ segment.value }}
                                     </a>
+                                    <span
+                                      v-else-if="segment.kind === 'math'"
+                                      class="message-math-inline"
+                                      role="math"
+                                      :aria-label="segment.value"
+                                      v-html="segment.html"
+                                    />
                                     <code v-else class="message-inline-code">{{ segment.value }}</code>
                                   </template>
                                 </td>
@@ -1184,7 +1248,7 @@
                   @click.stop="onCopyMessage(entry.message)"
                 >
                   <IconTablerCheck v-if="isMessageCopied(entry.message.id)" class="message-action-icon" />
-                  <IconTablerCopy v-else class="message-action-icon" />
+                  <IconQueueCopy v-else class="message-action-icon" />
                   <span class="message-action-label">{{ isMessageCopied(entry.message.id) ? '已复制' : '复制' }}</span>
                 </button>
                 <button
@@ -1401,6 +1465,7 @@ import IconTablerCheck from '../icons/IconTablerCheck.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerPencil from '../icons/IconTablerPencil.vue'
+import IconQueueCopy from '../icons/IconQueueCopy.vue'
 import LoadingInline from './LoadingInline.vue'
 import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
 import {
@@ -1419,6 +1484,10 @@ import {
   parseConversationMarkdownBlocks,
   type ConversationMarkdownBlock,
 } from '../../utils/conversationMarkdown'
+import {
+  renderConversationMath,
+  splitInlineConversationMath,
+} from '../../utils/conversationMath'
 import {
   CODEX_FILE_CITATION_PREFIX,
   splitCodexFileCitations,
@@ -2201,6 +2270,32 @@ function buildGuidedSummaryEntry(descriptor: GuidedTurnDescriptor): GuidedSummar
 const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => {
   const entries: ConversationRenderEntry[] = []
   let visibleMessageIndex = 0
+  const visibleMessageIds = new Set(visibleRenderableMessages.value.map((message) => message.id))
+  const insertedSummaryTurnIndexes = new Set<number>()
+
+  const appendGuidedSummary = (descriptor: GuidedTurnDescriptor): void => {
+    if (insertedSummaryTurnIndexes.has(descriptor.turnIndex)) return
+    insertedSummaryTurnIndexes.add(descriptor.turnIndex)
+    const summaryEntry = buildGuidedSummaryEntry(descriptor)
+    entries.push(summaryEntry)
+
+    if (!isGuidedTurnExpanded(descriptor.turnIndex)) return
+
+    // Keep the disclosure control anchored at the first process message. The
+    // process messages then form one contiguous block instead of returning to
+    // their original positions and potentially surrounding a user message.
+    for (const processMessage of descriptor.hiddenMessages) {
+      if (!visibleMessageIds.has(processMessage.id)) continue
+      entries.push({
+        kind: 'message',
+        key: processMessage.id,
+        measureId: processMessage.id,
+        message: processMessage,
+        messageIndex: visibleMessageIndex,
+      })
+      visibleMessageIndex += 1
+    }
+  }
 
   for (const message of visibleRenderableMessages.value) {
     const turnIndex = readTurnIndex(message)
@@ -2208,16 +2303,16 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
       typeof turnIndex === 'number' ? (collapsibleGuidedTurnDescriptors.value.get(turnIndex) ?? null) : null
     const hiddenTurnIndex = hiddenGuidedMessageTurnIndexById.value[message.id]
 
-    if (
-      typeof hiddenTurnIndex === 'number' &&
-      descriptor &&
-      !isGuidedTurnExpanded(hiddenTurnIndex)
-    ) {
+    if (typeof hiddenTurnIndex === 'number' && descriptor) {
+      appendGuidedSummary(descriptor)
       continue
     }
 
     if (descriptor && descriptor.finalMessageId === message.id) {
-      entries.push(buildGuidedSummaryEntry(descriptor))
+      // The first process message may be outside the currently visible
+      // history window. In that case, retain a fallback control at the final
+      // response rather than dropping the disclosure entirely.
+      appendGuidedSummary(descriptor)
     }
 
     entries.push({
@@ -2273,7 +2368,7 @@ const liveOverlayCommandOutput = computed<string>(() => (
 const emit = defineEmits<{
   updateScrollState: [payload: { threadId: string; state: ThreadScrollState }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
-  rollback: [payload: { turnIndex: number; prependText?: string }]
+  rollback: [payload: { turnIndex: number; turnId: string; prependText?: string }]
   toggleFavorite: [message: UiMessage]
   loadOlderHistory: []
   returnToNewThread: []
@@ -2355,6 +2450,7 @@ let remoteOlderHistoryRequestTimer: number | null = null
 type InlineSegment =
   | { kind: 'text'; value: string }
   | { kind: 'bold'; value: string }
+  | { kind: 'math'; value: string; html: string }
   | { kind: 'code'; value: string }
   | { kind: 'url'; value: string; href: string }
   | { kind: 'file'; value: string; path: string; displayPath: string; downloadName: string }
@@ -2369,6 +2465,7 @@ type PreparedMessageBlock =
   | { kind: 'list'; ordered: boolean; start: number; items: PreparedMarkdownListItem[] }
   | { kind: 'blockquote'; value: string; segments: InlineSegment[] }
   | { kind: 'thematicBreak' }
+  | { kind: 'math'; value: string; html: string }
   | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
   | { kind: 'code'; language: string; code: string; lines: PreparedCodeLine[]; lineCount: number; linesView: 'preview' | 'full'; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
@@ -2535,7 +2632,6 @@ const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
   const overlay = effectiveLiveOverlay.value
   if (!overlay) return false
   if (props.compactRuntimeChrome !== true) return true
-  if (props.isTurnInProgress === true) return true
   if (overlayPrimaryPendingRequest.value) return true
   if (overlay.errorText.trim().length > 0) return true
   return false
@@ -2560,6 +2656,12 @@ const liveOverlayCompactLabel = computed(() => (
   effectiveLiveOverlay.value?.isRecovering === true
     ? `正在恢复任务 · ${liveOverlayElapsedLabel.value || '<1 秒'}`
     : `正在处理 · ${liveOverlayElapsedLabel.value || '<1 秒'}`
+))
+const liveOverlayCommandText = computed(() => (
+  liveOverlayCommandMessage.value?.commandExecution?.command?.trim() || '（命令）'
+))
+const liveOverlayCommandCompactLabel = computed(() => (
+  `${liveOverlayElapsedLabel.value || '<1 秒'}，正在执行命令，${liveOverlayCommandText.value}`
 ))
 const liveOverlayTailHint = computed(() => {
   if (effectiveLiveOverlay.value?.isRecovering === true) return '正在同步最新进度，完成后会自动更新'
@@ -3334,7 +3436,7 @@ function readMarkdownLinkAt(
   return null
 }
 
-function splitPlainTextByLinks(text: string): InlineSegment[] {
+function splitPlainTextByLinksWithoutMath(text: string): InlineSegment[] {
   const segments: InlineSegment[] = []
   const pattern = /https?:\/\/\S+|mailto:\S+|www\.\S+|file:\/\/\S+|\S*[\\/]\S+/gu
   let cursor = 0
@@ -3399,6 +3501,23 @@ function splitPlainTextByLinks(text: string): InlineSegment[] {
   }
 
   return applyBoldMarkersAcrossTextSegments(segments)
+}
+
+function splitPlainTextByLinks(text: string): InlineSegment[] {
+  const mathParts = splitInlineConversationMath(text)
+  if (!mathParts.some((part) => part.kind === 'math')) {
+    return splitPlainTextByLinksWithoutMath(text)
+  }
+
+  const segments: InlineSegment[] = []
+  for (const part of mathParts) {
+    if (part.kind === 'math') {
+      segments.push(part)
+    } else {
+      segments.push(...splitPlainTextByLinksWithoutMath(part.value))
+    }
+  }
+  return segments
 }
 
 function pushMarkdownLinkSegment(
@@ -4107,6 +4226,15 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
           value,
           segments: parseInlineSegments(value),
         })),
+      }
+    }
+    if (block.kind === 'math') {
+      const html = renderConversationMath(block.value, true)
+      if (html) return { kind: 'math', value: block.value, html }
+      return {
+        kind: 'text',
+        value: block.value,
+        segments: [{ kind: 'text', value: block.value }],
       }
     }
     if (block.kind === 'table') {
@@ -4864,7 +4992,9 @@ function onRejectUnknownRequest(requestId: number): void {
 
 function canRollbackMessage(message: UiMessage): boolean {
   if (message.role !== 'user' && message.role !== 'assistant') return false
+  if (isExecutionProcessMessage(message)) return false
   if (typeof message.turnIndex !== 'number') return false
+  if (!message.turnId?.trim()) return false
   if (props.isTurnInProgress || props.isRollingBack) return false
   return true
 }
@@ -4884,6 +5014,7 @@ function messageDeliveryLabel(message: UiMessage): string {
 
 function canFavoriteMessage(message: UiMessage): boolean {
   if (message.role !== 'user' && message.role !== 'assistant') return false
+  if (isExecutionProcessMessage(message)) return false
   if (message.deliveryState) return false
   return message.text.trim().length > 0
 }
@@ -4894,11 +5025,17 @@ function isFavoriteMessage(message: UiMessage): boolean {
 
 function canCopyMessage(message: UiMessage): boolean {
   if (message.role !== 'user' && message.role !== 'assistant') return false
+  if (isExecutionProcessMessage(message)) return false
   return message.text.trim().length > 0
 }
 
 function canScrollMessageToTop(message: UiMessage): boolean {
-  return message.role === 'assistant' && message.text.trim().length > 0
+  return message.role === 'assistant' && !isExecutionProcessMessage(message) && message.text.trim().length > 0
+}
+
+function isExecutionProcessMessage(message: UiMessage): boolean {
+  if (message.messageType === 'agentMessage.live' || message.phase === 'commentary') return true
+  return typeof hiddenGuidedMessageTurnIndexById.value[message.id] === 'number'
 }
 
 function canShowMessageActions(message: UiMessage): boolean {
@@ -4960,8 +5097,7 @@ function messageRoleLabel(message: UiMessage, index: number): string {
     return ''
   }
 
-  if (message.role === 'user') return '你'
-  if (message.role === 'assistant') return 'Codex'
+  if (message.role === 'user' || message.role === 'assistant') return ''
   if (message.role === 'system') return '系统'
   return ''
 }
@@ -5077,7 +5213,7 @@ function scrollToPendingRequests(): void {
   autoFollowBottom.value = false
   const processPanel = processPanelRef.value
   if (processPanel) {
-    processPanel.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    processPanel.scrollIntoView({ behavior: 'smooth', block: 'start' })
     return
   }
   jumpToLatest()
@@ -5194,6 +5330,7 @@ function onRollback(message: UiMessage): void {
   const prependText = message.role === 'user' ? message.text.trim() : ''
   emit('rollback', {
     turnIndex: message.turnIndex!,
+    turnId: message.turnId!.trim(),
     prependText: prependText.length > 0 ? prependText : undefined,
   })
 }
@@ -6803,8 +6940,7 @@ onBeforeUnmount(() => {
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--ui-text-tertiary) 42%, transparent) transparent;
+  scrollbar-width: none;
   transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
@@ -6814,23 +6950,7 @@ onBeforeUnmount(() => {
 }
 
 .conversation-list::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.conversation-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.conversation-list::-webkit-scrollbar-thumb {
-  min-height: 3rem;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ui-text-tertiary) 32%, transparent);
-}
-
-.conversation-list::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--ui-text-secondary) 42%, transparent);
+  display: none;
 }
 
 .conversation-list--switching {
@@ -6838,8 +6958,9 @@ onBeforeUnmount(() => {
 }
 
 .conversation-jump-to-latest {
-  @apply absolute bottom-4 left-1/2 z-20 inline-flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border p-0;
+  @apply absolute bottom-4 left-1/2 z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border p-0;
   bottom: max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem));
+  transform: translateX(-50%);
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
   color: var(--ui-text-secondary);
@@ -6852,6 +6973,7 @@ onBeforeUnmount(() => {
 }
 
 .conversation-jump-to-latest:hover {
+  transform: translateX(-50%);
   border-color: var(--ui-border-strong);
   color: var(--ui-text-primary);
 }
@@ -7210,15 +7332,15 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-inline-compact {
-  @apply rounded-2xl px-3 py-2;
-  max-width: min(42rem, 100%);
-  transition: border-color var(--motion-duration-fast) var(--motion-ease-standard),
-    background-color var(--motion-duration-fast) var(--motion-ease-standard);
+  @apply w-full gap-0 border-0 bg-transparent p-0;
+  max-width: 100%;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .live-overlay-inline-compact:hover {
-  border-color: color-mix(in srgb, var(--ui-accent) 38%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  border-color: transparent;
+  background: transparent;
 }
 
 .live-overlay-inline-compact::after {
@@ -7266,6 +7388,47 @@ onBeforeUnmount(() => {
   color: inherit;
 }
 
+.live-overlay-compact-command-main {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.live-overlay-compact-detail-main {
+  min-width: 0;
+  max-width: 100%;
+  gap: 0;
+}
+
+.live-overlay-compact-detail {
+  @apply min-w-0 max-w-full truncate text-[11px] leading-4;
+  color: var(--ui-text-secondary);
+}
+
+.live-overlay-compact-detail-main:hover .live-overlay-compact-detail,
+.live-overlay-compact-detail-main:focus-visible .live-overlay-compact-detail {
+  color: var(--ui-accent);
+}
+
+.live-overlay-compact-command-duration {
+  @apply shrink-0 text-[11px] font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.live-overlay-compact-command-separator {
+  @apply shrink-0 text-[11px];
+  color: var(--ui-text-tertiary);
+}
+
+.live-overlay-compact-command-status {
+  @apply shrink-0 text-[11px] font-medium;
+  color: var(--ui-text-secondary);
+}
+
+.live-overlay-compact-command-value {
+  @apply min-w-0 flex-1 truncate text-[11px] font-mono;
+  color: var(--ui-text-primary);
+}
+
 .live-overlay-compact-main:hover .live-overlay-compact-label,
 .live-overlay-compact-main:focus-visible .live-overlay-compact-label {
   color: var(--ui-accent);
@@ -7275,24 +7438,6 @@ onBeforeUnmount(() => {
   outline: 2px solid color-mix(in srgb, var(--ui-accent) 35%, transparent);
   outline-offset: 3px;
   border-radius: var(--ui-radius-control);
-}
-
-.live-overlay-compact-copy {
-  @apply min-w-0 flex-1 flex flex-col gap-0.5;
-}
-
-.live-overlay-compact-chevron {
-  @apply shrink-0 text-xl leading-none;
-  color: var(--ui-text-tertiary);
-  transform: translateX(0);
-  transition: transform var(--motion-duration-fast) var(--motion-ease-standard),
-    color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.live-overlay-compact-main:hover .live-overlay-compact-chevron,
-.live-overlay-compact-main:focus-visible .live-overlay-compact-chevron {
-  color: var(--ui-accent);
-  transform: translateX(2px);
 }
 
 .live-overlay-compact-head {
@@ -7328,10 +7473,6 @@ onBeforeUnmount(() => {
 
 .live-overlay-label {
   @apply m-0 text-[11px] uppercase tracking-[0.08em] font-semibold text-[#0f766e];
-}
-
-.live-overlay-compact-label {
-  @apply m-0 text-[13px] font-semibold text-[#1b4d47];
 }
 
 .live-overlay-dots {
@@ -7388,10 +7529,6 @@ onBeforeUnmount(() => {
 
 .live-overlay-hint {
   @apply m-0 text-sm leading-5 text-[#5b756f];
-}
-
-.live-overlay-compact-hint {
-  @apply m-0 text-[11px] leading-4 text-[#6b8a84];
 }
 
 .live-overlay-detail-button {
@@ -7702,6 +7839,35 @@ onBeforeUnmount(() => {
   font-size: var(--font-size-reading, 15px);
   line-height: var(--line-height-reading);
   letter-spacing: var(--tracking-body-soft);
+}
+
+.message-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+.message-math-inline .katex {
+  font-size: 1em;
+}
+
+.message-math-block {
+  @apply my-2 max-w-full overflow-x-auto;
+  padding: 0.2rem 0.25rem;
+  color: var(--ui-text-primary);
+  text-align: center;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.message-math-block .katex-display {
+  min-width: max-content;
+  margin: 0;
+}
+
+.message-math-block .katex {
+  font-size: 1.1em;
 }
 
 .message-streaming-caret {
@@ -8306,26 +8472,31 @@ onBeforeUnmount(() => {
 }
 
 .message-actions {
-  @apply inline-flex items-center gap-2;
-  position: absolute;
-  left: 0.5rem;
-  right: 0.5rem;
-  bottom: -0.5rem;
+  @apply inline-flex items-center gap-1;
+  position: static;
+  align-self: flex-start;
+  flex-wrap: wrap;
+  margin-top: 0.125rem;
   z-index: 10;
   pointer-events: none;
 }
 
+.message-stack[data-role='user'] .message-actions {
+  align-self: flex-end;
+}
+
 .message-actions-main {
   @apply inline-flex items-center gap-0.5;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .message-action-button {
-  @apply opacity-0 inline-flex h-8 w-8 items-center justify-center self-start border border-transparent p-0 text-[11px] shadow-sm;
-  border-radius: var(--ui-radius-control);
-  background: color-mix(in srgb, var(--ui-bg-surface) 88%, transparent);
-  color: var(--ui-text-tertiary);
-  box-shadow: 0 6px 14px rgb(0 0 0 / 0.05);
+  @apply opacity-0 inline-flex h-7 w-7 items-center justify-center self-start border border-transparent p-0 text-[11px] shadow-sm;
+  border-radius: 7px;
+  border-color: rgba(28, 72, 58, 0.28);
+  background: rgba(28, 72, 58, 0.055);
+  color: #35574e;
+  box-shadow: none;
   pointer-events: none;
   transition:
     background-color var(--motion-duration-fast) var(--motion-ease-standard),
@@ -8340,9 +8511,22 @@ onBeforeUnmount(() => {
 }
 
 .message-action-button:hover {
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-secondary);
+  border-color: rgba(8, 122, 92, 0.68);
+  background: rgba(8, 122, 92, 0.12);
+  color: #123d31;
+  transform: translateY(-1px);
+}
+
+:root.dark .message-action-button {
+  border-color: rgba(188, 231, 218, 0.2);
+  background: rgba(255, 255, 255, 0.025);
+  color: #c7d8d3;
+}
+
+:root.dark .message-action-button:hover {
+  border-color: rgba(110, 231, 189, 0.7);
+  background: rgba(110, 231, 189, 0.1);
+  color: #f1fffa;
 }
 
 .message-action-button.is-copied {
@@ -8358,21 +8542,7 @@ onBeforeUnmount(() => {
 }
 
 .message-action-button--rollback {
-  border-color: color-mix(in srgb, var(--ui-danger) 22%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
   color: var(--ui-danger);
-}
-
-.message-action-button--edit {
-  border-color: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
-  color: var(--ui-accent);
-}
-
-.message-action-button--rollback:hover {
-  border-color: color-mix(in srgb, var(--ui-danger) 34%, var(--ui-border-strong));
-  background: color-mix(in srgb, var(--ui-danger) 9%, var(--ui-bg-surface));
-  color: color-mix(in srgb, var(--ui-danger) 84%, var(--ui-text-primary));
 }
 
 .message-action-button--rollback.is-confirming {
@@ -8384,7 +8554,7 @@ onBeforeUnmount(() => {
 }
 
 .message-action-icon {
-  @apply w-3.5 h-3.5;
+  @apply w-3 h-3;
 }
 
 .message-action-label {
@@ -8733,6 +8903,15 @@ onBeforeUnmount(() => {
     line-height: 1.58;
   }
 
+  .message-math-block {
+    padding-inline: 0;
+    text-align: left;
+  }
+
+  .message-math-block .katex {
+    font-size: 1em;
+  }
+
   .message-table-scroll {
     @apply block;
     max-width: 100%;
@@ -8835,11 +9014,23 @@ onBeforeUnmount(() => {
   }
 
   .message-action-button {
-    @apply h-8 w-8 justify-center px-0;
+    @apply h-7 w-7 justify-center px-0;
   }
 
   .message-action-label {
     @apply sr-only;
+  }
+}
+
+@media (max-width: 767px) and (orientation: portrait) {
+  .message-action-button {
+    width: 1.875rem;
+    height: 1.875rem;
+  }
+
+  .message-action-icon {
+    width: 0.875rem;
+    height: 0.875rem;
   }
 }
 

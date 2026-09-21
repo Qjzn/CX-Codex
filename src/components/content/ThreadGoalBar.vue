@@ -86,8 +86,10 @@
             type="button"
             class="thread-goal-action thread-goal-action-secondary thread-goal-action-danger"
             :disabled="isUpdating || disabled"
+            aria-label="终止持续目标"
+            title="终止持续目标"
             @click="requestClear"
-          >清除</button>
+          >终止</button>
           <div ref="moreRootRef" class="thread-goal-more">
             <button
               ref="moreTriggerRef"
@@ -109,7 +111,7 @@
               @keydown="onMoreMenuKeydown"
             >
               <button type="button" role="menuitem" @click="openEditor">编辑目标</button>
-              <button type="button" role="menuitem" class="is-danger" @click="requestClear">清除目标</button>
+              <button type="button" role="menuitem" class="is-danger" @click="requestClear">终止目标</button>
             </div>
           </div>
         </div>
@@ -129,11 +131,11 @@
     </button>
 
     <div v-if="isConfirmingClear" class="thread-goal-confirm" role="alert">
-      <span>确定清除“{{ objectivePreview }}”？清除后不会自动继续。</span>
+      <span>确定终止“{{ objectivePreview }}”？终止后不会自动继续。</span>
       <div>
         <button type="button" :disabled="isUpdating" @click="cancelClear">取消</button>
         <button type="button" class="is-danger" :disabled="isUpdating" @click="confirmClear">
-          {{ isUpdating ? '清除中…' : '确认清除' }}
+          {{ isUpdating ? '终止中…' : '确认终止' }}
         </button>
       </div>
     </div>
@@ -161,7 +163,7 @@
           class="is-danger"
           :disabled="isUpdating"
           @click="requestClear"
-        >清除</button>
+        >终止</button>
         <button type="submit" class="is-primary" :disabled="!canSave">
           {{ saveButtonLabel }}
         </button>
@@ -440,7 +442,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .thread-goal {
   box-sizing: border-box;
-  width: min(100%, 860px);
+  width: min(100%, var(--ui-composer-max, 60rem));
   max-width: 100%;
   min-width: 0;
   margin: 0 auto 6px;
@@ -520,10 +522,10 @@ onBeforeUnmount(() => {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   width: 100%;
   min-width: 0;
-  min-height: 42px;
+  min-height: 36px;
   align-items: center;
   gap: 9px;
-  padding: 5px 7px 5px 11px;
+  padding: 4px 7px 4px 11px;
   border-radius: 10px;
 }
 
@@ -542,29 +544,28 @@ onBeforeUnmount(() => {
 
 .thread-goal-objective {
   min-width: 0;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .thread-goal-kicker,
-.thread-goal-text { display: block; }
+.thread-goal-text { display: inline; }
 
 .thread-goal-kicker {
-  margin-bottom: 1px;
+  margin-right: 5px;
   color: var(--ui-text-secondary);
   font-size: 11px;
   line-height: 1.2;
 }
 
 .thread-goal-text {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -587,7 +588,7 @@ onBeforeUnmount(() => {
 
 .thread-goal-action,
 .thread-goal-editor-actions button {
-  min-height: 28px;
+  min-height: 26px;
   padding: 0 8px;
   border: 1px solid transparent;
   border-radius: 7px;

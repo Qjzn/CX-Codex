@@ -802,6 +802,18 @@
                   @retry="retryFailedUserMessage"
                   @delete="deleteFailedUserMessage"
                 />
+                <ThreadGoalBar
+                  v-if="selectedThreadGoal || isSelectedThreadGoalLoading || selectedThreadGoalError"
+                  :goal="selectedThreadGoal"
+                  :is-loading="isSelectedThreadGoalLoading"
+                  :is-updating="isSelectedThreadGoalUpdating"
+                  :error="selectedThreadGoalError"
+                  :disabled="isThreadContentSwitching"
+                  @set-goal="onSaveThreadGoal"
+                  @set-status="onSetThreadGoalStatus"
+                  @clear-goal="onClearThreadGoal"
+                  @retry="onRetryThreadGoal"
+                />
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
                   :models="availableModelIds"
@@ -1070,6 +1082,7 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
+import ThreadGoalBar from './components/content/ThreadGoalBar.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import PageLoadingSkeleton from './components/content/PageLoadingSkeleton.vue'
@@ -1483,6 +1496,8 @@ const {
   saveSelectedThreadGoal,
   saveThreadGoalById,
   updateSelectedThreadGoalStatus,
+  clearSelectedThreadGoal,
+  refreshSelectedThreadGoal,
   updateSelectedSpeedMode,
   respondToPendingServerRequest,
   renameProject,
@@ -2239,15 +2254,19 @@ function visibleConversationMessages(sourceMessages: UiMessage[]): UiMessage[] {
 }
 
 const filteredMessages = computed(() => visibleConversationMessages(messages.value))
-const latestUserTurnIndex = computed(() => {
-  let latest = -1
+const latestUserMessage = computed<UiMessage | null>(() => {
+  let latest: UiMessage | null = null
   for (const message of filteredMessages.value) {
     if (message.role !== 'user') continue
     if (typeof message.turnIndex !== 'number') continue
-    if (message.turnIndex > latest) latest = message.turnIndex
+    if (!latest || message.turnIndex > (latest.turnIndex ?? -1)) latest = message
   }
   return latest
 })
+const latestUserTurnIndex = computed(() => {
+  return latestUserMessage.value?.turnIndex ?? -1
+})
+const latestUserTurnId = computed(() => latestUserMessage.value?.turnId?.trim() ?? '')
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const composerCwd = computed(() => {
@@ -2570,7 +2589,7 @@ const desktopHandoffButtonTitle = computed(() => (
   '释放 WebUI 对 app-server 的占用，让远程 Codex Desktop 可以打开同一会话；活动任务运行时会拒绝操作。'
 ))
 const desktopHandoffButtonLabel = computed(() => (
-  isDesktopHandoffRunning.value ? '释放中...' : '交接给桌面端'
+  isDesktopHandoffRunning.value ? '释放中...' : '结束占用会话'
 ))
 
 type IdleSchedulerWindow = Window & typeof globalThis & {
@@ -3999,7 +4018,34 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
         threadGoalObjective,
       )
     } else {
-      onSaveThreadGoal(threadGoalObjective, true)
+      const targetThreadId = selectedThreadId.value.trim()
+      if (!targetThreadId) return
+      void onSaveThreadGoal(threadGoalObjective, true)
+        .then(() => sendMessageToSelectedThread(
+          text,
+          payload.imageUrls,
+          payload.skills,
+          payload.mode,
+          payload.fileAttachments,
+          queueInsertIndex,
+          payload.collaborationMode,
+          payload.turnOptions,
+          {
+            targetThreadId,
+            feedbackStartedAtMs,
+            onDeliveryPersisted: () => { void ensureMobileShellTaskNotificationPermission() },
+            onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
+            onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+          },
+        ))
+        .then(() => {
+          if (payload.mode !== 'queue') {
+            markDesktopSyncPending(targetThreadId)
+          }
+        })
+        .catch(() => {
+          // Both the goal save and message path expose failures in the shared state.
+        })
     }
     return
   }
@@ -4249,7 +4295,8 @@ async function rollbackAndResendDictation(payload: {
   }
   const rollbackTargetTurnIndex = latestUserTurnIndex.value
   if (rollbackTargetTurnIndex >= 0) {
-    await rollbackSelectedThread(rollbackTargetTurnIndex)
+    const rolledBack = await rollbackSelectedThread(rollbackTargetTurnIndex, latestUserTurnId.value)
+    if (!rolledBack) return
   }
   await sendMessageToSelectedThread(
     payload.text,
@@ -4437,13 +4484,11 @@ function onSelectCollaborationMode(mode: CollaborationMode): void {
   setSelectedCollaborationMode(mode)
 }
 
-function onSaveThreadGoal(objective: string, activate = false): void {
+function onSaveThreadGoal(objective: string, activate = false): Promise<void> {
   if (selectedCollaborationMode.value === 'plan') {
     setSelectedCollaborationMode('execute')
   }
-  void saveSelectedThreadGoal(objective, activate).catch(() => {
-    // The desktop state exposes the actionable RPC error in the shared error banner.
-  })
+  return saveSelectedThreadGoal(objective, activate)
 }
 
 function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
@@ -4453,6 +4498,16 @@ function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
   void updateSelectedThreadGoalStatus(status).catch(() => {
     // Keep the existing goal visible so the user can retry without re-entering it.
   })
+}
+
+function onClearThreadGoal(): void {
+  void clearSelectedThreadGoal().catch(() => {
+    // Keep the goal visible so the user can retry without losing its controls.
+  })
+}
+
+function onRetryThreadGoal(): void {
+  void refreshSelectedThreadGoal()
 }
 
 async function onImplementPlan(message: UiMessage): Promise<void> {
@@ -4496,13 +4551,13 @@ function onInterruptTurn(source: 'composer-stop' | 'runtime-status-stop' | 'unkn
   void interruptSelectedThreadTurn(source)
 }
 
-function onRollback(payload: { turnIndex: number; prependText?: string }): void {
+function onRollback(payload: { turnIndex: number; turnId: string; prependText?: string }): void {
   const prependText = payload.prependText?.trim() ?? ''
-  if (prependText.length > 0) {
+  void rollbackSelectedThread(payload.turnIndex, payload.turnId).then((succeeded) => {
+    if (!succeeded || prependText.length === 0) return
     rollbackDraftPrependRequestId += 1
     rollbackDraftPrependRequest.value = { id: rollbackDraftPrependRequestId, text: prependText }
-  }
-  void rollbackSelectedThread(payload.turnIndex)
+  })
 }
 
 function loadBoolPref(key: string, fallback: boolean): boolean {
@@ -5281,6 +5336,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   background: var(--ui-bg-sidebar);
+  scrollbar-width: none;
+}
+
+.sidebar-scrollable::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar-top-shell {
@@ -6637,6 +6697,13 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
   .content-status-detail {
     max-width: min(44rem, 48vw);
+  }
+}
+
+@media (min-width: 1280px) {
+  .content-root {
+    --content-shell-max-width: min(60rem, calc(100vw - 2.75rem));
+    --ui-composer-max: 60rem;
   }
 }
 

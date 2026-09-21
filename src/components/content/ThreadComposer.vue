@@ -1212,22 +1212,7 @@ const activeGoalLabel = computed(() => {
   if (goalModeEnabled.value && text) return text
   return goalModeEnabled.value ? '随本次消息发送，不会持续运行' : '添加一次性任务要求'
 })
-const threadGoalObjectivePreview = computed(() => {
-  const objective = props.threadGoal?.objective.trim() ?? ''
-  return objective.length > 42 ? `${objective.slice(0, 42)}…` : objective
-})
-const threadGoalMenuSummary = computed(() => {
-  if (props.isThreadGoalLoading === true && !props.threadGoal) return '正在读取持续目标…'
-  if (props.threadGoalError?.trim()) return '同步失败，可重新输入目标'
-  if (isThreadGoalModeOn.value) {
-    if (threadGoalObjectivePreview.value) return `输入框修改目标 · ${threadGoalObjectivePreview.value}`
-    return '在输入框输入目标并发送'
-  }
-  if (props.threadGoal?.status === 'paused') return '已暂停，开启后可修改并继续'
-  if (props.threadGoal?.status === 'complete') return '已完成，开启后可设置新目标'
-  if (props.threadGoal?.status === 'blocked' || props.threadGoal?.status === 'usageLimited') return '当前不可继续，开启后可重设'
-  return '开启后在输入框输入目标并发送'
-})
+const threadGoalMenuSummary = computed(() => '将输入设为目标')
 const pluginMenuTitle = computed(() =>
   allPluginOptions.value.length > 0 ? `${allPluginOptions.value.length} 个已连接插件` : '插件',
 )

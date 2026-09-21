@@ -1614,6 +1614,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   let pendingThreadsRefresh = false
   const pendingThreadMessageRefresh = new Set<string>()
   const pendingSessionLogMessageRefresh = new Set<string>()
+  // A successful thread/rollback response already contains the authoritative
+  // post-revert messages. Keep the next background sync from immediately
+  // replacing that local projection with a stale thread snapshot.
+  const locallyRevertedThreadIds = new Set<string>()
   let visibilitySyncTimer: number | null = null
   const resumeSyncTimers = new Set<number>()
   let foregroundRecoveryFeedbackTimer: number | null = null
@@ -2300,10 +2304,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     pendingThreadsRefresh = true
   }
 
-  async function retryPendingTurnWithFallback(threadId: string): Promise<void> {
+  async function retryPendingTurnWithFallback(threadId: string, failedTurnId: string): Promise<void> {
     if (fallbackRetryInFlightThreadIds.has(threadId)) return
     const pending = pendingTurnRequestByThreadId.value[threadId]
     if (!pending || pending.fallbackRetried) return
+    const normalizedFailedTurnId = failedTurnId.trim()
+    if (!normalizedFailedTurnId) {
+      const errorMessage = '无法确定失败回合，已停止自动重试以避免重复发送。'
+      setTurnErrorForThread(threadId, errorMessage)
+      error.value = errorMessage
+      return
+    }
 
     fallbackRetryInFlightThreadIds.add(threadId)
     setPendingTurnRequest(threadId, {
@@ -2314,16 +2325,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     try {
       await applyFallbackModelSelection()
       // Remove the failed user turn before replaying on fallback model to avoid duplicated user messages.
-      try {
-        const rolledBackMessages = await rollbackThread(threadId, 1)
-        setPersistedMessagesForThread(threadId, rolledBackMessages)
-        setLiveAgentMessagesForThread(threadId, [])
-        clearLiveReasoningForThread(threadId)
-        if (liveCommandsByThreadId.value[threadId]) {
-          liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
-        }
-      } catch {
-        // If rollback fails, continue with retry rather than dropping the turn.
+      // The stable protocol identifies the rollback target by count rather than
+      // turn id. The completed notification's turn id is still a required gate:
+      // without it, do not risk replaying the pending request as a duplicate.
+      const rolledBackMessages = await rollbackThread(threadId, 1)
+      setPersistedMessagesForThread(threadId, rolledBackMessages)
+      setLiveAgentMessagesForThread(threadId, [])
+      clearLiveReasoningForThread(threadId)
+      if (liveCommandsByThreadId.value[threadId]) {
+        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
       }
       setTurnErrorForThread(threadId, null)
       error.value = ''
@@ -6951,9 +6961,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const completedTurn = readTurnCompletedInfo(notification)
     const turnErrorMessage = readTurnErrorMessage(notification)
-    const completedThreadId = completedTurn?.threadId ?? extractThreadIdFromNotification(notification)
     const shouldRetryWithFallback =
-      Boolean(completedThreadId) &&
+      Boolean(completedTurn?.threadId && completedTurn.turnId) &&
       Boolean(turnErrorMessage) &&
       selectedModelId.value !== MODEL_FALLBACK_ID &&
       isUnsupportedChatGptModelError(new Error(turnErrorMessage))
@@ -7016,7 +7025,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
       error.value = turnErrorMessage
       if (failedThreadId && shouldRetryWithFallback) {
-        void retryPendingTurnWithFallback(failedThreadId)
+        void retryPendingTurnWithFallback(failedThreadId, completedTurn?.turnId ?? '')
       }
     } else if (completedTurn) {
       setTurnErrorForThread(completedTurn.threadId, null)
@@ -7060,7 +7069,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         error.value = notificationErrorMessage
         if (selectedModelId.value !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorMessage))) {
           if (errorThreadId) {
-            void retryPendingTurnWithFallback(errorThreadId)
+            void retryPendingTurnWithFallback(
+              errorThreadId,
+              activeTurnIdByThreadId.value[errorThreadId] ?? '',
+            )
           } else {
             void applyFallbackModelSelection()
           }
@@ -9494,22 +9506,22 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function rollbackSelectedThread(turnIndex: number): Promise<void> {
+  async function rollbackSelectedThread(turnIndex: number, turnId: string): Promise<boolean> {
     const threadId = selectedThreadId.value
-    if (!threadId) return
-    if (isRollingBack.value) return
+    if (!threadId) return false
+    if (isRollingBack.value) return false
 
-    const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const maxTurnIndex = persisted.reduce((max, m) => (typeof m.turnIndex === 'number' && m.turnIndex > max ? m.turnIndex : max), -1)
-    if (maxTurnIndex < 0 || turnIndex > maxTurnIndex) return
-    const numTurns = maxTurnIndex - turnIndex + 1
-    if (numTurns < 1) return
+    const normalizedTurnId = turnId.trim()
+    if (!normalizedTurnId) {
+      error.value = '无法确定该消息所属的回合，未执行回滚。'
+      return false
+    }
+    if (!Number.isFinite(turnIndex) || turnIndex < 0) return false
 
     isRollingBack.value = true
     error.value = ''
-    try {
-      await rollbackWorktreeGitToTurnMessage(threadId, turnIndex)
-      const nextMessages = await rollbackThread(threadId, numTurns)
+    let revertedMessages: UiMessage[] | null = null
+    const applyRevertedMessages = (nextMessages: UiMessage[]): void => {
       setPersistedMessagesForThread(threadId, nextMessages)
       setLiveAgentMessagesForThread(threadId, [])
       setLivePlanMessagesForThread(threadId, [])
@@ -9520,10 +9532,58 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, null)
       setTurnErrorForThread(threadId, null)
+      pendingThreadMessageRefresh.delete(threadId)
+      pendingSessionLogMessageRefresh.delete(threadId)
+      locallyRevertedThreadIds.add(threadId)
+      loadedMessagesByThreadId.value = {
+        ...loadedMessagesByThreadId.value,
+        [threadId]: true,
+      }
+      lastThreadDetailSyncAtById.value = {
+        ...lastThreadDetailSyncAtById.value,
+        [threadId]: Date.now(),
+      }
       pendingThreadsRefresh = true
-      await syncFromNotifications()
+    }
+    try {
+      const persisted = persistedMessagesByThreadId.value[threadId] ?? []
+      const matchingMessage = persisted.find((message) => (
+        message.turnIndex === turnIndex && message.turnId?.trim() === normalizedTurnId
+      ))
+      const maxTurnIndex = persisted.reduce(
+        (max, message) => (
+          typeof message.turnIndex === 'number' && message.turnIndex > max ? message.turnIndex : max
+        ),
+        -1,
+      )
+      if (!matchingMessage || maxTurnIndex < turnIndex) {
+        error.value = '无法确认要回滚的回合，未执行回滚。'
+        return false
+      }
+      const numTurns = maxTurnIndex - turnIndex + 1
+
+      // Roll back the server thread first. This prevents a failed RPC from leaving the
+      // worktree changed while the conversation remains at its old history.
+      revertedMessages = await rollbackThread(threadId, numTurns)
+      await rollbackWorktreeGitToTurnMessage(threadId, turnIndex)
+      applyRevertedMessages(revertedMessages)
+      // Let Vue paint the authoritative local result first. The scheduled sync
+      // refreshes the sidebar, while its active-message refresh is suppressed
+      // once because the revert RPC already supplied the complete message set.
+      abortCurrentSync()
+      scheduleEventSync(0)
+      return true
     } catch (unknownError) {
+      // thread/rollback may have succeeded before the local worktree rollback failed.
+      // Reflect the authoritative thread state even though the combined operation
+      // is reported as failed, and do not let callers continue with a resend.
+      if (revertedMessages) {
+        applyRevertedMessages(revertedMessages)
+        abortCurrentSync()
+        scheduleEventSync(0)
+      }
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to rollback thread'
+      return false
     } finally {
       isRollingBack.value = false
     }
@@ -10217,10 +10277,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     try {
       const initialActiveThreadId = selectedThreadId.value
+      const locallyRevertedInitialThreadId = (
+        initialActiveThreadId && locallyRevertedThreadIds.has(initialActiveThreadId)
+      ) ? initialActiveThreadId : ''
       if (initialActiveThreadId) {
         await refreshRuntimeStatusSnapshot(initialActiveThreadId, controller?.signal)
       }
-      if (initialActiveThreadId && threadIdsToRefresh.has(initialActiveThreadId)) {
+      if (
+        initialActiveThreadId &&
+        threadIdsToRefresh.has(initialActiveThreadId) &&
+        initialActiveThreadId !== locallyRevertedInitialThreadId
+      ) {
         await refreshActiveMessagesNow(initialActiveThreadId)
       }
 
@@ -10234,12 +10301,32 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       const activeThreadId = selectedThreadId.value
       if (!activeThreadId) return
 
+      const locallyRevertedActiveThread = locallyRevertedThreadIds.has(activeThreadId)
+      if (locallyRevertedActiveThread) {
+        locallyRevertedThreadIds.delete(activeThreadId)
+        const version = currentThreadVersion(activeThreadId)
+        if (version) {
+          loadedVersionByThreadId.value = {
+            ...loadedVersionByThreadId.value,
+            [activeThreadId]: version,
+          }
+        }
+        lastThreadDetailSyncAtById.value = {
+          ...lastThreadDetailSyncAtById.value,
+          [activeThreadId]: Date.now(),
+        }
+      }
+
       const isActiveDirty = threadIdsToRefresh.has(activeThreadId)
       const currentVersion = currentThreadVersion(activeThreadId)
       const loadedVersion = loadedVersionByThreadId.value[activeThreadId] ?? ''
       const hasVersionChange = currentVersion.length > 0 && currentVersion !== loadedVersion
 
-      if ((isActiveDirty || hasVersionChange || shouldRefreshThreads) && refreshedMessageThreadId !== activeThreadId) {
+      if (
+        !locallyRevertedActiveThread &&
+        (isActiveDirty || hasVersionChange || shouldRefreshThreads) &&
+        refreshedMessageThreadId !== activeThreadId
+      ) {
         await refreshActiveMessagesNow(activeThreadId)
       }
     } catch (error) {
@@ -10454,6 +10541,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
     pendingSessionLogMessageRefresh.clear()
+    locallyRevertedThreadIds.clear()
     sessionLogAuthoritativeRefreshGenerationByThreadId.clear()
     pendingTurnStartsById.clear()
     clearNonFreshThreadDetailRetries()

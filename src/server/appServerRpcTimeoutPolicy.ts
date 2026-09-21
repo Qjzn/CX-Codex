@@ -18,7 +18,7 @@ export function getRpcTimeoutMs(method: string, params: unknown): number {
       ? APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS
       : APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS
   }
-  if (method === 'thread/resume') {
+  if (method === 'thread/resume' || method === 'thread/rollback') {
     return APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS
   }
   return APP_SERVER_RPC_TIMEOUT_MS
