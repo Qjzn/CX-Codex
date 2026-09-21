@@ -63,6 +63,7 @@ import {
   handleMobilePushRoutes,
   type MobilePushRoutesDependencies,
 } from './mobilePushRoutes.js'
+import { handleTerminalRoutes } from './terminalRoutes.js'
 
 type CodexBridgeRouteAppServer = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -167,6 +168,10 @@ export function createCodexBridgeRouteHandlers(
     () => handleLocalStateRoutes(req, res, url, {
       readJsonBody,
       setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
+    }),
+    () => handleTerminalRoutes(req, res, url, {
+      readJsonBody,
+      rpc: (method, params) => appServer.rpc(method, params),
     }),
     () => handleRpcProxyRoute(req, res, url, {
       readJsonBody,

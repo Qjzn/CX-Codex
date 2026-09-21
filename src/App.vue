@@ -85,7 +85,32 @@
               </button>
             </SidebarThreadControls>
 
-            <div class="sidebar-action-grid" aria-label="侧栏快捷操作">
+            <div class="sidebar-view-switcher" role="tablist" aria-label="侧栏视图">
+              <button
+                class="sidebar-view-tab"
+                :class="{ 'is-active': sidebarView === 'threads' }"
+                type="button"
+                role="tab"
+                :aria-selected="sidebarView === 'threads'"
+                @click="setSidebarView('threads')"
+              >
+                <IconTablerLayoutSidebar class="sidebar-view-tab-icon" />
+                <span>会话</span>
+              </button>
+              <button
+                class="sidebar-view-tab"
+                :class="{ 'is-active': sidebarView === 'terminal' }"
+                type="button"
+                role="tab"
+                :aria-selected="sidebarView === 'terminal'"
+                @click="setSidebarView('terminal')"
+              >
+                <IconTablerTerminal class="sidebar-view-tab-icon" />
+                <span>终端</span>
+              </button>
+            </div>
+
+            <div v-if="sidebarView === 'threads'" class="sidebar-action-grid" aria-label="侧栏快捷操作">
               <button
                 class="sidebar-action-tile"
                 type="button"
@@ -119,7 +144,7 @@
               </button>
             </div>
 
-            <div v-if="isSidebarSearchVisible" class="sidebar-search-bar">
+            <div v-if="isSidebarSearchVisible && sidebarView === 'threads'" class="sidebar-search-bar">
               <IconTablerSearch class="sidebar-search-bar-icon" />
               <input
                 ref="sidebarSearchInputRef"
@@ -141,8 +166,7 @@
             </div>
           </div>
 
-          <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
-            v-if="!isSidebarCollapsed"
+          <SidebarThreadTree v-if="!isSidebarCollapsed && sidebarView === 'threads'" ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
             :search-query="sidebarSearchQuery"
             :desktop-list-parity="isMobile || isMobileShellAvailable"
@@ -157,6 +181,7 @@
             @refresh="onRefreshSidebarThreads"
             @remove-project="onRemoveProject" @reorder-project="onReorderProject"
             @export-thread="onExportThread" />
+          <SidebarTerminal v-else-if="!isSidebarCollapsed" :cwd="terminalCwd" />
         </div>
 
         <div v-if="!isSidebarCollapsed" ref="sidebarSettingsAreaRef" class="sidebar-settings-area">
@@ -1088,15 +1113,18 @@ import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vu
 import PageLoadingSkeleton from './components/content/PageLoadingSkeleton.vue'
 import ConversationLoadingSkeleton from './components/content/ConversationLoadingSkeleton.vue'
 import SidebarLoadingSkeleton from './components/sidebar/SidebarLoadingSkeleton.vue'
+import SidebarTerminal from './components/sidebar/SidebarTerminal.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
 import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
+import IconTablerLayoutSidebar from './components/icons/IconTablerLayoutSidebar.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
 import IconTablerRefresh from './components/icons/IconTablerRefresh.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
+import IconTablerTerminal from './components/icons/IconTablerTerminal.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
 import { chatFeedbackNow } from './composables/chatFeedbackMetrics'
@@ -1214,6 +1242,7 @@ const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/
 // v1 could retain the collapsed state from the broken sidebar layout. Start
 // with a fresh key so that stale state cannot hide the desktop sidebar again.
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v2'
+const SIDEBAR_VIEW_STORAGE_KEY = 'codex-web-local.sidebar-view.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
@@ -1573,6 +1602,8 @@ let threadExportPromise: Promise<void> | null = null
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
+type SidebarView = 'threads' | 'terminal'
+const sidebarView = ref<SidebarView>(loadSidebarView())
 const isCommandMenuOpen = ref(false)
 const commandMenuInitialMode = ref<'root' | 'files'>('root')
 const commandMenuModeRequestId = ref(0)
@@ -2273,6 +2304,7 @@ const composerCwd = computed(() => {
   if (isHomeRoute.value) return newThreadCwd.value.trim()
   return selectedThread.value?.cwd?.trim() ?? ''
 })
+const terminalCwd = computed(() => composerCwd.value || newThreadCwd.value.trim())
 const commandMenuCwd = computed(() => composerCwd.value || newThreadCwd.value.trim())
 const displayedThreadConversationId = ref('')
 const displayedThreadCwd = ref('')
@@ -3409,6 +3441,9 @@ function confirmDesktopHandoff(): void {
 }
 
 function toggleSidebarSearch(): void {
+  if (sidebarView.value !== 'threads') {
+    setSidebarView('threads')
+  }
   isSidebarSearchVisible.value = !isSidebarSearchVisible.value
   if (isSidebarSearchVisible.value) {
     nextTick(() => {
@@ -3418,6 +3453,17 @@ function toggleSidebarSearch(): void {
     })
   } else {
     sidebarSearchQuery.value = ''
+  }
+}
+
+function setSidebarView(nextView: SidebarView): void {
+  sidebarView.value = nextView
+  if (nextView !== 'threads') {
+    isSidebarSearchVisible.value = false
+    sidebarSearchQuery.value = ''
+  }
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, nextView)
   }
 }
 
@@ -3490,6 +3536,7 @@ function onSidebarSearchKeydown(event: KeyboardEvent): void {
 
 function onSelectThread(threadId: string): void {
   if (!threadId) return
+  setSidebarView('threads')
   closeMobileSidebarAfterNavigation()
   if (selectedThreadId.value !== threadId) {
     void selectThread(threadId)
@@ -3706,6 +3753,7 @@ function resolvePreferredLocalCwd(projectName: string, fallbackCwd = ''): string
 }
 
 function onStartNewThread(projectName: string): void {
+  setSidebarView('threads')
   const projectGroup = projectGroups.value.find((group) => group.projectName === projectName)
   const projectCwd = resolvePreferredLocalCwd(projectName, projectGroup?.threads[0]?.cwd?.trim() ?? '')
   if (projectCwd) {
@@ -3731,6 +3779,7 @@ function onBrowseThreadFiles(threadId: string): void {
 }
 
 function onStartNewThreadFromToolbar(): void {
+  setSidebarView('threads')
   const selected = selectedThread.value
   const cwd = selected
     ? resolvePreferredLocalCwd(selected.projectName, selected.cwd?.trim() ?? '')
@@ -4738,6 +4787,11 @@ function loadSidebarCollapsed(): boolean {
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
 }
 
+function loadSidebarView(): SidebarView {
+  if (typeof window === 'undefined') return 'threads'
+  return window.localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) === 'terminal' ? 'terminal' : 'threads'
+}
+
 function saveSidebarCollapsed(value: boolean): void {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, value ? '1' : '0')
@@ -5347,6 +5401,43 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   @apply flex flex-col gap-1 border border-transparent bg-transparent px-1 py-1;
   border-radius: var(--ui-radius-card);
   box-shadow: none;
+}
+
+.sidebar-view-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem;
+  padding: 0.15rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-bg-surface);
+}
+
+.sidebar-view-tab {
+  @apply flex min-h-8 min-w-0 items-center justify-center gap-1.5 border border-transparent px-2 text-[11px] font-medium transition-colors duration-150;
+  border-radius: calc(var(--ui-radius-control) - 2px);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-view-tab:hover,
+.sidebar-view-tab:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-view-tab.is-active {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+  font-weight: 650;
+}
+
+.sidebar-view-tab-icon {
+  @apply h-3.5 w-3.5 shrink-0;
+}
+
+.sidebar-scrollable > .sidebar-terminal {
+  flex: 1 1 auto;
 }
 
 .content-root {

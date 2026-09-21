@@ -409,6 +409,18 @@ const GATEWAY_FETCH_TIMEOUT_MS = 15000
 const GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS = 12000
 const GATEWAY_UPLOAD_FETCH_TIMEOUT_MS = 30000
 const GATEWAY_RUNTIME_FETCH_TIMEOUT_MS = 90000
+const GATEWAY_TERMINAL_FETCH_TIMEOUT_MS = 315000
+
+export type TerminalCommandResult = {
+  exitCode: number
+  stdout: string
+  stderr: string
+  command: string
+  cwd: string
+  platform: string
+  shell: string
+  timeoutMs: number
+}
 
 function hasCjkCharacters(value: string): boolean {
   return /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/u.test(value)
@@ -552,6 +564,43 @@ async function callRpc<T>(method: string, params?: unknown, options: RpcCallOpti
       throw error
     }
     throw normalizeCodexApiError(error, `RPC ${method} failed`, method)
+  }
+}
+
+export async function executeTerminalCommand(
+  command: string,
+  cwd = '',
+  timeoutMs = 120_000,
+): Promise<TerminalCommandResult> {
+  const response = await fetchWithTimeout('/codex-api/terminal/exec', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, cwd, timeoutMs }),
+  }, {
+    timeoutMs: GATEWAY_TERMINAL_FETCH_TIMEOUT_MS,
+    label: 'Terminal command request',
+  })
+  const payload = await response.json() as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Terminal command failed'))
+  }
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  const data = record.data && typeof record.data === 'object' && !Array.isArray(record.data)
+    ? record.data as Record<string, unknown>
+    : {}
+  return {
+    exitCode: typeof data.exitCode === 'number' && Number.isFinite(data.exitCode) ? Math.trunc(data.exitCode) : -1,
+    stdout: typeof data.stdout === 'string' ? data.stdout : '',
+    stderr: typeof data.stderr === 'string' ? data.stderr : '',
+    command: typeof data.command === 'string' ? data.command : command,
+    cwd: typeof data.cwd === 'string' ? data.cwd : cwd,
+    platform: typeof data.platform === 'string' ? data.platform : '',
+    shell: typeof data.shell === 'string' ? data.shell : '',
+    timeoutMs: typeof data.timeoutMs === 'number' && Number.isFinite(data.timeoutMs)
+      ? Math.trunc(data.timeoutMs)
+      : timeoutMs,
   }
 }
 

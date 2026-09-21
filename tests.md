@@ -16927,3 +16927,22 @@ Verification:
 ### Rollback
 
 - 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。
+
+## 侧栏会话 / 终端切换与工作区命令执行（2026-09-21）
+
+### Expected behavior
+
+1. 桌面和移动端侧栏都可以在“会话”和“终端”之间切换；选择会话、新建会话或打开搜索时自动回到“会话”。
+2. 终端支持工作目录、一次性命令、stdout/stderr、退出码、耗时和本地命令历史；它是非 PTY 的独立命令执行，不承诺交互式 REPL、vim 或持续 stdin。
+3. 命令只能在已登记工作区目录内执行，使用 Codex App Server 的 workspace-write 沙箱、禁用网络，并限制只读路径为当前工作区目录；缺少工作目录、越界目录和不存在目录分别返回稳定的 400、403、404。
+4. 单条命令请求最长 5 分钟，前端请求超时、App Server RPC 超时和服务端命令超时保持一致；每条命令的 `cd` 不持久化，用户通过工作目录输入切换目录。
+
+### Verification
+
+- 运行 `npm run build:frontend`、`npm run build:cli`、`npm run verify:server-modules` 和 `git diff --check`。
+- 启动编译后的 CLI 服务，调用 `POST /codex-api/terminal/exec` 在真实已登记工作区执行 `pwd`/`git status`，确认输出、退出码和工作目录返回；再验证相对路径、工作区外路径和不存在路径被拒绝。
+- 运行 Android `debug` 构建并检查 APK 签名与 SHA-256；浏览器端和 Android 壳共用同一前端侧栏组件。
+
+### Rollback
+
+- 回退侧栏视图切换、`SidebarTerminal`、`/codex-api/terminal/exec` 和对应超时策略即可；不需要迁移会话、Runtime SQLite 或 Codex 工作区状态。
