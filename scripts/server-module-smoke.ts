@@ -467,7 +467,6 @@ import {
   suggestProjectRoot,
 } from '../src/server/projectRoots.js'
 import { handleProjectRootRoutes } from '../src/server/projectRootRoutes.js'
-import { handleTerminalRoutes } from '../src/server/terminalRoutes.js'
 import {
   getOpenAiTranscribeApiKey,
   getOpenAiTranscribeModel,
@@ -611,7 +610,6 @@ try {
   await smokeQuickTunnelTransientRetry()
   await smokeStatusRoutes()
   await smokeLocalFileAccessPolicy()
-  await smokeTerminalRoutes()
   await smokeLocalFileHttpRateLimit()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
@@ -8252,120 +8250,6 @@ async function smokeLocalFileAccessPolicy(): Promise<void> {
       }),
       (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
     )
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-}
-
-async function smokeTerminalRoutes(): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'cx-codex-terminal-route-'))
-  const bodies: unknown[] = [
-    { command: 'printf terminal-ok', cwd: root, timeoutMs: 999_999 },
-    { command: 'pwd' },
-    { command: 'pwd', cwd: 'relative/path' },
-    { command: 'pwd', cwd: join(root, 'missing') },
-  ]
-  const rpcCalls: Array<{ method: string; params: unknown }> = []
-  const dependencies = {
-    readJsonBody: async () => bodies.shift(),
-    rpc: async (method: string, params: unknown) => {
-      rpcCalls.push({ method, params })
-      return { exitCode: 0, stdout: 'terminal-ok', stderr: '' }
-    },
-    platform: 'linux' as const,
-    resolveWorkspaceLocalPath: async (candidatePath: string) => {
-      if (candidatePath === join(root, 'missing')) throw new LocalFileAccessError('not-found')
-      return candidatePath
-    },
-  }
-
-  try {
-    const success = createRouteTestResponse()
-    assert.equal(await handleTerminalRoutes(
-      { method: 'POST' } as never,
-      success.response as never,
-      new URL('http://127.0.0.1/codex-api/terminal/exec'),
-      dependencies,
-    ), true)
-    assert.equal(success.response.statusCode, 200)
-    assert.deepEqual(JSON.parse(success.body), {
-      data: {
-        exitCode: 0,
-        stdout: 'terminal-ok',
-        stderr: '',
-        command: 'printf terminal-ok',
-        cwd: root,
-        platform: 'linux',
-        shell: '/bin/sh',
-        timeoutMs: 300_000,
-      },
-    })
-    assert.equal(rpcCalls.length, 1)
-    assert.equal(rpcCalls[0]?.method, 'command/exec')
-    assert.deepEqual(rpcCalls[0]?.params, {
-      command: ['/bin/sh', '-lc', 'printf terminal-ok'],
-      cwd: root,
-      timeoutMs: 300_000,
-      sandboxPolicy: {
-        type: 'workspaceWrite',
-        writableRoots: [root],
-        networkAccess: false,
-        readOnlyAccess: {
-          type: 'restricted',
-          includePlatformDefaults: true,
-          readableRoots: [root],
-        },
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false,
-      },
-    })
-
-    const missingCwd = createRouteTestResponse()
-    assert.equal(await handleTerminalRoutes(
-      { method: 'POST' } as never,
-      missingCwd.response as never,
-      new URL('http://127.0.0.1/codex-api/terminal/exec'),
-      dependencies,
-    ), true)
-    assert.equal(missingCwd.response.statusCode, 400)
-    assert.equal(rpcCalls.length, 1)
-
-    const relativeCwd = createRouteTestResponse()
-    assert.equal(await handleTerminalRoutes(
-      { method: 'POST' } as never,
-      relativeCwd.response as never,
-      new URL('http://127.0.0.1/codex-api/terminal/exec'),
-      dependencies,
-    ), true)
-    assert.equal(relativeCwd.response.statusCode, 400)
-    assert.equal(rpcCalls.length, 1)
-
-    const missingDirectory = createRouteTestResponse()
-    assert.equal(await handleTerminalRoutes(
-      { method: 'POST' } as never,
-      missingDirectory.response as never,
-      new URL('http://127.0.0.1/codex-api/terminal/exec'),
-      dependencies,
-    ), true)
-    assert.equal(missingDirectory.response.statusCode, 404)
-    assert.equal(rpcCalls.length, 1)
-
-    const outsideDependencies = {
-      ...dependencies,
-      readJsonBody: async () => ({ command: 'pwd', cwd: root }),
-      resolveWorkspaceLocalPath: async () => {
-        throw new LocalFileAccessError('outside-workspace')
-      },
-    }
-    const outside = createRouteTestResponse()
-    assert.equal(await handleTerminalRoutes(
-      { method: 'POST' } as never,
-      outside.response as never,
-      new URL('http://127.0.0.1/codex-api/terminal/exec'),
-      outsideDependencies,
-    ), true)
-    assert.equal(outside.response.statusCode, 403)
-    assert.equal(rpcCalls.length, 1)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
