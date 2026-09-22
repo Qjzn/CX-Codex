@@ -84,6 +84,7 @@ import {
   APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS,
   APP_SERVER_RPC_INIT_TIMEOUT_MS,
   APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS,
+  APP_SERVER_RPC_TERMINAL_MAX_TIMEOUT_MS,
   APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS,
   APP_SERVER_RPC_TIMEOUT_MS,
   getRpcTimeoutMs,
@@ -467,6 +468,7 @@ import {
   suggestProjectRoot,
 } from '../src/server/projectRoots.js'
 import { handleProjectRootRoutes } from '../src/server/projectRootRoutes.js'
+import { handleTerminalRoutes } from '../src/server/terminalRoutes.js'
 import {
   getOpenAiTranscribeApiKey,
   getOpenAiTranscribeModel,
@@ -615,6 +617,7 @@ try {
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
   await smokeProjectRootRoutes()
+  await smokeTerminalRoutes()
   smokeRuntimePayloadParsing()
   await smokeAppServerNativeThreadQueue()
   await smokeAppServerRuntimeStart()
@@ -3532,6 +3535,9 @@ function smokeAppServerRpcTimeoutPolicy(): void {
   assert.equal(getRpcTimeoutMs('thread/list', {}), APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('model/list', {}), APP_SERVER_RPC_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('turn/start', null), APP_SERVER_RPC_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('command/exec', { timeoutMs: 120_000 }), 125_000)
+  assert.equal(getRpcTimeoutMs('command/exec', { timeoutMs: 999_999 }), APP_SERVER_RPC_TERMINAL_MAX_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('command/exec', { timeoutMs: 1 }), APP_SERVER_RPC_TIMEOUT_MS)
 }
 
 function smokeAppServerThreadReadParams(): void {
@@ -8762,6 +8768,108 @@ async function smokeProjectRootRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/project-root'),
     dependencies,
   ), false)
+}
+
+async function smokeTerminalRoutes(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-terminal-route-'))
+  let body: unknown = {
+    command: 'printf terminal-ok',
+    cwd: root,
+    timeoutMs: 999_999,
+    threadId: 'thread-terminal-smoke',
+  }
+  const rpcCalls: Array<{ method: string; params: unknown }> = []
+  const dependencies = {
+    readJsonBody: async () => body,
+    rpc: async (method: string, params: unknown) => {
+      rpcCalls.push({ method, params })
+      return { exitCode: 0, stdout: 'terminal-ok', stderr: '' }
+    },
+    platform: 'linux' as const,
+    resolveWorkspaceLocalPath: async (candidatePath: string) => {
+      if (candidatePath === join(root, 'outside')) throw new LocalFileAccessError('outside-workspace')
+      return candidatePath
+    },
+  }
+
+  try {
+    const success = createRouteTestResponse()
+    assert.equal(await handleTerminalRoutes(
+      { method: 'POST' } as never,
+      success.response as never,
+      new URL('http://127.0.0.1/codex-api/terminal/exec'),
+      dependencies,
+    ), true)
+    assert.equal(success.response.statusCode, 200)
+    assert.deepEqual(JSON.parse(success.body), {
+      data: {
+        exitCode: 0,
+        stdout: 'terminal-ok',
+        stderr: '',
+        command: 'printf terminal-ok',
+        cwd: root,
+        platform: 'linux',
+        shell: '/bin/sh',
+        timeoutMs: 300_000,
+      },
+    })
+    assert.equal(rpcCalls.length, 1)
+    assert.deepEqual(rpcCalls[0], {
+      method: 'command/exec',
+      params: {
+        command: ['/bin/sh', '-lc', 'printf terminal-ok'],
+        cwd: root,
+        timeoutMs: 300_000,
+        sandboxPolicy: {
+          type: 'workspaceWrite',
+          writableRoots: [root],
+          networkAccess: false,
+          readOnlyAccess: {
+            type: 'restricted',
+            includePlatformDefaults: true,
+            readableRoots: [root],
+          },
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false,
+        },
+      },
+    })
+
+    body = { command: 'pwd', cwd: 'relative/path' }
+    const relative = createRouteTestResponse()
+    assert.equal(await handleTerminalRoutes(
+      { method: 'POST' } as never,
+      relative.response as never,
+      new URL('http://127.0.0.1/codex-api/terminal/exec'),
+      dependencies,
+    ), true)
+    assert.equal(relative.response.statusCode, 400)
+    assert.equal(rpcCalls.length, 1)
+
+    body = { command: 'pwd', cwd: join(root, 'outside') }
+    const outside = createRouteTestResponse()
+    assert.equal(await handleTerminalRoutes(
+      { method: 'POST' } as never,
+      outside.response as never,
+      new URL('http://127.0.0.1/codex-api/terminal/exec'),
+      dependencies,
+    ), true)
+    assert.equal(outside.response.statusCode, 403)
+    assert.equal(rpcCalls.length, 1)
+
+    body = { command: '   ', cwd: root }
+    const invalid = createRouteTestResponse()
+    assert.equal(await handleTerminalRoutes(
+      { method: 'POST' } as never,
+      invalid.response as never,
+      new URL('http://127.0.0.1/codex-api/terminal/exec'),
+      dependencies,
+    ), true)
+    assert.equal(invalid.response.statusCode, 400)
+    assert.equal(rpcCalls.length, 1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 function smokeRuntimeStateStore(): void {

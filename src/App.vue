@@ -557,6 +557,32 @@
           <template #subtitle>
             <p v-if="headerSubtitle" class="content-header-subtitle">{{ headerSubtitle }}</p>
           </template>
+          <template #actions>
+            <template v-if="isThreadRoute && selectedThreadId">
+              <button
+                class="content-side-panel-toggle"
+                :class="{ 'is-active': threadSidePanelMode === 'chat' }"
+                type="button"
+                :aria-pressed="threadSidePanelMode === 'chat'"
+                title="为当前会话打开侧边聊天"
+                @click="toggleThreadSidePanel('chat')"
+              >
+                <span class="content-side-panel-toggle-icon" aria-hidden="true">◌</span>
+                <span class="content-side-panel-toggle-label">侧边聊天</span>
+              </button>
+              <button
+                class="content-side-panel-toggle"
+                :class="{ 'is-active': threadSidePanelMode === 'terminal' }"
+                type="button"
+                :aria-pressed="threadSidePanelMode === 'terminal'"
+                title="为当前会话打开侧边终端"
+                @click="toggleThreadSidePanel('terminal')"
+              >
+                <span class="content-side-panel-toggle-icon content-side-panel-toggle-icon--terminal" aria-hidden="true">&gt;_</span>
+                <span class="content-side-panel-toggle-label">侧边终端</span>
+              </button>
+            </template>
+          </template>
           <template #leading>
             <SidebarThreadControls
               v-if="isSidebarCollapsed || isMobile"
@@ -744,111 +770,125 @@
             </div>
           </template>
           <template v-else-if="isThreadRoute">
-            <div class="content-grid">
-              <div class="content-thread">
-                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
-                  :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
-                  :live-overlay="displayedThreadLiveOverlay"
-                  :pending-requests="displayedThreadPendingRequests"
-                  :load-error="selectedThreadLoadError"
-                  :show-connection-settings-action="isMobileShellAvailable"
-                  :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
-                  :is-thread-switching="isThreadContentSwitching"
-                  :compact-runtime-chrome="true"
-                  :show-empty-thread-actions="isRouteOnlyEmptyThread"
-                  :allow-failed-message-edit="true"
-                  :is-turn-in-progress="isSelectedThreadInProgress"
-                  :is-rolling-back="isRollingBack"
-                  :implementing-plan-id="implementingPlanId"
-                  :implemented-plan-ids="implementedPlanIds"
-                  @update-scroll-state="onUpdateThreadScrollState"
-                  @respond-server-request="onRespondServerRequest"
-                  @toggle-favorite="onToggleFavoriteMessage"
-                  @load-older-history="loadOlderHistoryForSelectedThread"
-                  @retry-load="onRefreshSelectedThreadContent"
-                  @open-connection-settings="onOpenThreadConnectionSettings"
-                  @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
-                  @dismiss-empty-thread="onDismissEmptyThread"
-                  @copy-status="onConversationCopyStatus"
-                  @retry-failed-message="retryFailedUserMessage"
-                  @edit-failed-message="onEditFailedMessage"
-                  @implement-plan="onImplementPlan"
-                  @rollback="onRollback" />
-              </div>
-
-              <div class="composer-with-queue">
-                <div
-                  v-if="quotaReminder"
-                  class="quota-reminder"
-                  :data-tone="quotaReminder.tone"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span class="quota-reminder-dot" aria-hidden="true" />
-                  <span class="quota-reminder-title">{{ quotaReminder.title }}</span>
-                  <span class="quota-reminder-detail">{{ quotaReminder.detail }}</span>
+            <div class="content-workspace">
+              <div class="content-grid">
+                <div class="content-thread">
+                  <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
+                    :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
+                    :live-overlay="displayedThreadLiveOverlay"
+                    :pending-requests="displayedThreadPendingRequests"
+                    :load-error="selectedThreadLoadError"
+                    :show-connection-settings-action="isMobileShellAvailable"
+                    :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
+                    :is-thread-switching="isThreadContentSwitching"
+                    :compact-runtime-chrome="true"
+                    :show-empty-thread-actions="isRouteOnlyEmptyThread"
+                    :allow-failed-message-edit="true"
+                    :is-turn-in-progress="isSelectedThreadInProgress"
+                    :is-rolling-back="isRollingBack"
+                    :implementing-plan-id="implementingPlanId"
+                    :implemented-plan-ids="implementedPlanIds"
+                    @update-scroll-state="onUpdateThreadScrollState"
+                    @respond-server-request="onRespondServerRequest"
+                    @toggle-favorite="onToggleFavoriteMessage"
+                    @load-older-history="loadOlderHistoryForSelectedThread"
+                    @retry-load="onRefreshSelectedThreadContent"
+                    @open-connection-settings="onOpenThreadConnectionSettings"
+                    @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
+                    @dismiss-empty-thread="onDismissEmptyThread"
+                    @copy-status="onConversationCopyStatus"
+                    @retry-failed-message="retryFailedUserMessage"
+                    @edit-failed-message="onEditFailedMessage"
+                    @implement-plan="onImplementPlan"
+                    @rollback="onRollback" />
                 </div>
-                <QueuedMessages
-                  :messages="selectedThreadQueuedMessages"
-                  :is-processing="selectedThreadQueueProcessing"
-                  @edit="onEditQueuedMessage"
-                  @quote="onQuoteQueuedMessage"
-                  @retry="retryQueuedMessage"
-                  @delete="deleteQueuedMessage"
-                />
-                <FailedMessagesTray
-                  :messages="selectedThreadDetachedFailedMessages"
-                  @edit="onEditFailedMessage"
-                  @retry="retryFailedUserMessage"
-                  @delete="deleteFailedUserMessage"
-                />
-                <ThreadGoalBar
-                  v-if="selectedThreadGoal || isSelectedThreadGoalLoading || selectedThreadGoalError"
-                  :goal="selectedThreadGoal"
-                  :is-loading="isSelectedThreadGoalLoading"
-                  :is-updating="isSelectedThreadGoalUpdating"
-                  :error="selectedThreadGoalError"
-                  :disabled="isThreadContentSwitching"
-                  @set-goal="onSaveThreadGoal"
-                  @set-status="onSetThreadGoalStatus"
-                  @clear-goal="onClearThreadGoal"
-                  @retry="onRetryThreadGoal"
-                />
-                <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
-                  :cwd="composerCwd"
-                  :models="availableModelIds"
-                  :available-models="availableModels"
-                  :selected-model="selectedModelId"
-                  :selected-reasoning-effort="selectedReasoningEffort"
-                  :selected-speed-mode="selectedSpeedMode"
-                  :selected-collaboration-mode="selectedCollaborationMode"
-                  :thread-goal="selectedThreadGoal"
-                  :is-thread-goal-loading="isSelectedThreadGoalLoading"
-                  :is-thread-goal-updating="isSelectedThreadGoalUpdating"
-                  :thread-goal-error="selectedThreadGoalError"
-                  :thread-goal-disabled="isThreadContentSwitching"
-                  :is-updating-speed-mode="isUpdatingSpeedMode"
-                  :skills="enabledComposerSkills"
-                  :has-loaded-skills="hasLoadedSkills"
-                  :plugins="availableComposerPlugins"
-                  :is-loading-plugins="isLoadingComposerPlugins"
-                  :has-loaded-plugins="hasLoadedComposerPlugins"
-                  :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
-                  :send-with-enter="sendWithEnter"
-                  :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
-                  :show-dictation-button="dictationButtonVisible"
-                  :prepend-draft-request="rollbackDraftPrependRequest"
-                  :dictation-language="dictationLanguage"
-                  @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
-                  @update:selected-reasoning-effort="onSelectReasoningEffort"
-                  @update:selected-speed-mode="onSelectSpeedMode"
-                  @update:selected-collaboration-mode="onSelectCollaborationMode"
-                  @set-thread-goal-status="onSetThreadGoalStatus"
-                  @refresh-plugins="refreshComposerPlugins"
-                  @reload-plugins="reloadComposerPlugins"
-                  @login-plugin="loginComposerPlugin"
-                  @interrupt="onInterruptTurn('composer-stop')" />
-              </div>
+
+                <div class="composer-with-queue">
+                  <div
+                    v-if="quotaReminder"
+                    class="quota-reminder"
+                    :data-tone="quotaReminder.tone"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <span class="quota-reminder-dot" aria-hidden="true" />
+                    <span class="quota-reminder-title">{{ quotaReminder.title }}</span>
+                    <span class="quota-reminder-detail">{{ quotaReminder.detail }}</span>
+                  </div>
+                  <QueuedMessages
+                    :messages="selectedThreadQueuedMessages"
+                    :is-processing="selectedThreadQueueProcessing"
+                    @edit="onEditQueuedMessage"
+                    @quote="onQuoteQueuedMessage"
+                    @retry="retryQueuedMessage"
+                    @delete="deleteQueuedMessage"
+                  />
+                  <FailedMessagesTray
+                    :messages="selectedThreadDetachedFailedMessages"
+                    @edit="onEditFailedMessage"
+                    @retry="retryFailedUserMessage"
+                    @delete="deleteFailedUserMessage"
+                  />
+                  <ThreadGoalBar
+                    v-if="selectedThreadGoal || isSelectedThreadGoalLoading || selectedThreadGoalError"
+                    :goal="selectedThreadGoal"
+                    :is-loading="isSelectedThreadGoalLoading"
+                    :is-updating="isSelectedThreadGoalUpdating"
+                    :error="selectedThreadGoalError"
+                    :disabled="isThreadContentSwitching"
+                    @set-goal="onSaveThreadGoal"
+                    @set-status="onSetThreadGoalStatus"
+                    @clear-goal="onClearThreadGoal"
+                    @retry="onRetryThreadGoal"
+                  />
+                  <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
+                    :cwd="composerCwd"
+                    :models="availableModelIds"
+                    :available-models="availableModels"
+                    :selected-model="selectedModelId"
+                    :selected-reasoning-effort="selectedReasoningEffort"
+                    :selected-speed-mode="selectedSpeedMode"
+                    :selected-collaboration-mode="selectedCollaborationMode"
+                    :thread-goal="selectedThreadGoal"
+                    :is-thread-goal-loading="isSelectedThreadGoalLoading"
+                    :is-thread-goal-updating="isSelectedThreadGoalUpdating"
+                    :thread-goal-error="selectedThreadGoalError"
+                    :thread-goal-disabled="isThreadContentSwitching"
+                    :is-updating-speed-mode="isUpdatingSpeedMode"
+                    :skills="enabledComposerSkills"
+                    :has-loaded-skills="hasLoadedSkills"
+                    :plugins="availableComposerPlugins"
+                    :is-loading-plugins="isLoadingComposerPlugins"
+                    :has-loaded-plugins="hasLoadedComposerPlugins"
+                    :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
+                    :send-with-enter="sendWithEnter"
+                    :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
+                    :show-dictation-button="dictationButtonVisible"
+                    :prepend-draft-request="rollbackDraftPrependRequest"
+                    :dictation-language="dictationLanguage"
+                    @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
+                    @update:selected-reasoning-effort="onSelectReasoningEffort"
+                    @update:selected-speed-mode="onSelectSpeedMode"
+                    @update:selected-collaboration-mode="onSelectCollaborationMode"
+                    @set-thread-goal-status="onSetThreadGoalStatus"
+                    @refresh-plugins="refreshComposerPlugins"
+                    @reload-plugins="reloadComposerPlugins"
+                    @login-plugin="loginComposerPlugin"
+                    @interrupt="onInterruptTurn('composer-stop')" />
+                </div>
+            </div>
+            <ThreadSidePanel
+              v-if="threadSidePanelMode"
+              :thread-id="displayedThreadConversationId"
+              :cwd="displayedThreadCwd"
+              :title="displayedThreadTitle"
+              :messages="displayedThreadMessages"
+              :mode="threadSidePanelMode"
+              :is-sending="isSendingMessage || isThreadContentSwitching"
+              @update:mode="threadSidePanelMode = $event"
+              @send="onSubmitThreadSideChatMessage"
+              @close="threadSidePanelMode = null"
+            />
             </div>
           </template>
           <PageLoadingSkeleton v-else />
@@ -1083,6 +1123,7 @@ import DesktopLayout from './components/layout/DesktopLayout.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadGoalBar from './components/content/ThreadGoalBar.vue'
+import ThreadSidePanel from './components/content/ThreadSidePanel.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import PageLoadingSkeleton from './components/content/PageLoadingSkeleton.vue'
@@ -1573,6 +1614,8 @@ let threadExportPromise: Promise<void> | null = null
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
+type ThreadSidePanelMode = 'chat' | 'terminal'
+const threadSidePanelMode = ref<ThreadSidePanelMode | null>(null)
 const isCommandMenuOpen = ref(false)
 const commandMenuInitialMode = ref<'root' | 'files'>('root')
 const commandMenuModeRequestId = ref(0)
@@ -3992,6 +4035,38 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
   isSettingsOpen.value = false
 }
 
+function toggleThreadSidePanel(mode: ThreadSidePanelMode): void {
+  if (!isThreadRoute.value || !selectedThreadId.value.trim()) return
+  threadSidePanelMode.value = threadSidePanelMode.value === mode ? null : mode
+}
+
+function onSubmitThreadSideChatMessage(text: string): void {
+  const targetThreadId = displayedThreadConversationId.value.trim()
+  if (!targetThreadId || isThreadContentSwitching.value) return
+  const mode: 'steer' | 'queue' = selectedThreadExecutionActive.value ? 'queue' : 'steer'
+  void sendMessageToSelectedThread(
+    text,
+    [],
+    [],
+    mode,
+    [],
+    undefined,
+    selectedCollaborationMode.value,
+    undefined,
+    {
+      targetThreadId,
+      feedbackStartedAtMs: chatFeedbackNow(),
+      onDeliveryPersisted: () => { void ensureMobileShellTaskNotificationPermission() },
+      onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
+      onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+    },
+  ).then(() => {
+    if (mode !== 'queue') markDesktopSyncPending(targetThreadId)
+  }).catch(() => {
+    // The shared send path exposes the failure and keeps the message retryable.
+  })
+}
+
 function onSubmitThreadMessage(payload: SubmitPayload): void {
   const feedbackStartedAtMs = isHomeRoute.value || payload.mode === 'steer' ? chatFeedbackNow() : undefined
   const text = payload.text
@@ -4089,6 +4164,14 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     // The send path already reflects failures in the main state.
   })
 }
+
+watch(
+  () => [isThreadRoute.value, selectedThreadId.value] as const,
+  ([isThread, threadId]) => {
+    if (!isThread || !threadId.trim()) threadSidePanelMode.value = null
+  },
+  { immediate: true },
+)
 
 function onGithubTipsScopeChange(nextValue: string): void {
   const allowed = new Set<GithubTipsScope>([
@@ -5351,8 +5434,34 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .content-root {
   @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-visible;
+  position: relative;
   --content-shell-max-width: min(var(--ui-content-max), calc(100vw - 2.75rem));
   background: var(--ui-bg-surface);
+}
+
+.content-side-panel-toggle {
+  @apply inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.content-side-panel-toggle:hover,
+.content-side-panel-toggle:focus-visible,
+.content-side-panel-toggle.is-active {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.content-side-panel-toggle-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.content-side-panel-toggle-icon--terminal {
+  font-family: var(--font-mono-ui);
+  font-size: 0.7rem;
 }
 
 .content-root--dual-pane-touch {
@@ -5914,6 +6023,18 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   @apply flex-1 min-h-0 min-w-0 flex flex-col gap-2.5 w-full;
   width: min(100%, var(--content-shell-max-width));
   margin-inline: auto;
+}
+
+.content-workspace {
+  @apply flex-1 min-h-0 min-w-0 flex w-full gap-3;
+  width: min(100%, var(--content-shell-max-width));
+  margin-inline: auto;
+}
+
+.content-workspace > .content-grid {
+  width: auto;
+  min-width: 0;
+  margin-inline: 0;
 }
 
 .content-thread {
@@ -6550,6 +6671,14 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   .content-favorites-button {
     @apply h-9 min-w-9;
   }
+
+  .content-side-panel-toggle {
+    @apply h-9 min-w-9 justify-center rounded-[10px] px-2;
+  }
+
+  .content-side-panel-toggle-label {
+    display: none;
+  }
 }
 
 @media (max-width: 767px), (pointer: coarse) {
@@ -6613,6 +6742,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
   .content-grid {
     @apply gap-1;
+  }
+
+  .content-workspace {
+    position: relative;
+    width: 100%;
   }
 
   .content-meta-row {

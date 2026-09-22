@@ -43,6 +43,7 @@ import {
 } from './diagnosticsRoutes.js'
 import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
 import { handleWorktreeRoutes } from './worktreeRoutes.js'
+import { handleTerminalRoutes } from './terminalRoutes.js'
 import {
   handleWorkspaceMetaRoutes,
   type WorkspaceMetaRoutesDependencies,
@@ -234,6 +235,10 @@ export function createCodexBridgeRouteHandlers(
     }),
     () => handleWorktreeRoutes(req, res, url, {
       readJsonBody,
+    }),
+    () => handleTerminalRoutes(req, res, url, {
+      readJsonBody,
+      rpc: (method, params) => appServer.rpc(method, params),
     }),
     () => handleWorkspaceMetaRoutes(req, res, url, {
       methodCatalog: dependencies.methodCatalog,
