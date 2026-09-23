@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { createCodexBridgeMiddleware } from "./src/server/codexAppServerBridge";
+import { attachTerminalPtyWebSocket } from "./src/server/terminalPtyWebSocket";
 import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from "./src/server/localBrowseUi";
 import tailwindcss from "@tailwindcss/vite";
 import { createReadStream } from "node:fs";
@@ -85,6 +86,9 @@ export default defineConfig({
       configureServer(server) {
         const bridge = createCodexBridgeMiddleware();
         const httpServer = server.httpServer;
+        const detachTerminalPtyWebSocket = httpServer
+          ? attachTerminalPtyWebSocket(httpServer as import("node:http").Server)
+          : () => {};
         if (httpServer) {
           const hostScope = httpServer as typeof httpServer & {
             [WS_UPGRADE_ATTACHED_KEY]?: boolean;
@@ -297,6 +301,7 @@ export default defineConfig({
         });
         server.middlewares.use(bridge);
         server.httpServer?.once("close", () => {
+          detachTerminalPtyWebSocket();
           bridge.dispose();
         });
       },

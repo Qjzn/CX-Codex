@@ -1569,6 +1569,23 @@ function smokeAppServerHealth(): void {
 }
 
 async function smokeAuthMiddleware(): Promise<void> {
+  const originalHome = process.env.HOME
+  const originalUserProfile = process.env.USERPROFILE
+  const testHome = await mkdtemp(join(tmpdir(), 'cx-codex-auth-smoke-home-'))
+  process.env.HOME = testHome
+  process.env.USERPROFILE = testHome
+  try {
+    await smokeAuthMiddlewareWithIsolatedHome()
+  } finally {
+    if (typeof originalHome === 'string') process.env.HOME = originalHome
+    else delete process.env.HOME
+    if (typeof originalUserProfile === 'string') process.env.USERPROFILE = originalUserProfile
+    else delete process.env.USERPROFILE
+    await rm(testHome, { recursive: true, force: true })
+  }
+}
+
+async function smokeAuthMiddlewareWithIsolatedHome(): Promise<void> {
   const authSession = createAuthSession('server-module-smoke-password')
   const requestLike = (
     remoteAddress: string,
@@ -1594,6 +1611,176 @@ async function smokeAuthMiddleware(): Promise<void> {
   )), false)
   assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', 'localhost:7420')), false)
   assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', '127.0.0.1:7420')), false)
+
+  const basicAuthorization = `Basic ${Buffer.from('tunnel-account:server-module-smoke-password').toString('base64')}`
+  const forwardedHeaders = {
+    host: 'smoke.ngrok.app',
+    authorization: basicAuthorization,
+    'x-forwarded-for': '203.0.113.20',
+    'x-forwarded-host': 'smoke.ngrok.app',
+    'x-forwarded-proto': 'https',
+  }
+  const invokeMiddleware = (path: string, remoteAddress: string, headers: Record<string, string>) => {
+    const capture = {
+      statusCode: 200,
+      headers: {} as Record<string, string>,
+      body: '',
+      redirectStatus: 0,
+      redirectLocation: '',
+      nextCalled: false,
+      setHeader(name: string, value: string) {
+        this.headers[name.toLowerCase()] = value
+        return this
+      },
+      status(code: number) {
+        this.statusCode = code
+        return this
+      },
+      type(_value: string) {
+        return this
+      },
+      send(value: string) {
+        this.body = value
+        return this
+      },
+      json(value: unknown) {
+        this.body = JSON.stringify(value)
+        return this
+      },
+      redirect(code: number, location: string) {
+        this.redirectStatus = code
+        this.redirectLocation = location
+        return this
+      },
+    }
+    const request = {
+      method: 'GET',
+      path,
+      socket: { remoteAddress },
+      headers: { ...headers },
+    }
+    authSession.middleware(request as never, capture as never, () => {
+      capture.nextCalled = true
+    })
+    return capture
+  }
+  const invokePasswordFormLogin = async (remoteAddress: string, payload: { username: string; password: string }) => {
+    let resolveResponse!: () => void
+    const responseComplete = new Promise<void>((resolve) => {
+      resolveResponse = resolve
+    })
+    const capture = {
+      statusCode: 200,
+      headers: {} as Record<string, string>,
+      body: '',
+      setHeader(name: string, value: string) {
+        this.headers[name.toLowerCase()] = value
+        return this
+      },
+      status(code: number) {
+        this.statusCode = code
+        return this
+      },
+      json(value: unknown) {
+        this.body = JSON.stringify(value)
+        resolveResponse()
+        return this
+      },
+    }
+    const request = Object.assign(Readable.from([Buffer.from(JSON.stringify(payload))]), {
+      method: 'POST',
+      path: '/auth/login',
+      socket: { remoteAddress },
+      headers: {
+        host: 'smoke.ngrok.app',
+        'x-forwarded-host': 'smoke.ngrok.app',
+        'x-forwarded-proto': 'https',
+        'content-type': 'application/json',
+      },
+    })
+    authSession.middleware(request as never, capture as never, () => resolveResponse())
+    await responseComplete
+    return capture
+  }
+
+  const basicEntry = invokeMiddleware('/', '127.0.0.1', forwardedHeaders)
+  assert.equal(basicEntry.nextCalled, true)
+  assert.equal(basicEntry.headers['cache-control'], 'no-store')
+  const basicCookie = basicEntry.headers['set-cookie']?.split(';')[0] ?? ''
+  assert.match(basicCookie, /^codex_web_local_token=[a-f0-9]+$/u)
+  assert.match(basicEntry.headers['set-cookie'], /HttpOnly/u)
+  assert.match(basicEntry.headers['set-cookie'], /SameSite=Strict/u)
+  assert.match(basicEntry.headers['set-cookie'], /; Secure$/u)
+  assert.equal(authSession.isRequestAuthorized(requestLike(
+    '127.0.0.1',
+    'smoke.ngrok.app',
+    { cookie: basicCookie, 'x-forwarded-host': 'smoke.ngrok.app', 'x-forwarded-proto': 'https' },
+  )), true)
+
+  const basicLoginEntry = invokeMiddleware('/auth/basic-login', '127.0.0.1', {
+    host: 'smoke.ngrok.app',
+    'x-forwarded-host': 'smoke.ngrok.app',
+    'x-forwarded-proto': 'https',
+  })
+  assert.equal(basicLoginEntry.redirectStatus, 303)
+  assert.equal(basicLoginEntry.redirectLocation, '/')
+  assert.equal(basicLoginEntry.headers['www-authenticate'], undefined)
+
+  const remoteLoginPage = invokeMiddleware('/', '127.0.0.1', {
+    host: 'smoke.ngrok.app',
+    'x-forwarded-host': 'smoke.ngrok.app',
+    'x-forwarded-proto': 'https',
+  })
+  assert.equal(remoteLoginPage.statusCode, 200)
+  assert.equal(remoteLoginPage.headers['www-authenticate'], undefined)
+  assert.match(remoteLoginPage.body, /id="username" name="username" type="text" autocomplete="username"/u)
+  assert.match(remoteLoginPage.body, /id="pw" name="password" type="password" autocomplete="current-password"/u)
+  assert.ok(remoteLoginPage.body.includes("fetch('/auth/login',{method:'POST'"))
+
+  const passwordFormLogin = await invokePasswordFormLogin('127.0.0.1', {
+    username: 'dashboard',
+    password: 'server-module-smoke-password',
+  })
+  assert.equal(passwordFormLogin.statusCode, 200)
+  assert.equal(passwordFormLogin.body, JSON.stringify({ ok: true }))
+  assert.match(passwordFormLogin.headers['set-cookie'], /HttpOnly/u)
+  assert.match(passwordFormLogin.headers['set-cookie'], /SameSite=Strict/u)
+  assert.match(passwordFormLogin.headers['set-cookie'], /; Secure$/u)
+  const passwordFormCookie = passwordFormLogin.headers['set-cookie'].split(';')[0]
+  assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'smoke.ngrok.app', {
+    cookie: passwordFormCookie,
+    'x-forwarded-host': 'smoke.ngrok.app',
+    'x-forwarded-proto': 'https',
+  })), true)
+
+  const basicOnlyApiRequest = invokeMiddleware('/codex-api/health', '127.0.0.1', forwardedHeaders)
+  assert.equal(basicOnlyApiRequest.statusCode, 401)
+  assert.equal(basicOnlyApiRequest.headers['x-codex-web-auth'], 'required')
+  assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'smoke.ngrok.app', {
+    ...forwardedHeaders,
+  })), false)
+
+  const wrongBasicAuthorization = `Basic ${Buffer.from('tunnel-account:wrong-password').toString('base64')}`
+  let lastWrongAttempt = invokeMiddleware('/auth/basic-login', '203.0.113.21', {
+    host: 'smoke.ngrok.app',
+    authorization: wrongBasicAuthorization,
+  })
+  for (let attempt = 1; attempt < 5; attempt += 1) {
+    lastWrongAttempt = invokeMiddleware('/auth/basic-login', '203.0.113.21', {
+      host: 'smoke.ngrok.app',
+      authorization: wrongBasicAuthorization,
+    })
+  }
+  assert.equal(lastWrongAttempt.statusCode, 200)
+  assert.equal(lastWrongAttempt.headers['www-authenticate'], undefined)
+  assert.ok(lastWrongAttempt.headers['retry-after'])
+  const blockedBasicAttempt = invokeMiddleware('/auth/basic-login', '203.0.113.21', {
+    host: 'smoke.ngrok.app',
+    authorization: basicAuthorization,
+  })
+  assert.equal(blockedBasicAttempt.statusCode, 429)
+  assert.equal(blockedBasicAttempt.headers['www-authenticate'], undefined)
+
   assert.equal(authSession.getPassword(), 'server-module-smoke-password')
   authSession.rotatePassword('server-module-rotated-password')
   assert.equal(authSession.getPassword(), 'server-module-rotated-password')
@@ -1613,6 +1800,10 @@ async function smokeAuthMiddleware(): Promise<void> {
   assert.equal(getAuthLoginRequestBodyLimitBytes(), 16 * 1024)
   assert.equal(
     await readAuthLoginPassword(Readable.from([Buffer.from(JSON.stringify({ password: 'secret' }))]) as never),
+    'secret',
+  )
+  assert.equal(
+    await readAuthLoginPassword(Readable.from([Buffer.from(JSON.stringify({ username: 'dashboard', password: 'secret' }))]) as never),
     'secret',
   )
   assert.equal(
@@ -4802,20 +4993,21 @@ function smokeAppServerServerRequestHandler(): void {
 
 async function smokeCommandRunner(): Promise<void> {
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-command-runner-'))
+  const nodeExecutable = process.env.CX_CODEX_NODE_EXECUTABLE?.trim() || process.execPath
   try {
-    await runCommand(process.execPath, ['-e', 'process.exit(0)'], { cwd: tempDir })
+    await runCommand(nodeExecutable, ['-e', 'process.exit(0)'], { cwd: tempDir })
     assert.equal(
-      await runCommandCapture(process.execPath, ['-e', 'console.log(process.cwd())'], { cwd: tempDir }),
+      await runCommandCapture(nodeExecutable, ['-e', 'console.log(process.cwd())'], { cwd: tempDir }),
       tempDir,
     )
     assert.equal(
-      await runCommandWithOutput(process.execPath, ['-e', 'console.log("  output  ")']),
+      await runCommandWithOutput(nodeExecutable, ['-e', 'console.log("  output  ")']),
       'output',
     )
     await assert.rejects(
-      runCommand(process.execPath, ['-e', 'console.error("stderr detail"); console.log("stdout detail"); process.exit(7)']),
+      runCommand(nodeExecutable, ['-e', 'console.error("stderr detail"); console.log("stdout detail"); process.exit(7)']),
       (error) => error instanceof Error
-        && error.message.includes(`Command failed (${process.execPath} -e`)
+        && error.message.includes(`Command failed (${nodeExecutable} -e`)
         && error.message.includes('stderr detail')
         && error.message.includes('stdout detail'),
     )
@@ -5002,19 +5194,27 @@ async function smokeFileUploadRoute(): Promise<void> {
 
 async function smokeSessionAttachmentAccess(): Promise<void> {
   const tempRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-source-'))
+  const attachmentRoot = await mkdtemp(join(tmpdir(), 'cx-codex-codex-attachments-'))
   const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-cache-'))
   const boundedUploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-bounded-cache-'))
   const concurrencyUploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-concurrency-cache-'))
   const imagePath = join(tempRoot, 'codex-clipboard-a609cc73-60c9-496b-a884-87addcbc72b3.jpg')
   const prefetchedImagePath = join(tempRoot, 'codex-clipboard-73175ea6-4e8e-400b-a804-f9d3b1359289.jpg')
+  const codexAttachmentPath = join(attachmentRoot, 'codex-clipboard-cfcb2bc6-7192-44f0-9871-7b8bb87aceaf.png')
   const unrelatedPath = join(tempRoot, 'private-note.jpg')
   const imageBytes = Buffer.from('session-image-bytes')
   const prefetchedImageBytes = Buffer.from('prefetched-session-image-bytes')
-  const store = new SessionAttachmentAccessStore({ tempDir: tempRoot, uploadDir: uploadRoot })
+  const codexAttachmentBytes = Buffer.from('codex-attachment-image-bytes')
+  const store = new SessionAttachmentAccessStore({
+    tempDir: tempRoot,
+    attachmentDir: attachmentRoot,
+    uploadDir: uploadRoot,
+  })
 
   try {
     await writeFile(imagePath, imageBytes)
     await writeFile(prefetchedImagePath, prefetchedImageBytes)
+    await writeFile(codexAttachmentPath, codexAttachmentBytes)
     await writeFile(unrelatedPath, Buffer.from('not-authorized'))
     await assert.rejects(
       () => store.resolve(imagePath),
@@ -5047,6 +5247,25 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
     assert.equal(
       (await readFile(await store.resolve(prefetchedImagePath))).toString('utf8'),
       prefetchedImageBytes.toString('utf8'),
+    )
+
+    await assert.rejects(
+      () => store.resolve(codexAttachmentPath),
+      (error: unknown) => error instanceof SessionAttachmentAccessError && error.code === 'not-registered',
+    )
+    assert.deepEqual(store.rememberFromThreadRead({
+      thread: {
+        turns: [{ items: [{ type: 'imageView', path: codexAttachmentPath }] }],
+      },
+    }), [codexAttachmentPath])
+    assert.equal(
+      (await readFile(await store.resolve(codexAttachmentPath))).toString('utf8'),
+      codexAttachmentBytes.toString('utf8'),
+    )
+    await rm(codexAttachmentPath, { force: true })
+    assert.equal(
+      (await readFile(await store.resolve(codexAttachmentPath))).toString('utf8'),
+      codexAttachmentBytes.toString('utf8'),
     )
 
     const boundedPaths = [
@@ -5115,6 +5334,7 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
     )
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
+    await rm(attachmentRoot, { recursive: true, force: true })
     await rm(uploadRoot, { recursive: true, force: true })
     await rm(boundedUploadRoot, { recursive: true, force: true })
     await rm(concurrencyUploadRoot, { recursive: true, force: true })
@@ -5770,7 +5990,7 @@ async function smokeCodexBridgeRouteHandlers(): Promise<void> {
     dependencies as never,
   )
 
-  assert.equal(replayHandlers.length, 19)
+  assert.equal(replayHandlers.length, 20)
   assert.equal(await runCodexBridgeRouteHandlers(replayHandlers), true)
   assert.deepEqual(replayCalls, [{ afterSeq: 5, limit: 2 }])
   assert.deepEqual(JSON.parse(replayResponse.body), {
@@ -6827,8 +7047,8 @@ async function smokeThreadTokenUsage(): Promise<void> {
   assert.equal(store.count, 1)
   assert.equal(store.get('thread-a')?.last.outputTokens, 60)
   store.observeUpdate({ threadId: 'thread-a', tokenUsage: { invalid: true } })
-  assert.equal(store.get('thread-a'), null)
-  assert.equal(store.count, 0)
+  assert.equal(store.get('thread-a')?.last.outputTokens, 60)
+  assert.equal(store.count, 1)
 
   assert.equal(await resolveThreadTokenUsage(' ', {
     getCachedTokenUsage: () => {

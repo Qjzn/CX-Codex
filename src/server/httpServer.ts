@@ -33,6 +33,7 @@ import {
   subscribeBoundedWebSocketNotifications,
 } from './notificationWebSocketBackpressure.js'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { attachTerminalPtyWebSocket } from './terminalPtyWebSocket.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')
@@ -619,11 +620,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         next()
         return
       }
-      res.type(sourcePath)
+      res.type(extname(sourcePath))
       res.setHeader('Content-Encoding', 'br')
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
       res.vary('Accept-Encoding')
-      res.sendFile(compressedPath, (error) => {
+      res.sendFile(compressedPath, { dotfiles: 'allow' }, (error) => {
         if (!error || res.headersSent) return
         next(error)
       })
@@ -676,6 +677,9 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     app,
     dispose: () => bridge.dispose(),
     attachWebSocket: (server: HttpServer) => {
+      const detachTerminalPtyWebSocket = attachTerminalPtyWebSocket(server, {
+        isRequestAuthorized: (req) => !authSession || authSession.isRequestAuthorized(req),
+      })
       const wss = new WebSocketServer({
         noServer: true,
         maxPayload: NOTIFICATION_WEBSOCKET_MAX_INBOUND_BYTES,
@@ -759,6 +763,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         invalidateWebSocketSessions()
         invalidateWebSocketSessions = () => {}
         wss.close()
+        detachTerminalPtyWebSocket()
       })
     },
   }

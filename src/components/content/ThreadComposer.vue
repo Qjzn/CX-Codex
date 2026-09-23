@@ -853,6 +853,7 @@ import type {
 import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
 import { useLazyModalEnvironment } from '../../composables/useLazyModalEnvironment'
+import { toRenderableLocalImageUrl } from '../../utils/localImageUrl'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerArrowsMaximize from '../icons/IconTablerArrowsMaximize.vue'
 import IconTablerArrowsMinimize from '../icons/IconTablerArrowsMinimize.vue'
@@ -1507,24 +1508,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
 }
 
 function toRenderableImageUrl(value: string): string {
-  const normalized = value.trim()
-  if (!normalized) return ''
-  if (
-    normalized.startsWith('data:') ||
-    normalized.startsWith('blob:') ||
-    normalized.startsWith('http://') ||
-    normalized.startsWith('https://') ||
-    normalized.startsWith('/codex-local-image?')
-  ) {
-    return normalized
-  }
-  if (normalized.startsWith('file://')) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-  if (normalized.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(normalized)) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-  return normalized
+  return toRenderableLocalImageUrl(value)
 }
 
 function reconcilePendingRestoredSkills(): void {
@@ -2760,6 +2744,13 @@ watch([
   clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
 })
+
+watch(
+  () => props.threadGoal?.status,
+  (status) => {
+    if (status !== 'active') threadGoalModeEnabled.value = false
+  },
+)
 
 watch([
   draft,

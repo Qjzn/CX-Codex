@@ -7,6 +7,7 @@ import {
   getFileUploadDir,
   getFileUploadRequestBodyLimitBytes,
 } from './fileUpload.js'
+import { getCodexHomeDir } from './codexPaths.js'
 
 const SESSION_ATTACHMENT_CACHE_DIRECTORY = 'session-attachments'
 const MAX_REGISTERED_SESSION_ATTACHMENTS = 1_024
@@ -36,6 +37,7 @@ export class SessionAttachmentAccessError extends Error {
 
 export type SessionAttachmentAccessDependencies = {
   tempDir?: string
+  attachmentDir?: string
   uploadDir?: string
   realpath?: typeof realpath
   stat?: typeof stat
@@ -74,6 +76,7 @@ function readErrorCode(error: unknown): string {
 export class SessionAttachmentAccessStore {
   private readonly registeredPaths = new Map<string, string>()
   private readonly tempRoot: string
+  private readonly attachmentRoot: string
   private readonly uploadRoot: string
   private readonly resolveRealPath: typeof realpath
   private readonly readStat: typeof stat
@@ -87,6 +90,7 @@ export class SessionAttachmentAccessStore {
 
   constructor(dependencies: SessionAttachmentAccessDependencies = {}) {
     this.tempRoot = resolve(dependencies.tempDir ?? tmpdir())
+    this.attachmentRoot = resolve(dependencies.attachmentDir ?? join(getCodexHomeDir(), 'attachments'))
     this.uploadRoot = resolve(dependencies.uploadDir ?? getFileUploadDir())
     this.resolveRealPath = dependencies.realpath ?? realpath
     this.readStat = dependencies.stat ?? stat
@@ -119,17 +123,25 @@ export class SessionAttachmentAccessStore {
       }
 
       const record = current as Record<string, unknown>
-      if (record.type === 'localImage' && typeof record.path === 'string') {
-        const normalized = this.normalizeCandidate(record.path)
-        if (normalized && !this.registeredPaths.has(pathKey(normalized))) {
-          this.registeredPaths.set(pathKey(normalized), normalized)
-          remembered.push(normalized)
-          while (this.registeredPaths.size > MAX_REGISTERED_SESSION_ATTACHMENTS) {
-            const oldestKey = this.registeredPaths.keys().next().value
-            if (typeof oldestKey !== 'string') break
-            this.registeredPaths.delete(oldestKey)
-          }
+      const rememberCandidate = (candidate: unknown): void => {
+        if (typeof candidate !== 'string') return
+        const normalized = this.normalizeCandidate(candidate)
+        if (!normalized || this.registeredPaths.has(pathKey(normalized))) return
+        this.registeredPaths.set(pathKey(normalized), normalized)
+        remembered.push(normalized)
+        while (this.registeredPaths.size > MAX_REGISTERED_SESSION_ATTACHMENTS) {
+          const oldestKey = this.registeredPaths.keys().next().value
+          if (typeof oldestKey !== 'string') break
+          this.registeredPaths.delete(oldestKey)
         }
+      }
+
+      const recordType = typeof record.type === 'string' ? record.type : ''
+      if (recordType === 'localImage' || recordType === 'local_image' || recordType === 'imageView') {
+        rememberCandidate(record.path)
+      }
+      if (Array.isArray(record.local_images)) {
+        for (const candidate of record.local_images) rememberCandidate(candidate)
       }
 
       for (const child of Object.values(record)) pending.push(child)
@@ -208,7 +220,10 @@ export class SessionAttachmentAccessStore {
     const trimmed = candidatePath.trim()
     if (!trimmed || !isAbsolute(trimmed)) return null
     const normalized = resolve(trimmed)
-    if (!isPathWithinRoot(this.tempRoot, normalized)) return null
+    if (
+      !isPathWithinRoot(this.tempRoot, normalized)
+      && !isPathWithinRoot(this.attachmentRoot, normalized)
+    ) return null
     if (!CODEX_CLIPBOARD_IMAGE_PATTERN.test(basename(normalized))) return null
     return normalized
   }
@@ -238,13 +253,20 @@ export class SessionAttachmentAccessStore {
   }
 
   private async resolveSourceFile(sourcePath: string): Promise<string> {
+    const allowedRoots = [this.tempRoot, this.attachmentRoot]
+    if (!allowedRoots.some((rootPath) => isPathWithinRoot(rootPath, sourcePath))) {
+      throw new SessionAttachmentAccessError('not-registered')
+    }
+
     try {
-      const canonicalTempRoot = await this.resolveRealPath(this.tempRoot)
       const canonicalSourcePath = await this.resolveRealPath(sourcePath)
-      if (!isPathWithinRoot(canonicalTempRoot, canonicalSourcePath)) {
-        throw new SessionAttachmentAccessError('not-registered')
+      for (const rootPath of allowedRoots) {
+        const canonicalRoot = await this.resolveRealPath(rootPath).catch(() => null)
+        if (canonicalRoot && isPathWithinRoot(canonicalRoot, canonicalSourcePath)) {
+          return canonicalSourcePath
+        }
       }
-      return canonicalSourcePath
+      throw new SessionAttachmentAccessError('not-registered')
     } catch (error) {
       if (error instanceof SessionAttachmentAccessError) throw error
       throw new SessionAttachmentAccessError('not-found')

@@ -69,6 +69,9 @@ function getRpcFetchTimeoutMs(method: string, params: unknown): number {
       ? RPC_LONG_FETCH_TIMEOUT_MS
       : RPC_LIGHT_READ_FETCH_TIMEOUT_MS
   }
+  if (method === 'thread/turns/list' || method === 'thread/items/list') {
+    return RPC_LIGHT_READ_FETCH_TIMEOUT_MS
+  }
   if (method === 'thread/list') return RPC_LIST_FETCH_TIMEOUT_MS
   if (method === 'skills/list') return RPC_LIGHT_READ_FETCH_TIMEOUT_MS
   if (method === 'account/rateLimits/read') return RPC_LIGHT_READ_FETCH_TIMEOUT_MS

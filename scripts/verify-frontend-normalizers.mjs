@@ -1365,6 +1365,53 @@ assert.equal(generatedImageMessages.length, 1)
 assert.equal(generatedImageMessages[0]?.messageType, 'imageGeneration')
 assert.deepEqual(generatedImageMessages[0]?.images, ['C:\\work\\generated.png'])
 
+const mergedAssistantImageMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-merged-image',
+    cwd: 'E:\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [{
+      id: 'turn-merged-image',
+      status: 'completed',
+      items: [
+        {
+          id: 'agent-commentary',
+          type: 'agentMessage',
+          text: '正在准备图片',
+          phase: 'commentary',
+        },
+        {
+          id: 'image-before-text',
+          type: 'imageView',
+          path: 'C:\\work\\before.png',
+        },
+        {
+          id: 'agent-with-image',
+          type: 'agentMessage',
+          text: '图片说明',
+        },
+        {
+          id: 'image-after-text',
+          type: 'imageGeneration',
+          status: 'completed',
+          savedPath: 'C:\\work\\after.png',
+        },
+      ],
+    }],
+  },
+})
+assert.equal(mergedAssistantImageMessages.length, 2)
+assert.equal(mergedAssistantImageMessages[0]?.id, 'agent-commentary')
+assert.deepEqual(mergedAssistantImageMessages[0]?.images, [
+  'C:\\work\\before.png',
+  'C:\\work\\after.png',
+])
+assert.equal(mergedAssistantImageMessages[1]?.id, 'agent-with-image')
+assert.equal(mergedAssistantImageMessages[1]?.images, undefined)
+assert.equal(mergedAssistantImageMessages[1]?.turnId, 'turn-merged-image')
+
 const internalContextMessages = normalizeThreadMessagesV2({
   thread: {
     id: 'thread-internal-context',

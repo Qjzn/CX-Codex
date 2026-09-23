@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.8.0",
+  "version": "2.8.1-beta.1",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
@@ -90,6 +90,8 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "8.4.2",
     "@capacitor/network": "^8.0.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^12.11.1",
     "commander": "^15.0.0",
     "docx-preview": "^0.4.0",
@@ -98,6 +100,8 @@
     "express-rate-limit": "^8.7.0",
     "katex": "^0.18.7",
     "markdown-it": "^15.0.1",
+    "mermaid": "^11.17.2",
+    "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.3.289",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.21.3"
@@ -115,6 +119,7 @@
     "esbuild": "^0.28.2",
     "tailwindcss": "^4.1.18",
     "tsup": "^8.4.0",
+    "type-fest": "^4.41.0",
     "typescript": "^5.7.3",
     "vite": "^8.2.2",
     "vue": "^3.5.42",

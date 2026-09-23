@@ -1,6 +1,13 @@
 <template>
-  <aside class="thread-side-panel" aria-label="当前会话侧边面板">
-    <header class="thread-side-panel-header">
+  <aside
+    class="thread-side-panel"
+    :class="{
+      'thread-side-panel--terminal': mode === 'terminal',
+      'thread-side-panel--embedded': !showHeader,
+    }"
+    aria-label="当前会话侧边面板"
+  >
+    <header v-if="showHeader" class="thread-side-panel-header">
       <div class="thread-side-panel-heading">
         <span class="thread-side-panel-kicker">当前会话</span>
         <strong class="thread-side-panel-title" :title="title">{{ title || '未命名会话' }}</strong>
@@ -16,8 +23,9 @@
       </button>
     </header>
 
-    <div class="thread-side-panel-tabs" role="tablist" aria-label="当前会话侧边工具">
+    <div v-if="showChat && showModeTabs" class="thread-side-panel-tabs" role="tablist" aria-label="当前会话侧边工具">
       <button
+        v-if="showChat"
         class="thread-side-panel-tab"
         :class="{ 'is-active': mode === 'chat' }"
         type="button"
@@ -25,7 +33,7 @@
         :aria-selected="mode === 'chat'"
         @click="emit('update:mode', 'chat')"
       >
-        <span class="thread-side-panel-tab-icon" aria-hidden="true">◌</span>
+        <IconTablerMessageCircle class="thread-side-panel-tab-icon" />
         <span>侧边聊天</span>
       </button>
       <button
@@ -41,12 +49,12 @@
       </button>
     </div>
 
-    <section v-if="mode === 'chat'" class="thread-side-chat" role="tabpanel" aria-label="当前会话侧边聊天">
+    <section v-if="showChat && mode === 'chat'" class="thread-side-chat" role="tabpanel" aria-label="当前会话侧边聊天">
       <div ref="chatMessagesRef" class="thread-side-chat-messages" aria-live="polite">
         <div v-if="chatMessages.length === 0" class="thread-side-chat-empty">
-          <span class="thread-side-chat-empty-icon" aria-hidden="true">◌</span>
+          <IconTablerMessageCircle class="thread-side-chat-empty-icon" />
           <strong>在当前会话旁边继续聊天</strong>
-          <span>这里使用同一个会话上下文，发送内容会同步到主对话。</span>
+          <span>这是独立的侧边会话，不会把消息写入主聊天。</span>
         </div>
         <article
           v-for="message in chatMessages"
@@ -55,31 +63,42 @@
           :data-role="message.role"
         >
           <span class="thread-side-chat-message-role">{{ message.role === 'user' ? '你' : 'Codex' }}</span>
-          <p class="thread-side-chat-message-text">{{ message.text || (message.images?.length ? '[图片]' : '') }}</p>
+          <p class="thread-side-chat-message-text">{{ message.text }}</p>
         </article>
       </div>
-      <form class="thread-side-chat-form" @submit.prevent="sendChatMessage">
-        <textarea
-          ref="chatInputRef"
-          v-model="chatDraft"
-          class="thread-side-chat-input"
-          rows="3"
-          :disabled="!threadId || isSending"
-          placeholder="向当前会话发送消息…"
-          aria-label="侧边聊天输入框"
-          @keydown.enter.exact.prevent="sendChatMessage"
-        />
-        <div class="thread-side-chat-form-footer">
-          <span class="thread-side-chat-hint">Enter 发送 · Shift + Enter 换行</span>
-          <button
-            class="thread-side-chat-send"
-            type="submit"
-            :disabled="!threadId || isSending || chatDraft.trim().length === 0"
-          >
-            {{ isSending ? '发送中…' : '发送' }}
-          </button>
-        </div>
-      </form>
+      <ThreadComposer
+        class="thread-side-chat-composer"
+        :active-thread-id="sideChatComposerContextId"
+        :cwd="cwd"
+        :models="models"
+        :available-models="availableModels"
+        :selected-model="sideChatModel"
+        :selected-reasoning-effort="sideChatReasoningEffort"
+        :selected-speed-mode="sideChatSpeedMode"
+        :selected-collaboration-mode="sideChatCollaborationMode"
+        :thread-goal="undefined"
+        :skills="skills"
+        :has-loaded-skills="hasLoadedSkills"
+        :plugins="plugins"
+        :is-loading-plugins="isLoadingPlugins"
+        :has-loaded-plugins="hasLoadedPlugins"
+        :disabled="false"
+        :is-turn-in-progress="false"
+        :is-interrupting-turn="false"
+        :send-with-enter="sendWithEnter"
+        :dictation-click-to-toggle="dictationClickToToggle"
+        :dictation-auto-send="dictationAutoSend"
+        :show-dictation-button="showDictationButton"
+        :dictation-language="dictationLanguage"
+        @submit="onSubmitSideChatComposer"
+        @update:selected-model="selectSideChatModel"
+        @update:selected-reasoning-effort="selectSideChatReasoningEffort"
+        @update:selected-speed-mode="sideChatSpeedMode = $event"
+        @update:selected-collaboration-mode="sideChatCollaborationMode = $event"
+        @refresh-plugins="emit('refresh-plugins')"
+        @reload-plugins="emit('reload-plugins')"
+        @login-plugin="emit('login-plugin', $event)"
+      />
     </section>
 
     <section v-else class="thread-side-terminal" role="tabpanel" aria-label="当前会话侧边终端">
@@ -87,65 +106,25 @@
         <span>工作目录</span>
         <code>{{ cwd || '当前会话未提供工作目录' }}</code>
       </div>
-      <div ref="terminalOutputRef" class="thread-side-terminal-output" aria-live="polite">
-        <div v-if="terminalEntries.length === 0" class="thread-side-terminal-empty">
-          <span class="thread-side-terminal-empty-icon" aria-hidden="true">&gt;_</span>
-          <strong>还没有命令</strong>
-          <span>在下方输入命令并按 Enter 执行。</span>
-          <small>命令限制在当前会话工作区，并通过 Codex App Server 沙箱执行。</small>
-        </div>
-        <article
-          v-for="entry in terminalEntries"
-          :key="entry.id"
-          class="thread-side-terminal-entry"
-          :data-status="entry.status"
-        >
-          <div class="thread-side-terminal-command-line">
-            <span class="thread-side-terminal-prompt" aria-hidden="true">{{ promptLabel }}</span>
-            <code :title="entry.command">{{ entry.command }}</code>
-            <span class="thread-side-terminal-entry-meta">
-              {{ entry.status === 'running' ? '执行中…' : formatEntryMeta(entry) }}
-            </span>
-          </div>
-          <pre v-if="entry.stdout" class="thread-side-terminal-output-text">{{ entry.stdout }}</pre>
-          <pre v-if="entry.stderr" class="thread-side-terminal-output-text is-stderr">{{ entry.stderr }}</pre>
-          <p v-if="entry.status === 'running'" class="thread-side-terminal-entry-note">正在等待命令输出…</p>
-        </article>
-      </div>
-      <form class="thread-side-terminal-form" @submit.prevent="runCommand">
-        <span class="thread-side-terminal-form-prompt" aria-hidden="true">{{ promptLabel }}</span>
-        <input
-          ref="commandInputRef"
-          v-model="commandInput"
-          class="thread-side-terminal-input"
-          type="text"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-          :disabled="isTerminalRunning || !cwd"
-          :placeholder="isTerminalRunning ? '命令执行中…' : '输入命令，例如 git status'"
-          aria-label="侧边终端命令输入框"
-          @keydown="onCommandKeydown"
+      <div class="thread-side-terminal-emulator-wrap">
+        <div
+          ref="terminalElementRef"
+          class="thread-side-terminal-emulator"
+          aria-label="侧边真实终端"
         />
-        <button
-          class="thread-side-terminal-submit"
-          type="submit"
-          :disabled="isTerminalRunning || !cwd || commandInput.trim().length === 0"
-          aria-label="执行命令"
-          title="执行命令"
-        >
-          ↵
-        </button>
-      </form>
+        <div v-if="!terminalReady" class="thread-side-terminal-status-overlay" role="status">
+          {{ terminalStatusLabel }}
+        </div>
+      </div>
       <div class="thread-side-terminal-footer">
-        <span>↑ / ↓ 浏览命令历史</span>
+        <span>{{ terminalStatus }}</span>
         <button
           type="button"
           class="thread-side-terminal-clear"
-          :disabled="isTerminalRunning || terminalEntries.length === 0"
-          @click="clearTerminalHistory"
+          :disabled="!terminalReady"
+          @click="clearTerminalScreen"
         >
-          清空
+          清屏
         </button>
       </div>
     </section>
@@ -153,227 +132,835 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { executeTerminalCommand } from '../../api/codexGateway'
-import type { UiMessage } from '../../types/codex'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { FitAddon } from '@xterm/addon-fit'
+import { Terminal } from '@xterm/xterm'
+import '@xterm/xterm/css/xterm.css'
+import {
+  closeSideThread,
+  forkSideThread,
+  getLatestThreadTurn,
+  SIDE_DEVELOPER_INSTRUCTIONS,
+  startSideThread,
+  startThreadTurn,
+  subscribeCodexNotifications,
+} from '../../api/codexGateway'
+import type { RpcNotification } from '../../api/codexGateway'
+import IconTablerMessageCircle from '../icons/IconTablerMessageCircle.vue'
+import ThreadComposer, { type SubmitPayload } from './ThreadComposer.vue'
+import type {
+  CollaborationMode,
+  ComposerModelInfo,
+  ComposerPluginInfo,
+  ReasoningEffort,
+  SpeedMode,
+} from '../../types/codex'
 
 type SidePanelMode = 'chat' | 'terminal'
-type TerminalEntryStatus = 'running' | 'completed' | 'error'
-type TerminalEntry = {
+type SideChatSkill = { name: string; description: string; path: string }
+type SideChatMessage = {
   id: string
-  command: string
-  cwd: string
-  stdout: string
-  stderr: string
-  exitCode: number | null
-  status: TerminalEntryStatus
-  error: string
-  startedAtIso: string
-  durationMs: number | null
+  role: 'user' | 'assistant' | 'system'
+  text: string
+}
+type PersistedSideChatState = {
+  threadId: string
+  baselineMessageIds: string[]
+  messages: SideChatMessage[]
+  model: string
+  reasoningEffort: ReasoningEffort | ''
+  speedMode: SpeedMode
+  collaborationMode: CollaborationMode
 }
 
 const props = withDefaults(defineProps<{
   threadId: string
   cwd: string
   title: string
-  messages: UiMessage[]
+  storageKey?: string
   mode: SidePanelMode
-  isSending?: boolean
+  model?: string
+  models?: string[]
+  availableModels?: ComposerModelInfo[]
+  selectedReasoningEffort?: ReasoningEffort | ''
+  skills?: SideChatSkill[]
+  hasLoadedSkills?: boolean
+  plugins?: ComposerPluginInfo[]
+  isLoadingPlugins?: boolean
+  hasLoadedPlugins?: boolean
+  sendWithEnter?: boolean
+  dictationClickToToggle?: boolean
+  dictationAutoSend?: boolean
+  showDictationButton?: boolean
+  dictationLanguage?: string
+  showChat?: boolean
+  showHeader?: boolean
+  showModeTabs?: boolean
 }>(), {
-  isSending: false,
+  model: '',
+  storageKey: '',
+  models: () => [],
+  availableModels: () => [],
+  selectedReasoningEffort: '',
+  skills: () => [],
+  hasLoadedSkills: false,
+  plugins: () => [],
+  isLoadingPlugins: false,
+  hasLoadedPlugins: false,
+  sendWithEnter: true,
+  dictationClickToToggle: false,
+  dictationAutoSend: false,
+  showDictationButton: true,
+  dictationLanguage: 'auto',
+  showChat: true,
+  showHeader: true,
+  showModeTabs: true,
 })
 
 const emit = defineEmits<{
   close: []
   'update:mode': [mode: SidePanelMode]
-  send: [text: string]
+  'refresh-plugins': []
+  'reload-plugins': []
+  'login-plugin': [pluginId: string]
 }>()
 
-const MAX_TERMINAL_ENTRIES = 30
-const MAX_OUTPUT_CHARS = 24_000
-const chatDraft = ref('')
 const chatMessagesRef = ref<HTMLElement | null>(null)
-const chatInputRef = ref<HTMLTextAreaElement | null>(null)
-const commandInput = ref('')
-const commandInputRef = ref<HTMLInputElement | null>(null)
-const terminalOutputRef = ref<HTMLElement | null>(null)
-const terminalEntries = ref<TerminalEntry[]>([])
-const isTerminalRunning = ref(false)
-const historyCursor = ref(-1)
-const platformLabel = ref('')
+const chatMessages = ref<SideChatMessage[]>([])
+const sideChatThreadId = ref('')
+const sideChatBaselineMessageIds = ref<string[]>([])
+const sideChatError = ref('')
+const sideChatModel = ref('')
+const sideChatReasoningEffort = ref<ReasoningEffort | ''>('')
+const sideChatSpeedMode = ref<SpeedMode>('standard')
+const sideChatCollaborationMode = ref<CollaborationMode>('execute')
+let sideChatRequestGeneration = 0
+type SideChatTurnWaiter = {
+  threadId: string
+  turnId: string
+  deltaItemIds: Set<string>
+  resolve: () => void
+  reject: (error: Error) => void
+  timeoutId: number
+  startedAtMs: number
+}
+const sideChatTurnWaiters = new Set<SideChatTurnWaiter>()
+let sideChatNotificationCleanup: (() => void) | null = null
+let sideChatThreadCreationPromise: Promise<string> | null = null
+const sideChatDeltaTextByItemId = new Map<string, string>()
+const terminalElementRef = ref<HTMLElement | null>(null)
+const terminalEmulator = shallowRef<Terminal | null>(null)
+const terminalFitAddon = shallowRef<FitAddon | null>(null)
+const terminalSocket = ref<WebSocket | null>(null)
+const terminalReady = ref(false)
+const terminalStatus = ref('未连接')
+let terminalDataDisposable: { dispose: () => void } | null = null
+let terminalResizeObserver: ResizeObserver | null = null
+let terminalResizeFrame: number | null = null
 
-const chatMessages = computed(() => props.messages.slice(-30))
-const promptLabel = computed(() => platformLabel.value === 'win32' ? 'PS>' : '$')
-const terminalStorageKey = computed(() => {
+const terminalStatusLabel = computed(() => terminalReady.value ? '真实终端已连接' : terminalStatus.value)
+const sideChatStorageKey = computed(() => {
   const threadId = props.threadId.trim()
-  return threadId ? `codex-web-local.side-terminal.v1:${encodeURIComponent(threadId)}` : ''
+  const instanceKey = props.storageKey?.trim() ?? ''
+  if (!threadId) return ''
+  return `codex-web-local.side-chat.v2:${encodeURIComponent(threadId)}${instanceKey ? `:${encodeURIComponent(instanceKey)}` : ''}`
 })
+const sideChatReasoningValues: ReasoningEffort[] = [
+  'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+]
+
+const sideChatComposerContextId = computed(() => {
+  const threadId = props.threadId.trim()
+  return threadId ? `side-chat:${threadId}` : ''
+})
+
+const sideChatSelectedModelInfo = computed(() => (
+  props.availableModels.find((model) => model.model === sideChatModel.value || model.id === sideChatModel.value)
+))
+
+function resolveSideChatReasoningEffort(preferred: ReasoningEffort | ''): ReasoningEffort | '' {
+  const supported = sideChatSelectedModelInfo.value?.supportedReasoningEfforts ?? []
+  if (supported.length === 0) return preferred
+  if (preferred && supported.some((option) => option.value === preferred)) return preferred
+  const defaultEffort = sideChatSelectedModelInfo.value?.defaultReasoningEffort
+  if (defaultEffort && supported.some((option) => option.value === defaultEffort)) return defaultEffort
+  return supported[0]?.value ?? ''
+}
+
+function selectSideChatModel(model: string): void {
+  sideChatModel.value = model
+  sideChatReasoningEffort.value = resolveSideChatReasoningEffort(sideChatReasoningEffort.value)
+  persistSideChatState()
+}
+function selectSideChatReasoningEffort(effort: ReasoningEffort | ''): void {
+  sideChatReasoningEffort.value = resolveSideChatReasoningEffort(effort)
+  persistSideChatState()
+}
+
+function defaultSideChatModel(): string {
+  const preferred = props.model?.trim() ?? ''
+  if (preferred) return preferred
+  return props.availableModels[0]?.model?.trim() || props.models[0]?.trim() || ''
+}
+
+function releaseSideChatThread(reason: string): void {
+  sideChatRequestGeneration += 1
+  sideChatThreadCreationPromise = null
+  const activeTurnIds = [...sideChatTurnWaiters]
+    .map((waiter) => waiter.turnId.trim())
+    .filter((turnId, index, values) => Boolean(turnId) && values.indexOf(turnId) === index)
+  cancelSideChatTurnWaiters(new Error(reason))
+  sideChatDeltaTextByItemId.clear()
+  const threadId = sideChatThreadId.value.trim()
+  sideChatThreadId.value = ''
+  sideChatNotificationCleanup?.()
+  sideChatNotificationCleanup = null
+  if (threadId) {
+    void closeSideThread(threadId, activeTurnIds).catch((error) => {
+      console.warn(`Failed to close the side chat thread while ${reason}`, error)
+    })
+  }
+}
 
 watch(
   () => [props.threadId, props.cwd] as const,
   () => {
-    chatDraft.value = ''
-    commandInput.value = ''
-    historyCursor.value = -1
-    terminalEntries.value = loadTerminalEntries()
+    releaseSideChatThread('侧边会话已切换')
+    resetSideChatState()
+    closeTerminalSocket()
+    terminalReady.value = false
+    terminalStatus.value = props.cwd.trim() ? '未连接' : '当前会话未提供工作目录'
+    if (props.mode === 'chat') disposeTerminalEmulator()
+    void nextTick(() => {
+      if (props.mode === 'terminal' && props.cwd.trim()) {
+        ensureTerminalEmulator()
+        terminalEmulator.value?.reset()
+        connectTerminalSocket()
+        scheduleTerminalFit()
+        terminalEmulator.value?.focus()
+      }
+    })
     void scrollChatToBottom()
-    void scrollTerminalToBottom()
+    if (props.mode === 'chat' && props.threadId.trim()) {
+      sideChatNotificationCleanup = subscribeCodexNotifications(onSideChatNotification)
+      prepareSideChatThread()
+    }
   },
   { immediate: true },
 )
 
 watch(
-  () => props.messages.length,
-  () => { void scrollChatToBottom() },
+  () => [props.model, props.models, props.availableModels] as const,
+  () => {
+    if (!sideChatModel.value.trim()) {
+      const model = defaultSideChatModel()
+      if (model) sideChatModel.value = model
+    }
+    const effort = resolveSideChatReasoningEffort(sideChatReasoningEffort.value)
+    if (effort !== sideChatReasoningEffort.value) sideChatReasoningEffort.value = effort
+    persistSideChatState()
+  },
+  { deep: true },
 )
 
-watch(terminalEntries, () => {
-  persistTerminalEntries()
-  void scrollTerminalToBottom()
-}, { deep: true })
-
-watch(() => props.mode, (mode) => {
-  if (mode === 'chat') {
-    void nextTick(() => chatInputRef.value?.focus())
-  } else {
-    void nextTick(() => commandInputRef.value?.focus())
+watch(() => props.mode, (mode, previousMode) => {
+  if (mode !== previousMode && mode !== 'chat') {
+    releaseSideChatThread('侧边聊天已切换到侧边终端')
   }
+  if (mode === 'chat') {
+    if (!sideChatNotificationCleanup) {
+      sideChatNotificationCleanup = subscribeCodexNotifications(onSideChatNotification)
+    }
+    closeTerminalSocket()
+    disposeTerminalEmulator()
+    if (props.threadId.trim()) prepareSideChatThread()
+    return
+  }
+  void nextTick(() => {
+    ensureTerminalEmulator()
+    if (props.cwd.trim() && !terminalSocket.value) connectTerminalSocket()
+    scheduleTerminalFit()
+    terminalEmulator.value?.focus()
+  })
 })
 
 onMounted(() => {
-  if (props.mode === 'chat') chatInputRef.value?.focus()
-  else commandInputRef.value?.focus()
+  if (props.mode === 'chat') {
+    if (!sideChatNotificationCleanup) {
+      sideChatNotificationCleanup = subscribeCodexNotifications(onSideChatNotification)
+    }
+    if (props.threadId.trim()) prepareSideChatThread()
+  } else {
+    void nextTick(() => {
+      ensureTerminalEmulator()
+      if (props.cwd.trim()) connectTerminalSocket()
+      scheduleTerminalFit()
+      terminalEmulator.value?.focus()
+    })
+  }
+})
+
+onUnmounted(() => {
+  releaseSideChatThread('侧边聊天已关闭')
+  closeTerminalSocket()
+  disposeTerminalEmulator()
 })
 
 function createId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function sendChatMessage(): void {
-  const text = chatDraft.value.trim()
-  if (!text || !props.threadId.trim() || props.isSending) return
-  chatDraft.value = ''
-  emit('send', text)
+function onSubmitSideChatComposer(payload: SubmitPayload): void {
+  const text = payload.text.trim()
+  const attachmentSummary = [
+    payload.imageUrls.length > 0 ? `${payload.imageUrls.length} 张图片` : '',
+    payload.fileAttachments.length > 0 ? `${payload.fileAttachments.length} 个附件` : '',
+  ].filter(Boolean).join('、')
+  const displayText = text || (attachmentSummary ? `[${attachmentSummary}]` : '')
+  if (!displayText || !props.threadId.trim()) return
+  chatMessages.value = [...chatMessages.value, { id: createId('side-chat-user'), role: 'user' as const, text: displayText }].slice(-30)
+  sideChatError.value = ''
+  persistSideChatState()
+  void scrollChatToBottom()
+  void sendSideChatTurn(payload)
 }
 
-function loadTerminalEntries(): TerminalEntry[] {
-  if (typeof window === 'undefined' || !terminalStorageKey.value) return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(terminalStorageKey.value) ?? '[]') as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((value): value is Partial<TerminalEntry> => value !== null && typeof value === 'object')
-      .map((value) => ({
-        id: typeof value.id === 'string' ? value.id : createId('terminal'),
-        command: typeof value.command === 'string' ? value.command : '',
-        cwd: typeof value.cwd === 'string' ? value.cwd : props.cwd,
-        stdout: typeof value.stdout === 'string' ? value.stdout.slice(-MAX_OUTPUT_CHARS) : '',
-        stderr: typeof value.stderr === 'string' ? value.stderr.slice(-MAX_OUTPUT_CHARS) : '',
-        exitCode: typeof value.exitCode === 'number' ? value.exitCode : null,
-        status: normalizeTerminalStatus(value.status),
-        error: typeof value.error === 'string' ? value.error : '',
-        startedAtIso: typeof value.startedAtIso === 'string' ? value.startedAtIso : new Date().toISOString(),
-        durationMs: typeof value.durationMs === 'number' ? value.durationMs : null,
-      }))
-      .filter((entry) => entry.command.trim().length > 0)
-      .slice(-MAX_TERMINAL_ENTRIES)
-  } catch {
-    return []
+function sideChatErrorMessage(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : '侧边聊天创建失败'
+  return /failed to fetch/i.test(rawMessage)
+    ? '侧边聊天连接失败，请检查 Codex 服务连接后重试。'
+    : rawMessage
+}
+
+function appendSideChatSystemMessage(text: string): void {
+  const normalizedText = text.trim()
+  if (!normalizedText) return
+  const lastMessage = chatMessages.value[chatMessages.value.length - 1]
+  if (lastMessage?.role === 'system' && lastMessage.text === normalizedText) return
+  chatMessages.value = [
+    ...chatMessages.value,
+    { id: createId('side-chat-error'), role: 'system' as const, text: normalizedText },
+  ].slice(-30)
+  persistSideChatState()
+}
+
+function prepareSideChatThread(): void {
+  if (props.mode !== 'chat' || !props.threadId.trim()) return
+  const generation = sideChatRequestGeneration
+  void ensureSideChatThread().catch((error) => {
+    // A close or parent switch intentionally invalidates an in-flight create.
+    // Its cleanup is owned by ensureSideChatThread; do not surface a stale
+    // transport error in the newly selected side panel.
+    if (generation !== sideChatRequestGeneration) return
+    const message = sideChatErrorMessage(error)
+    sideChatError.value = message
+    appendSideChatSystemMessage(message)
+  })
+}
+
+function resetSideChatState(): void {
+  sideChatDeltaTextByItemId.clear()
+  const state = loadSideChatState()
+  sideChatThreadId.value = state.threadId
+  sideChatBaselineMessageIds.value = state.baselineMessageIds
+  chatMessages.value = state.messages
+  sideChatModel.value = state.model || defaultSideChatModel()
+  sideChatReasoningEffort.value = resolveSideChatReasoningEffort(state.reasoningEffort)
+  sideChatSpeedMode.value = state.speedMode
+  sideChatCollaborationMode.value = state.collaborationMode
+  sideChatError.value = ''
+}
+
+function normalizeSideChatMessage(value: unknown): SideChatMessage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const text = typeof record.text === 'string' ? record.text : ''
+  if (!text.trim()) return null
+  const role: SideChatMessage['role'] =
+    record.role === 'assistant' || record.role === 'system' ? record.role : 'user'
+  return {
+    id: typeof record.id === 'string' && record.id.trim() ? record.id : createId('side-chat'),
+    role,
+    text,
   }
 }
 
-function normalizeTerminalStatus(value: unknown): TerminalEntryStatus {
-  return value === 'error' || value === 'running' ? value : 'completed'
+function loadSideChatState(): PersistedSideChatState {
+  const emptyState: PersistedSideChatState = {
+    threadId: '',
+    baselineMessageIds: [],
+    messages: [],
+    model: defaultSideChatModel(),
+    reasoningEffort: props.selectedReasoningEffort ?? '',
+    speedMode: 'standard',
+    collaborationMode: 'execute',
+  }
+  if (typeof window === 'undefined' || !sideChatStorageKey.value) return emptyState
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(sideChatStorageKey.value) ?? '') as unknown
+    if (Array.isArray(parsed)) {
+      return {
+        ...emptyState,
+        messages: parsed.map(normalizeSideChatMessage).filter((message): message is SideChatMessage => message !== null).slice(-30),
+      }
+    }
+    if (!parsed || typeof parsed !== 'object') return emptyState
+    const record = parsed as Record<string, unknown>
+    return {
+      // Side threads are ephemeral. Never revive an id from localStorage after
+      // a reload: it may already have been unsubscribed with the old page.
+      threadId: '',
+      baselineMessageIds: Array.isArray(record.baselineMessageIds)
+        ? record.baselineMessageIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        : [],
+      messages: Array.isArray(record.messages)
+        ? record.messages.map(normalizeSideChatMessage).filter((message): message is SideChatMessage => message !== null).slice(-30)
+        : [],
+      model: typeof record.model === 'string' ? record.model.trim() : '',
+      reasoningEffort: typeof record.reasoningEffort === 'string'
+        && sideChatReasoningValues.includes(record.reasoningEffort as ReasoningEffort)
+        ? record.reasoningEffort as ReasoningEffort
+        : '',
+      speedMode: record.speedMode === 'fast' ? 'fast' : 'standard',
+      collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'execute',
+    }
+  } catch {
+    return emptyState
+  }
 }
 
-function persistTerminalEntries(): void {
-  if (typeof window === 'undefined' || !terminalStorageKey.value) return
+function persistSideChatState(): void {
+  if (typeof window === 'undefined' || !sideChatStorageKey.value) return
   try {
-    window.localStorage.setItem(terminalStorageKey.value, JSON.stringify(terminalEntries.value.slice(-MAX_TERMINAL_ENTRIES)))
+    window.localStorage.setItem(sideChatStorageKey.value, JSON.stringify({
+      // The server-side side thread is ephemeral. Persist only the visible
+      // transcript and composer preferences; never leave an id that could be
+      // mistaken for a resumable conversation after a reload.
+      threadId: '',
+      baselineMessageIds: sideChatBaselineMessageIds.value,
+      messages: chatMessages.value.slice(-30),
+      model: sideChatModel.value,
+      reasoningEffort: sideChatReasoningEffort.value,
+      speedMode: sideChatSpeedMode.value,
+      collaborationMode: sideChatCollaborationMode.value,
+    } satisfies PersistedSideChatState))
   } catch {
     // Embedded WebViews and private browsing may disable localStorage.
   }
 }
 
-function clearTerminalHistory(): void {
-  if (isTerminalRunning.value) return
-  terminalEntries.value = []
+async function ensureSideChatThread(): Promise<string> {
+  const existingThreadId = sideChatThreadId.value.trim()
+  if (existingThreadId) return existingThreadId
+  if (sideChatThreadCreationPromise) return sideChatThreadCreationPromise
+  const parentThreadId = props.threadId.trim()
+  const generation = sideChatRequestGeneration
+  const creationPromise = (async () => {
+    const nextThreadId = parentThreadId === '__new-thread__'
+      ? await startSideThread(
+        props.cwd.trim() || undefined,
+        sideChatModel.value.trim() || props.model?.trim() || undefined,
+      )
+      : await forkSideThread(
+        parentThreadId,
+        props.cwd.trim() || undefined,
+        sideChatModel.value.trim() || props.model?.trim() || undefined,
+      )
+    if (generation !== sideChatRequestGeneration) {
+      await closeSideThread(nextThreadId).catch((error) => {
+        console.warn('Failed to close a side chat thread created during a switch', error)
+      })
+      throw new Error('侧边会话已切换')
+    }
+    sideChatThreadId.value = nextThreadId
+    // A fork inherits the parent history. Do not immediately read the complete
+    // fork here: large parent threads make that response unnecessarily heavy and
+    // can surface as a browser-level "Failed to fetch" through a prefix proxy.
+    // The first side turn is isolated by its own turn id, and the compact final
+    // read below recovers a reply if live deltas were missed.
+    sideChatBaselineMessageIds.value = []
+    persistSideChatState()
+    return nextThreadId
+  })()
+  sideChatThreadCreationPromise = creationPromise
+  try {
+    return await creationPromise
+  } finally {
+    if (sideChatThreadCreationPromise === creationPromise) sideChatThreadCreationPromise = null
+  }
 }
 
-function onCommandKeydown(event: KeyboardEvent): void {
-  const commands = terminalEntries.value.map((entry) => entry.command).reverse()
-  if (event.key === 'ArrowUp' && !event.shiftKey) {
-    event.preventDefault()
-    if (commands.length === 0) return
-    historyCursor.value = Math.min(historyCursor.value + 1, commands.length - 1)
-    commandInput.value = commands[historyCursor.value] ?? ''
+function upsertSideChatReply(messageId: string, text: string): void {
+  if (!text.trim()) return
+  const id = `side-chat-reply:${messageId}`
+  const nextMessage = { id, role: 'assistant' as const, text }
+  const index = chatMessages.value.findIndex((message) => message.id === id)
+  if (index < 0) {
+    chatMessages.value = [...chatMessages.value, nextMessage].slice(-30)
     return
   }
-  if (event.key === 'ArrowDown' && !event.shiftKey) {
-    event.preventDefault()
-    if (historyCursor.value <= 0) {
-      historyCursor.value = -1
-      commandInput.value = ''
+  const nextMessages = [...chatMessages.value]
+  nextMessages[index] = nextMessage
+  chatMessages.value = nextMessages
+}
+
+function asNotificationRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function notificationString(record: Record<string, unknown> | null, key: string): string {
+  const value = record?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function notificationTurnId(record: Record<string, unknown> | null): string {
+  const directTurnId = notificationString(record, 'turnId')
+  if (directTurnId) return directTurnId
+  const turn = asNotificationRecord(record?.turn)
+  return notificationString(turn, 'id')
+}
+
+function sideChatNotificationMatches(
+  waiter: SideChatTurnWaiter,
+  record: Record<string, unknown> | null,
+): boolean {
+  const threadId = notificationString(record, 'threadId')
+  if (threadId !== waiter.threadId) return false
+  const turnId = notificationTurnId(record)
+  if (waiter.turnId && turnId && waiter.turnId !== turnId) return false
+  if (!waiter.turnId && turnId) waiter.turnId = turnId
+  return true
+}
+
+function completeSideChatTurnWaiter(waiter: SideChatTurnWaiter, error?: Error): void {
+  if (!sideChatTurnWaiters.delete(waiter)) return
+  window.clearTimeout(waiter.timeoutId)
+  for (const itemId of waiter.deltaItemIds) sideChatDeltaTextByItemId.delete(itemId)
+  if (error) waiter.reject(error)
+  else waiter.resolve()
+}
+
+function cancelSideChatTurnWaiters(error: Error): void {
+  for (const waiter of [...sideChatTurnWaiters]) completeSideChatTurnWaiter(waiter, error)
+}
+
+function waitForSideChatTurn(threadId: string): { waiter: SideChatTurnWaiter; completion: Promise<void> } {
+  let waiter: SideChatTurnWaiter
+  const completion = new Promise<void>((resolve, reject) => {
+    waiter = {
+      threadId,
+      turnId: '',
+      deltaItemIds: new Set<string>(),
+      resolve,
+      reject,
+      timeoutId: 0,
+      startedAtMs: 0,
+    }
+    waiter.timeoutId = window.setTimeout(() => {
+      completeSideChatTurnWaiter(waiter, new Error('侧边会话响应超时，请稍后重试'))
+    }, 300_000)
+    sideChatTurnWaiters.add(waiter)
+  })
+  return { waiter: waiter!, completion }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function startNativeTurnReadFallback(threadId: string, turnId: string, waiter: SideChatTurnWaiter): void {
+  if (!sideChatTurnWaiters.has(waiter) || waiter.threadId !== threadId || waiter.turnId !== turnId) return
+  waiter.startedAtMs = Date.now()
+
+  // The native event stream is authoritative for live deltas. A lightweight
+  // latest-turn probe is only a recovery path for a websocket that connects
+  // just after a fast turn has already emitted its notifications. It avoids
+  // the full parent-history `thread/read` that can fail through /codex/ when
+  // the fork contains a large conversation.
+  void (async () => {
+    await delay(1500)
+    while (sideChatTurnWaiters.has(waiter)) {
+      try {
+        const turn = await getLatestThreadTurn(threadId)
+        if (turn?.id === turnId) {
+          appendSideChatTurnItems(turn.items, turnId)
+          if (turn.status === 'failed' || turn.status === 'interrupted') {
+            const error = asNotificationRecord(turn.error)
+            completeSideChatTurnWaiter(waiter,
+              new Error(notificationString(error, 'message') || `侧边会话${turn.status === 'failed' ? '执行失败' : '已中断'}`),
+            )
+            return
+          } else if (turn.status === 'completed') {
+            completeSideChatTurnWaiter(waiter)
+            return
+          }
+        }
+      } catch {
+        // Keep waiting for the native notification or the next lightweight probe.
+      }
+      await delay(1500)
+    }
+  })()
+}
+
+function appendSideChatTurnItems(items: unknown[], turnId: string): void {
+  for (const value of items) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const item = value as Record<string, unknown>
+    if (item.type !== 'agentMessage') continue
+    const itemId = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `${turnId}-agent-message`
+    const text = typeof item.text === 'string' ? item.text : ''
+    if (text.trim()) upsertSideChatReply(itemId, text)
+  }
+  persistSideChatState()
+  void scrollChatToBottom()
+}
+
+function onSideChatNotification(notification: RpcNotification): void {
+  const record = asNotificationRecord(notification.params)
+  const threadId = notificationString(record, 'threadId')
+  const turnId = notificationTurnId(record)
+  const waiter = [...sideChatTurnWaiters].find((candidate) => (
+    candidate.threadId === threadId && (!turnId || !candidate.turnId || candidate.turnId === turnId)
+  ))
+  if (!waiter || !sideChatNotificationMatches(waiter, record)) return
+
+  if (notification.method === 'turn/started') return
+
+  if (notification.method === 'item/agentMessage/delta') {
+    const itemId = notificationString(record, 'itemId')
+    const delta = typeof record?.delta === 'string' ? record.delta : ''
+    if (!itemId || !delta) return
+    const nextText = `${sideChatDeltaTextByItemId.get(itemId) ?? ''}${delta}`
+    sideChatDeltaTextByItemId.set(itemId, nextText)
+    waiter.deltaItemIds.add(itemId)
+    upsertSideChatReply(itemId, nextText)
+    persistSideChatState()
+    void scrollChatToBottom()
+    return
+  }
+
+  if (notification.method === 'turn/completed') {
+    const turn = asNotificationRecord(record?.turn)
+    const status = notificationString(turn, 'status')
+    if (status === 'failed' || status === 'interrupted') {
+      const error = asNotificationRecord(turn?.error)
+      const message = notificationString(error, 'message') || `侧边会话${status === 'failed' ? '执行失败' : '已中断'}`
+      completeSideChatTurnWaiter(waiter, new Error(message))
+    } else if (status === 'completed') {
+      completeSideChatTurnWaiter(waiter)
+    }
+    return
+  }
+
+  if (notification.method === 'error') {
+    const message = notificationString(record, 'message') || '侧边会话执行失败'
+    completeSideChatTurnWaiter(waiter, new Error(message))
+  }
+}
+
+async function sendSideChatTurn(payload: SubmitPayload): Promise<void> {
+  const generation = sideChatRequestGeneration
+  let waiter: SideChatTurnWaiter | null = null
+  try {
+    const threadId = await ensureSideChatThread()
+    if (generation !== sideChatRequestGeneration) {
+      await closeSideThread(threadId).catch((error) => {
+        console.warn('Failed to close a side chat thread created during unmount', error)
+      })
       return
     }
-    historyCursor.value -= 1
-    commandInput.value = commands[historyCursor.value] ?? ''
-  }
-}
+    persistSideChatState()
+    const pendingTurn = waitForSideChatTurn(threadId)
+    waiter = pendingTurn.waiter
+    const turnId = await startThreadTurn(
+      threadId,
+      payload.text,
+      payload.imageUrls,
+      sideChatModel.value.trim() || props.model?.trim() || undefined,
+      sideChatReasoningEffort.value || undefined,
+      payload.skills,
+      payload.fileAttachments,
+      payload.collaborationMode,
+      payload.turnOptions?.plugins,
+      props.cwd.trim() || undefined,
+      // Keep the native side-thread developer policy active. `null` means
+      // "use the built-in instructions for the selected collaboration mode"
+      // and would otherwise erase the policy installed by thread/fork.
+      SIDE_DEVELOPER_INSTRUCTIONS,
+    )
+    if (sideChatTurnWaiters.has(waiter) && waiter.threadId === threadId) {
+      waiter.turnId = turnId
+      startNativeTurnReadFallback(threadId, turnId, waiter)
+    }
+    await pendingTurn.completion
+    if (generation !== sideChatRequestGeneration) return
 
-async function runCommand(): Promise<void> {
-  const command = commandInput.value.trim()
-  const cwd = props.cwd.trim()
-  if (!command || !cwd || isTerminalRunning.value) return
-
-  const startedAt = Date.now()
-  const entry: TerminalEntry = {
-    id: createId('terminal'),
-    command,
-    cwd,
-    stdout: '',
-    stderr: '',
-    exitCode: null,
-    status: 'running',
-    error: '',
-    startedAtIso: new Date(startedAt).toISOString(),
-    durationMs: null,
-  }
-  terminalEntries.value = [...terminalEntries.value, entry].slice(-MAX_TERMINAL_ENTRIES)
-  commandInput.value = ''
-  historyCursor.value = -1
-  isTerminalRunning.value = true
-
-  try {
-    const result = await executeTerminalCommand(command, cwd, 120_000, props.threadId)
-    platformLabel.value = result.platform
-    entry.stdout = result.stdout.slice(-MAX_OUTPUT_CHARS)
-    entry.stderr = result.stderr.slice(-MAX_OUTPUT_CHARS)
-    entry.exitCode = result.exitCode
-    entry.status = result.exitCode === 0 ? 'completed' : 'error'
-    entry.durationMs = Date.now() - startedAt
+    // Live deltas normally already rendered the reply. If the transport
+    // connected too late, recover only the completed latest turn instead of
+    // hydrating the entire forked conversation.
+    try {
+      const turn = await getLatestThreadTurn(threadId)
+      if (turn?.id === turnId) {
+        appendSideChatTurnItems(turn.items, turn.id)
+      }
+    } catch {
+      // A completed turn with live deltas is still a successful send. Do not
+      // replace it with a raw browser-level `Failed to fetch` error.
+    }
+    persistSideChatState()
+    void scrollChatToBottom()
   } catch (error) {
-    entry.status = 'error'
-    entry.error = error instanceof Error ? error.message : '终端命令请求失败'
-    entry.stderr = entry.error
-    entry.durationMs = Date.now() - startedAt
+    if (generation !== sideChatRequestGeneration) return
+    if (waiter) completeSideChatTurnWaiter(waiter, error instanceof Error ? error : new Error('侧边聊天发送失败'))
+    sideChatError.value = sideChatErrorMessage(error)
+    appendSideChatSystemMessage(sideChatError.value)
   } finally {
-    isTerminalRunning.value = false
-    await nextTick()
-    commandInputRef.value?.focus()
+    if (generation === sideChatRequestGeneration) void scrollChatToBottom()
   }
 }
 
-function formatEntryMeta(entry: TerminalEntry): string {
-  if (entry.status === 'error') return `退出 ${String(entry.exitCode ?? 1)}`
-  if (entry.exitCode === null) return ''
-  const duration = typeof entry.durationMs === 'number' ? ` · ${formatDuration(entry.durationMs)}` : ''
-  return `退出 ${String(entry.exitCode)}${duration}`
+function ensureTerminalEmulator(): void {
+  const element = terminalElementRef.value
+  if (!element || terminalEmulator.value) return
+
+  const emulator = new Terminal({
+    cursorBlink: true,
+    cursorStyle: 'block',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+    fontSize: 12,
+    lineHeight: 1.2,
+    scrollback: 3000,
+    theme: {
+      background: '#0d1117',
+      foreground: '#d7dde5',
+      cursor: '#f0f6fc',
+      selectionBackground: '#264f78',
+    },
+  })
+  const fitAddon = new FitAddon()
+  emulator.loadAddon(fitAddon)
+  emulator.open(element)
+  terminalEmulator.value = emulator
+  terminalFitAddon.value = fitAddon
+  terminalDataDisposable = emulator.onData((data) => {
+    sendTerminalPayload({ type: 'input', data })
+  })
+  if (typeof ResizeObserver !== 'undefined') {
+    terminalResizeObserver = new ResizeObserver(() => scheduleTerminalFit())
+    terminalResizeObserver.observe(element)
+  }
+  scheduleTerminalFit()
 }
 
-function formatDuration(value: number): string {
-  if (value < 1_000) return `${String(value)}ms`
-  return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}s`
+function scheduleTerminalFit(): void {
+  if (typeof window === 'undefined' || terminalResizeFrame !== null) return
+  terminalResizeFrame = window.requestAnimationFrame(() => {
+    terminalResizeFrame = null
+    const element = terminalElementRef.value
+    const emulator = terminalEmulator.value
+    const fitAddon = terminalFitAddon.value
+    if (!element || !emulator || !fitAddon || element.clientWidth <= 0 || element.clientHeight <= 0) return
+    try {
+      fitAddon.fit()
+      sendTerminalPayload({ type: 'resize', cols: emulator.cols, rows: emulator.rows })
+    } catch {
+      // The terminal can be temporarily hidden while the side panel changes mode.
+    }
+  })
+}
+
+function disposeTerminalEmulator(): void {
+  if (typeof window !== 'undefined' && terminalResizeFrame !== null) {
+    window.cancelAnimationFrame(terminalResizeFrame)
+    terminalResizeFrame = null
+  }
+  terminalResizeObserver?.disconnect()
+  terminalResizeObserver = null
+  terminalDataDisposable?.dispose()
+  terminalDataDisposable = null
+  terminalEmulator.value?.dispose()
+  terminalEmulator.value = null
+  terminalFitAddon.value = null
+}
+
+function terminalWebSocketUrl(): string {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = new URL(`${protocol}//${window.location.host}/codex-api/terminal/ws`)
+  url.searchParams.set('cwd', props.cwd.trim())
+  url.searchParams.set('threadId', props.threadId.trim())
+  url.searchParams.set('cols', '120')
+  url.searchParams.set('rows', '32')
+  return url.toString()
+}
+
+function connectTerminalSocket(): void {
+  if (typeof window === 'undefined' || !props.cwd.trim() || terminalSocket.value) return
+  ensureTerminalEmulator()
+  terminalStatus.value = '正在连接真实终端…'
+  const socket = new WebSocket(terminalWebSocketUrl())
+  terminalSocket.value = socket
+  socket.addEventListener('open', () => {
+    terminalStatus.value = '已连接'
+    scheduleTerminalFit()
+  })
+  socket.addEventListener('message', (event) => {
+    let payload: unknown
+    try {
+      payload = JSON.parse(String(event.data))
+    } catch {
+      writeTerminalOutput(String(event.data))
+      return
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+    const record = payload as Record<string, unknown>
+    if (record.type === 'ready') {
+      terminalReady.value = true
+      terminalStatus.value = '已连接'
+      scheduleTerminalFit()
+      terminalEmulator.value?.focus()
+    } else if (record.type === 'output' && typeof record.data === 'string') {
+      writeTerminalOutput(record.data)
+    } else if (record.type === 'error') {
+      terminalStatus.value = typeof record.message === 'string' ? record.message : '终端错误'
+    } else if (record.type === 'exit') {
+      terminalReady.value = false
+      terminalStatus.value = '终端已退出'
+    }
+  })
+  socket.addEventListener('error', () => {
+    terminalReady.value = false
+    terminalStatus.value = '真实终端连接失败'
+  })
+  socket.addEventListener('close', () => {
+    if (terminalSocket.value === socket) terminalSocket.value = null
+    terminalReady.value = false
+    if (terminalStatus.value === '已连接') terminalStatus.value = '终端已断开'
+  })
+}
+
+function closeTerminalSocket(): void {
+  const socket = terminalSocket.value
+  terminalSocket.value = null
+  terminalReady.value = false
+  if (!socket) return
+  socket.close()
+}
+
+function sendTerminalPayload(payload: unknown): void {
+  if (terminalSocket.value?.readyState !== WebSocket.OPEN) return
+  terminalSocket.value.send(JSON.stringify(payload))
+}
+
+function writeTerminalOutput(data: string): void {
+  terminalEmulator.value?.write(data)
+}
+
+function clearTerminalScreen(): void {
+  terminalEmulator.value?.clear()
+  terminalEmulator.value?.focus()
 }
 
 async function scrollChatToBottom(): Promise<void> {
@@ -381,10 +968,6 @@ async function scrollChatToBottom(): Promise<void> {
   if (chatMessagesRef.value) chatMessagesRef.value.scrollTop = chatMessagesRef.value.scrollHeight
 }
 
-async function scrollTerminalToBottom(): Promise<void> {
-  await nextTick()
-  if (terminalOutputRef.value) terminalOutputRef.value.scrollTop = terminalOutputRef.value.scrollHeight
-}
 </script>
 
 <style scoped>
@@ -401,11 +984,19 @@ async function scrollTerminalToBottom(): Promise<void> {
   box-shadow: var(--ui-shadow-float);
 }
 
+.thread-side-panel--terminal {
+  flex-basis: 38rem;
+}
+
+.thread-side-panel--embedded {
+  flex-basis: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .thread-side-panel-header,
 .thread-side-panel-tabs,
-.thread-side-chat-form-footer,
-.thread-side-terminal-command-line,
-.thread-side-terminal-form,
 .thread-side-terminal-footer {
   display: flex;
   align-items: center;
@@ -497,18 +1088,24 @@ async function scrollTerminalToBottom(): Promise<void> {
 }
 
 .thread-side-panel-tab-icon {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
   font-size: 1rem;
   line-height: 1;
 }
 
 .thread-side-panel-tab-icon--terminal,
-.thread-side-terminal-prompt,
-.thread-side-terminal-form-prompt,
-.thread-side-terminal-command-line code,
-.thread-side-terminal-input,
-.thread-side-terminal-output-text,
 .thread-side-terminal-context code {
   font-family: var(--font-mono-ui);
+}
+
+.thread-side-panel-tab-icon--terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(1px);
 }
 
 .thread-side-chat,
@@ -519,8 +1116,13 @@ async function scrollTerminalToBottom(): Promise<void> {
   flex-direction: column;
 }
 
+.thread-side-terminal {
+  background: #0d1117;
+  color: #d7dde5;
+}
+
 .thread-side-chat-messages,
-.thread-side-terminal-output {
+.thread-side-terminal-emulator-wrap {
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
@@ -529,11 +1131,69 @@ async function scrollTerminalToBottom(): Promise<void> {
 }
 
 .thread-side-chat-messages {
+  width: min(100%, var(--ui-content-max));
+  margin-inline: auto;
   padding: 0.65rem;
 }
 
-.thread-side-chat-empty,
-.thread-side-terminal-empty {
+.thread-side-terminal-emulator-wrap {
+  position: relative;
+  overflow: hidden;
+  background: #0d1117;
+}
+
+.thread-side-terminal-emulator {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.thread-side-terminal-emulator :deep(.xterm) {
+  height: 100%;
+  padding: 0.55rem 0.45rem 0.7rem;
+  box-sizing: border-box;
+}
+
+.thread-side-terminal-emulator :deep(.xterm-viewport) {
+  background: #0d1117 !important;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.thread-side-terminal-emulator :deep(.xterm-viewport::-webkit-scrollbar) {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.thread-side-terminal-status-overlay {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.8rem;
+  color: #8b949e;
+  font-family: var(--font-mono-ui);
+  font-size: 0.68rem;
+  pointer-events: none;
+}
+
+.thread-side-chat-composer {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: min(100%, var(--ui-content-max));
+  margin-inline: auto;
+  padding: 0.55rem 0.65rem 0.65rem;
+}
+
+.thread-side-chat-composer :deep(.thread-composer) {
+  max-width: none;
+  padding: 0;
+}
+
+.thread-side-chat-composer :deep(.thread-composer-shell) {
+  border-radius: var(--ui-radius-composer);
+}
+
+.thread-side-chat-empty {
   display: flex;
   min-height: 12rem;
   flex-direction: column;
@@ -547,14 +1207,12 @@ async function scrollTerminalToBottom(): Promise<void> {
   line-height: 1.45;
 }
 
-.thread-side-chat-empty strong,
-.thread-side-terminal-empty strong {
+.thread-side-chat-empty strong {
   color: var(--ui-text-secondary);
   font-size: 0.76rem;
 }
 
-.thread-side-chat-empty-icon,
-.thread-side-terminal-empty-icon {
+.thread-side-chat-empty-icon {
   color: var(--ui-text-secondary);
   font-size: 1.5rem;
 }
@@ -591,209 +1249,32 @@ async function scrollTerminalToBottom(): Promise<void> {
   overflow-wrap: anywhere;
 }
 
-.thread-side-chat-form {
-  flex: 0 0 auto;
-  padding: 0.55rem;
-  border-top: 1px solid var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.thread-side-chat-input {
-  display: block;
-  width: 100%;
-  min-height: 4.2rem;
-  resize: vertical;
-  padding: 0.5rem;
-  border: 1px solid var(--ui-border-subtle);
-  border-radius: var(--ui-radius-control);
-  outline: none;
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-primary);
-  font-size: 0.74rem;
-  line-height: 1.45;
-}
-
-.thread-side-chat-input:focus,
-.thread-side-terminal-input:focus {
-  border-color: var(--ui-border-strong);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-border-strong) 18%, transparent);
-}
-
-.thread-side-chat-form-footer {
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding-top: 0.35rem;
-}
-
-.thread-side-chat-hint,
 .thread-side-terminal-footer,
-.thread-side-terminal-context,
-.thread-side-terminal-entry-meta {
+.thread-side-terminal-context {
   color: var(--ui-text-tertiary);
   font-size: 0.62rem;
-}
-
-.thread-side-chat-send,
-.thread-side-terminal-submit {
-  border: 1px solid var(--ui-border-subtle);
-  border-radius: var(--ui-radius-control);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-  cursor: pointer;
-  font-size: 0.68rem;
-  font-weight: 650;
-}
-
-.thread-side-chat-send {
-  padding: 0.3rem 0.65rem;
-}
-
-.thread-side-chat-send:hover:not(:disabled),
-.thread-side-chat-send:focus-visible,
-.thread-side-terminal-submit:hover:not(:disabled),
-.thread-side-terminal-submit:focus-visible {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.thread-side-chat-send:disabled,
-.thread-side-terminal-submit:disabled,
-.thread-side-terminal-clear:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .thread-side-terminal-context {
   display: grid;
   gap: 0.15rem;
   padding: 0.55rem 0.65rem 0.35rem;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
 }
 
 .thread-side-terminal-context code {
   overflow: hidden;
-  color: var(--ui-text-secondary);
+  color: #c9d1d9;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.thread-side-terminal-output {
-  padding: 0 0.65rem;
-}
-
-.thread-side-terminal-empty small {
-  max-width: 17rem;
-  color: var(--ui-text-tertiary);
-  font-size: 0.6rem;
-}
-
-.thread-side-terminal-entry {
-  padding: 0.55rem 0;
-  border-bottom: 1px solid var(--ui-border-subtle);
-}
-
-.thread-side-terminal-entry:last-child {
-  border-bottom: 0;
-}
-
-.thread-side-terminal-command-line {
-  min-width: 0;
-  gap: 0.35rem;
-  align-items: baseline;
-}
-
-.thread-side-terminal-prompt,
-.thread-side-terminal-form-prompt {
-  flex: 0 0 auto;
-  color: var(--ui-text-tertiary);
-  font-size: 0.68rem;
-}
-
-.thread-side-terminal-command-line code {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ui-text-primary);
-  font-size: 0.68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-side-terminal-entry-meta {
-  margin-left: auto;
-  flex: 0 0 auto;
-  font-size: 0.58rem;
-}
-
-.thread-side-terminal-entry[data-status='error'] .thread-side-terminal-entry-meta,
-.thread-side-terminal-output-text.is-stderr {
-  color: var(--ui-danger, #b42318);
-}
-
-.thread-side-terminal-output-text {
-  max-height: 14rem;
-  overflow: auto;
-  margin: 0.4rem 0 0;
-  padding: 0.45rem;
-  border-radius: calc(var(--ui-radius-control) - 2px);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-secondary);
-  font-size: 0.64rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.thread-side-terminal-entry-note {
-  margin: 0.35rem 0 0;
-  color: var(--ui-text-tertiary);
-  font-size: 0.64rem;
-}
-
-.thread-side-terminal-form {
-  gap: 0.35rem;
-  flex: 0 0 auto;
-  margin: 0.55rem 0.65rem 0.35rem;
-  padding: 0.3rem 0.35rem;
-  border: 1px solid var(--ui-border-strong);
-  border-radius: var(--ui-radius-control);
-  background: var(--ui-bg-surface);
-}
-
-.thread-side-terminal-form-prompt {
-  padding-left: 0.15rem;
-}
-
-.thread-side-terminal-input {
-  width: 100%;
-  min-width: 0;
-  padding: 0.15rem 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--ui-text-primary);
-  font-size: 0.68rem;
-}
-
-.thread-side-terminal-input:focus {
-  box-shadow: none;
-}
-
-.thread-side-terminal-submit {
-  display: inline-flex;
-  width: 1.55rem;
-  height: 1.55rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  font-size: 0.95rem;
-  line-height: 1;
 }
 
 .thread-side-terminal-footer {
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0 0.65rem 0.55rem;
+  background: #0d1117;
 }
 
 .thread-side-terminal-clear {
@@ -801,20 +1282,9 @@ async function scrollTerminalToBottom(): Promise<void> {
   border: 1px solid transparent;
   border-radius: var(--ui-radius-control);
   background: transparent;
-  color: var(--ui-text-tertiary);
+  color: #8b949e;
   cursor: pointer;
   font-size: 0.62rem;
 }
 
-@media (max-width: 1023px) {
-  .thread-side-panel {
-    position: absolute;
-    z-index: 30;
-    top: 0.5rem;
-    right: 0.5rem;
-    bottom: 0.5rem;
-    width: min(92vw, 22rem);
-    box-shadow: 0 18px 46px rgb(0 0 0 / 0.2);
-  }
-}
 </style>

@@ -1,5 +1,131 @@
 # Tests
 
+## 远程隧道账号密码登录（2026-09-23）
+
+### Expected behavior
+
+1. 远程登录页直接显示网页内的账号和密码表单；账号可填任意非空名称，访问权限仍由当前访问密码验证。
+2. 登录页不返回 `WWW-Authenticate`，避免浏览器或 Android WebView 打开原生 Basic 认证框；`GET /auth/basic-login` 回到普通登录页。
+3. 表单继续通过 `POST /auth/login` 换发 HttpOnly、SameSite=Strict 会话 Cookie；错误密码仍受五次失败后暂时封锁限制，仅带 Basic 头不能访问 API 或 WebSocket。
+
+### Verification
+
+- `npm run build`：验证前端/CLI 构建。
+- `npm run verify:server-modules`：验证隧道 Host 下返回普通登录页、不含 Basic challenge、账号/密码表单登录、Secure 会话 Cookie、错误密码限流和 API 鉴权。
+- 本地反向代理 HTTP smoke：`GET /auth/basic-login` 返回 303 并回到根路径；根路径及携带旧 Basic 凭据的请求均返回 200 表单且不含 `WWW-Authenticate`。
+- 手工经 ngrok/同类 HTTPS 隧道访问登录页，确认桌面浏览器和 Android WebView 均显示网页内表单，不弹原生认证框；成功登录后确认会话 Cookie 及 API/WebSocket 会话。
+- 本次未连接真实隧道端点执行浏览器和 Android 联调；该行为仍需在实际隧道地址上复核。
+
+### Rollback
+
+- 回退 `src/server/authMiddleware.ts` 与本节即可恢复仅访问密码表单登录；不改动现有密码配置或令牌状态文件。
+
+## 持续目标发送后自动关闭（2026-09-22）
+
+### Expected behavior
+
+1. 已开启 `持续目标` 时发送消息，消息提交成功后目标状态变为 `paused`，Composer 中的持续目标开关自动关闭。
+2. 新会话和已有会话使用相同规则；消息保存或发送失败时不自动暂停目标，保留可重试状态。
+
+### Verification
+
+- `npm run build:frontend`：验证 Composer、App 和持续目标状态同步的 Vue 类型与前端构建。
+- 打开 `/#/__regression/composer-shell?regression=frontend&goal=1&goalSwitch=1`，确认发送带持续目标的消息后 `.thread-composer-switch.is-on` 数量归零，并截图记录关闭后的 Composer。
+- Headless Chromium（1440×900）实测 `activeSwitchCount=0`、`goalChipCount=0`、无 `pageerror`；截图：`/mnt/nvme1/PUBLIC/xinrui/.codex/visualizations/2026/09/22/01a0c928-0221-7db1-ae90-d3f28fb4bc51/continuous-goal-submit/continuous-goal-off.png`。
+
+### Rollback
+
+- 一起回退 `src/App.vue`、`src/composables/useDesktopState.ts`、`src/components/content/ThreadComposer.vue`、Composer 回归夹具及本节记录；不删除已保存的线程目标。
+
+## 设置版本入口收紧（2026-09-22）
+
+### Expected behavior
+
+1. 设置中的 Android Shell / CX-Codex 标识区域不再显示。
+2. 版本入口压缩为单行，仅显示当前版本号；点击入口仍打开 GitHub Releases 页面。
+
+### Verification
+
+- `npm run build:frontend`：Vue 类型检查、前端构建、本地预览构建和 Brotli 预压缩通过。
+- Headless Chromium（桌面 1440×900、手机 393×852）：设置面板中版本内容高度均为 20px，版本号为 `2.8.0`，品牌区域和可见“打开 GitHub 发布页”文字均为 0，无横向溢出；点击入口捕获到 `https://github.com/Qjzn/CX-Codex/releases`。
+- 截图：`output/regression-7420/settings-brand-removal-20260922/about-one-line-desktop.png`、`output/regression-7420/settings-brand-removal-20260922/about-one-line-phone.png`。
+
+### Rollback
+
+- 回退 `src/App.vue` 中设置版本入口的模板和样式改动；不影响版本检查、更新安装或 GitHub Releases 地址逻辑。
+
+## 侧边终端隐藏垂直滚动栏（2026-09-22）
+
+### Expected behavior
+
+1. 侧边真实终端不显示上下滚动栏，但终端内容仍可通过滚轮、触控板或键盘滚动。
+
+### Verification
+
+- `npm run build:frontend`：验证 Vue 样式编译和前端构建。
+- Headless Chromium fallback 打开侧边终端并截图，确认 xterm viewport 的 `scrollbar-width` 为 `none`、WebKit 滚动条不显示，且侧边终端无页面级横向溢出；本机未安装 Playwright npm 包。
+
+### Rollback
+
+- 回退 `src/components/content/ThreadSidePanel.vue` 中 xterm viewport 的滚动栏样式和本节测试记录。
+
+## 原生侧边会话生命周期（2026-09-22）
+
+### Expected behavior
+
+1. 侧边聊天使用 App Server 原生 `thread/start`/`thread/fork`：新会话带 `ephemeral: true`；已有会话 fork 同时带 `ephemeral: true` 与 `excludeTurns: true`，主会话历史仅作为参考上下文，不回填到侧边消息列表。
+2. 创建成功后注入明确的 side-conversation boundary 和 developer policy；边界前的主会话指令、计划、工具调用和审批均不得被侧边会话当作当前任务继续执行。
+3. 关闭侧边聊天、切换到终端、切换主会话或卸载组件时，先中断活动 turn，再调用 `thread/unsubscribe`；通知订阅和 turn waiter 同时清理，ephemeral thread id 不写回可恢复的 localStorage 状态。
+4. 侧边标签切换只挂载当前 panel，旧聊天 panel 卸载并执行上述生命周期；重新打开侧边工作区创建新的 ephemeral thread。
+
+### Verification
+
+- `npm run build:frontend`、`npm run build:cli`、`npm run verify:frontend-normalizers`、使用 `CX_CODEX_NODE_LOADER`/`CX_CODEX_NODE_LIBRARY_PATH`/`CX_CODEX_NODE_EXECUTABLE` 的 `npm run verify:server-modules` 与 `git diff --check`：验证 Vue/CLI 构建、normalizer、server smoke 和差异格式。
+- server smoke 在本机系统 glibc 2.27 上必须通过任务级用户态 glibc 2.39 loader 运行；不修改系统 `/lib` 或 loader。浏览器回归需检查创建侧边聊天、标签切换卸载和关闭/unmount 清理。
+- Codex CLI `0.155.1` 的 `/side` 协议探针确认 `thread/start { ephemeral: true }`、`thread/fork { ephemeral: true, excludeTurns: true }` 可用；本机未安装 `/Applications/Codex.app`，因此本项采用 CLI/App Server 协议 fallback，未宣称桌面 bundle parity 已验证。
+
+### Verification result
+
+- 直接用系统 Node 运行 server smoke 会因 `better-sqlite3` 需要 `GLIBC_2.29` 而在系统 glibc 2.27 上失败；用 AGENTS.md 记录的用户态 glibc 2.39 loader 重跑通过，输出为 `server module smoke ok`。
+- Headless Chromium 实测新会话侧边聊天：真实 RPC 依次出现 `thread/start { ephemeral: true }`、`thread/inject_items`、切换到终端后的 `thread/unsubscribe`；随后选取已有主会话，真实 RPC 出现 `thread/fork { ephemeral: true, excludeTurns: true }`、boundary `thread/inject_items` 和关闭后的 `thread/unsubscribe`。两组 localStorage side-chat 状态的 `threadId` 均为空，关闭工作区后无残留。证据截图：`output/regression-7420/native-side-thread-20260922/side-chat-open-latest.png`。
+- 本次 smoke 没有活动 side turn，因此未产生 `turn/interrupt`；有活动 turn 时的实现顺序仍是 interrupt 后 unsubscribe。页面脚本没有 `pageerror`，但现有 7420 服务在加载期间仍报告资源级 404/502 探针警告，未将其归因于本次侧边线程改动。
+
+### Rollback
+
+- 一起回退 `src/api/codexGateway.ts` 的 side RPC/lifecycle、`src/components/content/ThreadSidePanel.vue`、`src/components/content/ThreadSideWorkspace.vue`、`src/App.vue` 的侧边挂载和本节文档；不删除主会话、Runtime Store 或用户配置。
+
+## 侧边聊天连续输入与窄屏工作区（2026-09-23）
+
+1. 侧边聊天提交后保持 composer 可编辑；第二条消息不能取消、覆盖或误报第一条消息的流式回复。每个 side turn 必须拥有独立的完成等待器，关闭、切换主会话或切换侧边标签时才统一取消仍活动的等待器。
+2. 侧边工作区在桌面仅以一条左侧分隔线与主聊天划分，不使用独立外框；在 1023px 及以下视口覆盖主内容，并在工作区标题栏提供“主聊天”返回操作。
+3. 标签栏在当前标签切换时将该标签滚入可视范围；标签超出可视区时可横向滚动访问，新增“+”按钮紧邻最后一个标签。标签可收缩且名称省略，不得挤出关闭按钮或造成页面级横向滚动。
+
+验证与回滚：
+
+- 运行 `npm run build:frontend`；在有 Playwright 的环境中以 1440×900 和 393×852 打开含多个侧边标签的真实会话，连续发送两条消息，确认输入框在首条回复期间仍可输入和发送、两条回复均按其 turn 归属更新，窄屏返回后回到主聊天，标签栏无左右翻页箭头且“+”按钮紧邻最后一个标签；横向滚动后仍可访问所有标签。保留截图。
+- 本机 `npm run test:7420:frontend` 需要 PowerShell，但当前 Linux 用户态环境没有 `pwsh`/`powershell`；浏览器端 Playwright npm 包同样未安装，故尚未在本机执行该项真实浏览器验证。
+- 回退 `src/components/content/ThreadSidePanel.vue`、`src/components/content/ThreadSideWorkspace.vue` 与本节记录即可恢复此前行为；不会影响主聊天、Runtime Store 或已存在的 side thread。
+
+## 侧边工作区全宽双栏与可伸缩标签（2026-09-23）
+
+### Expected behavior
+
+1. 横屏打开侧边工作区时，主聊天和侧边区域从内容左边界连续铺到右边界，中间只有一条可拖拽的垂直分隔线；拖动范围为侧边区域 24%–52%，两侧内容在各自区域内居中并随区域宽度缩放。
+2. 标签栏保持透明，不使用整栏底色；每个标签是可伸缩的圆角矩形，名称过长时省略，关闭按钮不被挤出。标签超出可视区时可横向滚动，当前标签自动滚入可见范围；“+”按钮位于滚动容器内并紧邻最后一个标签。
+3. 竖屏仍覆盖主内容；“主聊天”返回按钮可关闭覆盖层并恢复主聊天。
+
+### Verification
+
+- `npm run build:frontend`：验证双栏布局、标签分页状态和并发侧边消息类型检查与构建。
+- `git diff --check`：确认样式与文档差异无空白错误。
+- Headless Chromium CDP fallback（1440×900）实测 `.content-workspace` 从内容区 `x=294` 延伸至 `right=1440`，主聊天和侧边区域无中间留白；默认侧边宽度为 38%（435.47px），拖动后可到 24%（275.03px）和 52%，两侧子面板仍分别贴住对应区域边界。820px 紧凑视口下工作区切换为全屏覆盖，`主聊天` 返回按钮可见；截图：`/tmp/cx-codex-side-layout.png`。
+- 本轮 Headless Chromium CDP fallback（393×852 与 1440×900）确认标签栏不再渲染左右箭头（`.thread-side-workspace-tab-scroll` 数量为 0），8 个标签保持最小可读宽度并可横向滚动；“+”按钮位于滚动容器内并紧邻最后一个标签。点击“+”后菜单左边缘在手机视口与按钮左边缘重合；桌面端在靠右时按工作区边界收敛但仍贴近按钮。截图：`/tmp/cx-codex-side-tabs-mobile.png`、`/tmp/cx-codex-side-menu-mobile-final.png`、`/tmp/cx-codex-side-menu-desktop.png`。
+- 有 Playwright 时，以 1440×900 检查工作区是否无内容级最大宽度留白、拖动分隔线后两侧宽度变化、标签栏无左右箭头且“+”按钮紧邻最后一个标签；以 393×852 检查覆盖层、返回主聊天和标签横向滚动可达性。当前环境缺少 Playwright npm 包及 `pwsh`，Codex.app 也未安装；本轮使用 Chromium CDP fallback 作为局部交互证据，未宣称 Playwright/full frontend gate 通过。
+
+### Rollback
+
+- 回退 `src/App.vue`、`src/components/content/ThreadSideWorkspace.vue`、`src/components/content/ThreadSidePanel.vue`、`src/api/codexGateway.ts` 与本节记录即可恢复此前侧边布局和关闭清理行为；不影响主聊天或 Runtime Store。
+
 ## 会话正文 LaTeX/数学公式渲染（2026-09-21）
 
 ### Expected behavior
@@ -4854,7 +4980,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Steps
 1. 打开会话，点击输入框的 `+` 菜单，打开 `持续目标` 开关；在主输入框输入可衡量目标并发送。
 2. 在首页新建任务时也打开 `持续目标` 开关，输入目标并发送；确认先创建新线程，再用返回的真实 `threadId` 调用 `thread/goal/set`，目标状态变为 active。
-3. 确认持续目标开关保持开启，目标开始运行；刷新页面并重新进入会话。
+3. 确认发送消息后持续目标开关自动关闭；刷新页面并重新进入会话时，已暂停目标仍显示为暂停状态。
 4. 在目标运行时关闭 `持续目标` 开关，确认任务完成后不会自动继续；再次打开开关，确认目标恢复推进。
 5. 打开 `持续目标` 开关，在主输入框输入新目标并发送，确认状态和已用量保持为服务端返回值且目标内容更新。
 6. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
@@ -16927,3 +17053,8 @@ Verification:
 ### Rollback
 
 - 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。
+## Feature: Web settings Android pairing address and ngrok entry (2026-09-23)
+
+The Web settings panel always exposes an Android pairing address. In a browser it copies the current page's origin/path without its query string or hash; it does not claim it can change the separate Android app's local configuration. HTTPS ngrok domains are identified with setup guidance, while loopback and non-HTTPS pages warn that a phone normally cannot reach them. Native Android continues to validate and persist the canonical base URL, and sends `ngrok-skip-browser-warning: 1` for recognized `*.ngrok.app`, `*.ngrok-free.app`, and `*.ngrok-free.dev` main-frame loads so ngrok's browser warning does not replace the app.
+
+Manual check: open Settings from a normal browser through an `https://<name>.ngrok-free.app/#/thread/...` or `https://<name>.ngrok-free.dev/#/thread/...` URL, verify the Android card is visible, copy its address, and confirm the clipboard value contains only the origin. Paste it into the Android app's initial connection screen, then confirm the app reaches the CX-Codex page rather than ngrok's warning page. Repeat from `http://localhost:7420` and verify the card shows the unreachable-address warning.

@@ -796,6 +796,15 @@
                         <template v-for="(segment, segmentIndex) in block.segments" :key="`seg-${blockIndex}-${segmentIndex}`">
                           <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
                           <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                          <button
+                            v-else-if="segment.kind === 'image'"
+                            type="button"
+                            class="message-inline-markdown-image"
+                            :aria-label="`预览图片：${segment.alt || '消息内图片'}`"
+                            @click.stop="openImageModal(segment.url)"
+                          >
+                            <img :src="segment.url" :alt="segment.alt || '消息内图片'" loading="lazy" />
+                          </button>
                           <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
                             <a
                               class="message-file-link"
@@ -840,6 +849,15 @@
                         <template v-for="(segment, segmentIndex) in block.segments" :key="`heading-seg-${blockIndex}-${segmentIndex}`">
                           <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
                           <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                          <button
+                            v-else-if="segment.kind === 'image'"
+                            type="button"
+                            class="message-inline-markdown-image"
+                            :aria-label="`预览图片：${segment.alt || '消息内图片'}`"
+                            @click.stop="openImageModal(segment.url)"
+                          >
+                            <img :src="segment.url" :alt="segment.alt || '消息内图片'" loading="lazy" />
+                          </button>
                           <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
                             <a
                               class="message-file-link"
@@ -886,6 +904,15 @@
                           <template v-for="(segment, segmentIndex) in item.segments" :key="`list-seg-${blockIndex}-${itemIndex}-${segmentIndex}`">
                             <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
                             <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                            <button
+                              v-else-if="segment.kind === 'image'"
+                              type="button"
+                              class="message-inline-markdown-image"
+                              :aria-label="`预览图片：${segment.alt || '消息内图片'}`"
+                              @click.stop="openImageModal(segment.url)"
+                            >
+                              <img :src="segment.url" :alt="segment.alt || '消息内图片'" loading="lazy" />
+                            </button>
                             <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
                               <a
                                 class="message-file-link"
@@ -926,6 +953,15 @@
                         <template v-for="(segment, segmentIndex) in block.segments" :key="`quote-seg-${blockIndex}-${segmentIndex}`">
                           <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
                           <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                          <button
+                            v-else-if="segment.kind === 'image'"
+                            type="button"
+                            class="message-inline-markdown-image"
+                            :aria-label="`预览图片：${segment.alt || '消息内图片'}`"
+                            @click.stop="openImageModal(segment.url)"
+                          >
+                            <img :src="segment.url" :alt="segment.alt || '消息内图片'" loading="lazy" />
+                          </button>
                           <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
                             <a
                               class="message-file-link"
@@ -983,6 +1019,15 @@
                                   <template v-for="(segment, segmentIndex) in header.segments" :key="`table-head-seg-${blockIndex}-${headerIndex}-${segmentIndex}`">
                                     <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
                                     <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                                    <button
+                                      v-else-if="segment.kind === 'image'"
+                                      type="button"
+                                      class="message-inline-markdown-image"
+                                      :aria-label="`预览图片：${segment.alt || '消息内图片'}`"
+                                      @click.stop="openImageModal(segment.url)"
+                                    >
+                                      <img :src="segment.url" :alt="segment.alt || '消息内图片'" loading="lazy" />
+                                    </button>
                                     <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
                                       <a
                                         class="message-file-link"
@@ -1026,6 +1071,15 @@
                                   <template v-for="(segment, segmentIndex) in cell.segments" :key="`table-cell-seg-${blockIndex}-${rowIndex}-${cellIndex}-${segmentIndex}`">
                                     <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
                                     <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                                    <button
+                                      v-else-if="segment.kind === 'image'"
+                                      type="button"
+                                      class="message-inline-markdown-image"
+                                      :aria-label="`预览图片：${segment.alt || '消息内图片'}`"
+                                      @click.stop="openImageModal(segment.url)"
+                                    >
+                                      <img :src="segment.url" :alt="segment.alt || '消息内图片'" loading="lazy" />
+                                    </button>
                                     <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
                                       <a
                                         class="message-file-link"
@@ -1066,6 +1120,11 @@
                           </table>
                         </div>
                       </div>
+                      <MermaidDiagram
+                        v-else-if="block.kind === 'mermaid'"
+                        :code="block.code"
+                        :render-id="`${entry.message.id}-${blockIndex}`"
+                      />
                       <div
                         v-else-if="block.kind === 'code'"
                         class="message-code-block"
@@ -1467,6 +1526,7 @@ import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerPencil from '../icons/IconTablerPencil.vue'
 import IconQueueCopy from '../icons/IconQueueCopy.vue'
 import LoadingInline from './LoadingInline.vue'
+import MermaidDiagram from './MermaidDiagram.vue'
 import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
 import {
   markChatFeedbackFirstAssistantVisible,
@@ -1480,6 +1540,7 @@ import { haveSameConversationMessageStructure } from '../../composables/conversa
 import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
 import { markThreadFirstScreenReady } from '../../composables/threadFirstScreenMetrics'
 import { copyTextToClipboard } from '../../utils/clipboard'
+import { resolveAppRouteUrl, toRenderableLocalImageUrl } from '../../utils/localImageUrl'
 import {
   parseConversationMarkdownBlocks,
   type ConversationMarkdownBlock,
@@ -2453,11 +2514,13 @@ type InlineSegment =
   | { kind: 'math'; value: string; html: string }
   | { kind: 'code'; value: string }
   | { kind: 'url'; value: string; href: string }
+  | { kind: 'image'; url: string; alt: string; markdown: string }
   | { kind: 'file'; value: string; path: string; displayPath: string; downloadName: string }
 type MessageBlock =
   | ConversationMarkdownBlock
   | { kind: 'table'; headers: string[]; rows: string[][] }
   | { kind: 'code'; language: string; code: string; isDiff: boolean }
+  | { kind: 'mermaid'; code: string }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedMessageBlock =
   | { kind: 'text'; value: string; segments: InlineSegment[] }
@@ -2468,6 +2531,7 @@ type PreparedMessageBlock =
   | { kind: 'math'; value: string; html: string }
   | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
   | { kind: 'code'; language: string; code: string; lines: PreparedCodeLine[]; lineCount: number; linesView: 'preview' | 'full'; isDiff: boolean }
+  | { kind: 'mermaid'; code: string }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedTableCell = {
   value: string
@@ -3552,6 +3616,26 @@ function pushMarkdownLinkSegment(
   return false
 }
 
+function pushMarkdownImageSegment(
+  segments: InlineSegment[],
+  label: string,
+  target: string,
+  fallbackText: string,
+): boolean {
+  const url = toRenderableImageUrl(target)
+  if (!url) {
+    if (fallbackText) segments.push({ kind: 'text', value: fallbackText })
+    return false
+  }
+  segments.push({
+    kind: 'image',
+    url,
+    alt: label.trim(),
+    markdown: fallbackText || `![${label}](${target})`,
+  })
+  return true
+}
+
 function applyBoldMarkersAcrossTextSegments(segments: InlineSegment[]): InlineSegment[] {
   const output: InlineSegment[] = []
   let inBold = false
@@ -3609,7 +3693,14 @@ function splitTextByMarkdownLinks(text: string): InlineSegment[] {
   let cursor = 0
 
   while (cursor < text.length) {
-    const openBracket = text.indexOf('[', cursor)
+    // Find image tokens explicitly before looking for ordinary links. This
+    // matters in table cells: treating the `[` in `![alt](path)` as a normal
+    // link leaves the leading `!` as plain text and renders only a blue path
+    // link instead of the image.
+    const imageTokenStart = text.indexOf('![', cursor)
+    const linkBracket = text.indexOf('[', cursor)
+    const isImage = imageTokenStart >= 0 && (linkBracket < 0 || imageTokenStart <= linkBracket)
+    const openBracket = isImage ? imageTokenStart + 1 : linkBracket
     if (openBracket < 0) break
     const markdownToken = readMarkdownLinkAt(text, openBracket)
     if (!markdownToken) {
@@ -3617,13 +3708,19 @@ function splitTextByMarkdownLinks(text: string): InlineSegment[] {
       continue
     }
 
-    if (openBracket > cursor) {
-      segments.push(...splitPlainTextByLinks(text.slice(cursor, openBracket)))
+    const imageStart = isImage ? imageTokenStart : -1
+    const tokenStart = imageStart >= 0 ? imageStart : openBracket
+    if (tokenStart > cursor) {
+      segments.push(...splitPlainTextByLinks(text.slice(cursor, tokenStart)))
     }
 
     const label = trimLinkWrappers(markdownToken.label.trim()).core.trim() || markdownToken.label.trim()
     const target = trimLinkWrappers(markdownToken.target.trim()).core.trim()
-    pushMarkdownLinkSegment(segments, label, target, text.slice(openBracket, markdownToken.end))
+    if (imageStart >= 0) {
+      pushMarkdownImageSegment(segments, label, target, text.slice(tokenStart, markdownToken.end))
+    } else {
+      pushMarkdownLinkSegment(segments, label, target, text.slice(openBracket, markdownToken.end))
+    }
 
     cursor = markdownToken.end
   }
@@ -3797,29 +3894,7 @@ function parseInlineSegments(text: string): InlineSegment[] {
 }
 
 function toRenderableImageUrl(value: string): string {
-  const normalized = value.trim()
-  if (!normalized) return ''
-  if (
-    normalized.startsWith('data:') ||
-    normalized.startsWith('blob:') ||
-    normalized.startsWith('http://') ||
-    normalized.startsWith('https://') ||
-    normalized.startsWith('/codex-local-image?')
-  ) {
-    return normalized
-  }
-
-  if (normalized.startsWith('file://')) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-
-  const looksLikeUnixAbsolute = normalized.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(normalized)
-  if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-
-  return normalized
+  return toRenderableLocalImageUrl(value)
 }
 
 function toBrowseUrl(pathValue: string): string {
@@ -3835,7 +3910,7 @@ function toBrowseUrl(pathValue: string): string {
 
   if (looksLikeAbsolutePath(resolved)) {
     const normalizedResolved = resolved.startsWith('/') ? resolved : `/${resolved}`
-    return `/codex-local-browse${encodeURI(normalizedResolved)}`
+    return resolveAppRouteUrl(`/codex-local-browse${encodeURI(normalizedResolved)}`)
   }
 
   return '#'
@@ -3852,7 +3927,7 @@ function toEditUrl(pathValue: string): string {
   )
   if (!looksLikeAbsolutePath(resolved)) return '#'
   const normalizedResolved = resolved.startsWith('/') ? resolved : `/${resolved}`
-  return `/codex-local-edit${encodeURI(normalizedResolved)}`
+  return resolveAppRouteUrl(`/codex-local-edit${encodeURI(normalizedResolved)}`)
 }
 
 const fileLinkContextMenuStyle = computed(() => ({
@@ -4104,12 +4179,17 @@ function parseMessageBlocks(text: string): MessageBlock[] {
       if (closed) {
         flushText()
         const code = codeLines.join('\n')
-        blocks.push({
-          kind: 'code',
-          language: fence.language,
-          code,
-          isDiff: isDiffLanguage(fence.language) || codeLines.some((line) => /^(diff --git|@@ |\+\+\+ |--- )/u.test(line)),
-        })
+        const normalizedLanguage = fence.language.trim().toLowerCase()
+        if (normalizedLanguage === 'mermaid' || normalizedLanguage === 'mmd') {
+          blocks.push({ kind: 'mermaid', code })
+        } else {
+          blocks.push({
+            kind: 'code',
+            language: fence.language,
+            code,
+            isDiff: isDiffLanguage(fence.language) || codeLines.some((line) => /^(diff --git|@@ |\+\+\+ |--- )/u.test(line)),
+          })
+        }
         index = cursor
         continue
       }
@@ -4243,6 +4323,9 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
         headers: block.headers.map(prepareTableCell),
         rows: block.rows.map((row) => row.map(prepareTableCell)),
       }
+    }
+    if (block.kind === 'mermaid') {
+      return { kind: 'mermaid', code: block.code }
     }
     if (block.kind === 'code') {
       return prepareCodeBlock(block)
@@ -4993,6 +5076,11 @@ function onRejectUnknownRequest(requestId: number): void {
 function canRollbackMessage(message: UiMessage): boolean {
   if (message.role !== 'user' && message.role !== 'assistant') return false
   if (isExecutionProcessMessage(message)) return false
+  // Image-only items (for example imageView/imageGeneration) are represented
+  // as assistant messages with turn metadata, but there is no text to edit or
+  // a meaningful message boundary to roll back to. Keep the action bar clear
+  // below rendered images while retaining rollback for normal text messages.
+  if (message.images?.some((image) => image.trim().length > 0) && !message.text.trim()) return false
   if (typeof message.turnIndex !== 'number') return false
   if (!message.turnId?.trim()) return false
   if (props.isTurnInProgress || props.isRollingBack) return false
@@ -7966,6 +8054,19 @@ onBeforeUnmount(() => {
 
 .message-markdown-image {
   @apply w-auto h-auto max-w-[min(560px,85vw)] max-h-[min(460px,62vh)] object-contain bg-white;
+}
+
+.message-inline-markdown-image {
+  @apply inline-flex max-w-full cursor-zoom-in align-middle overflow-hidden border-0 p-0;
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-bg-surface-muted);
+  vertical-align: middle;
+}
+
+.message-inline-markdown-image img {
+  @apply block max-w-full object-contain;
+  max-width: min(220px, 100%);
+  max-height: 220px;
 }
 
 .message-inline-code {

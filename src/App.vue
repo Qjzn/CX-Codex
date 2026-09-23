@@ -272,8 +272,9 @@
                   {{ webBridgeSettingsStatus }}
                 </p>
               </section>
-              <section id="mobile-shell-connection-settings" v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="移动端连接">
-                <p class="sidebar-settings-section-title">移动端连接</p>
+              <section id="mobile-shell-connection-settings" class="sidebar-settings-section" aria-label="安卓端连接">
+                <p class="sidebar-settings-section-title">安卓端连接</p>
+                <template v-if="isMobileShellAvailable">
                 <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
                   <span class="sidebar-settings-label">当前地址</span>
                   <span class="sidebar-settings-code">{{ mobileShellServerUrlLabel }}</span>
@@ -369,6 +370,35 @@
                 <p v-if="mobileShellStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
                   {{ mobileShellStatus }}
                 </p>
+                </template>
+                <template v-else>
+                  <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
+                    <span class="sidebar-settings-label">此页面的连接地址</span>
+                    <span class="sidebar-settings-code">{{ mobileShellPairingUrlLabel }}</span>
+                  </div>
+                  <div class="sidebar-settings-actions">
+                    <button
+                      class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
+                      type="button"
+                      :disabled="!mobileShellPairingUrl"
+                      @click="copyMobileShellPairingUrl"
+                    >
+                      复制到安卓端
+                    </button>
+                  </div>
+                  <p class="sidebar-settings-hint sidebar-settings-hint--visible">
+                    在 Android App 首次打开的“服务地址”中粘贴此地址；该网页不能直接改写手机 App 的本机配置。
+                  </p>
+                  <p v-if="isNgrokMobileShellPairingUrl" class="sidebar-settings-hint sidebar-settings-hint--visible">
+                    已识别 ngrok HTTPS 隧道。可直接使用其域名根地址；不要粘贴 ngrok 检查页、查询参数或网页路由（例如 #/thread/...）。
+                  </p>
+                  <p v-else-if="!isMobileShellPairingPublicUrl" class="sidebar-settings-hint sidebar-settings-hint--visible">
+                    当前是本机或非 HTTPS 地址，手机通常无法访问。请先从 ngrok、Tailscale 或受认证保护的 HTTPS 入口打开本页。
+                  </p>
+                  <p v-if="mobileShellStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
+                    {{ mobileShellStatus }}
+                  </p>
+                </template>
               </section>
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="任务宠物">
                 <p class="sidebar-settings-section-title">任务宠物</p>
@@ -441,14 +471,6 @@
                 交接前会检查活动请求；释放后即可在远程 Codex Desktop 打开同一会话。
               </p>
               <section class="sidebar-settings-about" aria-label="项目版本和 GitHub 仓库">
-                <div class="sidebar-settings-brand-card">
-                  <img class="sidebar-settings-brand-logo" :src="MOBILE_SHELL_BRANDING_LOGO_URL" alt="CX-Codex 标识" />
-                  <div class="sidebar-settings-brand-copy">
-                    <span class="sidebar-settings-brand-kicker">Android Shell</span>
-                    <strong class="sidebar-settings-brand-title">{{ MOBILE_SHELL_BRAND_NAME }}</strong>
-                    <span class="sidebar-settings-brand-subtitle">面向手机远程访问 Codex 的原生入口</span>
-                  </div>
-                </div>
                 <div class="sidebar-settings-about-main">
                   <button
                     class="sidebar-settings-about-trigger"
@@ -460,14 +482,11 @@
                     <div class="sidebar-settings-about-copy">
                       <span class="sidebar-settings-about-label">当前版本</span>
                       <strong class="sidebar-settings-about-version">{{ aboutAppVersionLabel }}</strong>
-                      <span class="sidebar-settings-about-action">
-                        <span
-                          v-if="isMobileShellUpdateLoading || isMobileShellInstalling"
-                          class="sidebar-settings-about-spinner"
-                          aria-hidden="true"
-                        />
-                        {{ mobileShellVersionActionLabel }}
-                      </span>
+                      <span
+                        v-if="isMobileShellUpdateLoading || isMobileShellInstalling"
+                        class="sidebar-settings-about-spinner"
+                        aria-hidden="true"
+                      />
                     </div>
                     <span
                       v-if="isMobileShellAvailable && hasMobileShellUpdate"
@@ -558,30 +577,30 @@
             <p v-if="headerSubtitle" class="content-header-subtitle">{{ headerSubtitle }}</p>
           </template>
           <template #actions>
-            <template v-if="isThreadRoute && selectedThreadId">
-              <button
-                class="content-side-panel-toggle"
-                :class="{ 'is-active': threadSidePanelMode === 'chat' }"
-                type="button"
-                :aria-pressed="threadSidePanelMode === 'chat'"
-                title="为当前会话打开侧边聊天"
-                @click="toggleThreadSidePanel('chat')"
-              >
-                <span class="content-side-panel-toggle-icon" aria-hidden="true">◌</span>
-                <span class="content-side-panel-toggle-label">侧边聊天</span>
-              </button>
-              <button
-                class="content-side-panel-toggle"
-                :class="{ 'is-active': threadSidePanelMode === 'terminal' }"
-                type="button"
-                :aria-pressed="threadSidePanelMode === 'terminal'"
-                title="为当前会话打开侧边终端"
-                @click="toggleThreadSidePanel('terminal')"
-              >
-                <span class="content-side-panel-toggle-icon content-side-panel-toggle-icon--terminal" aria-hidden="true">&gt;_</span>
-                <span class="content-side-panel-toggle-label">侧边终端</span>
-              </button>
-            </template>
+            <button
+              v-if="isHomeRoute || (isThreadRoute && selectedThreadId)"
+              class="content-side-panel-toggle"
+              :class="{ 'is-active': threadSidePanelMode === 'chat' }"
+              type="button"
+              :aria-pressed="threadSidePanelMode === 'chat'"
+              :title="isHomeRoute ? '为新会话打开侧边聊天' : '为当前会话打开侧边聊天'"
+              @click="toggleThreadSidePanel('chat')"
+            >
+              <IconTablerMessageCircle class="content-side-panel-toggle-icon" />
+              <span class="content-side-panel-toggle-label">侧边聊天</span>
+            </button>
+            <button
+              v-if="isHomeRoute || (isThreadRoute && selectedThreadId)"
+              class="content-side-panel-toggle"
+              :class="{ 'is-active': threadSidePanelMode === 'terminal' }"
+              type="button"
+              :aria-pressed="threadSidePanelMode === 'terminal'"
+              :title="isHomeRoute ? '为新会话打开侧边终端' : '为当前会话打开侧边终端'"
+              @click="toggleThreadSidePanel('terminal')"
+            >
+              <span class="content-side-panel-toggle-icon content-side-panel-toggle-icon--terminal" aria-hidden="true">&gt;_</span>
+              <span class="content-side-panel-toggle-label">侧边终端</span>
+            </button>
           </template>
           <template #leading>
             <SidebarThreadControls
@@ -654,7 +673,7 @@
           </template>
         </ContentHeader>
 
-        <section class="content-body">
+        <section class="content-body" :class="{ 'content-body--side-workspace': Boolean(threadSidePanelMode) }">
           <template v-if="isSkillsRoute">
             <SkillsHub @skills-changed="onSkillsChanged" />
           </template>
@@ -671,7 +690,8 @@
             />
           </template>
           <template v-else-if="isHomeRoute">
-            <div class="content-grid">
+            <div class="content-workspace">
+              <div class="content-grid">
               <div
                 v-if="pendingNewThreadPreview"
                 class="content-thread"
@@ -767,6 +787,35 @@
                 @refresh-plugins="refreshComposerPlugins"
                 @reload-plugins="reloadComposerPlugins"
                 @login-plugin="loginComposerPlugin" />
+              </div>
+              <ThreadSideWorkspace
+                v-if="threadSidePanelMode"
+                thread-id="__new-thread__"
+                :cwd="composerCwd"
+                title="新会话"
+                :initial-mode="threadSidePanelMode"
+                :width-percent="threadSidePanelWidthPercent"
+                :model="selectedModelId"
+                :models="availableModelIds"
+                :available-models="availableModels"
+                :selected-reasoning-effort="selectedReasoningEffort"
+                :skills="enabledComposerSkills"
+                :has-loaded-skills="hasLoadedSkills"
+                :plugins="availableComposerPlugins"
+                :is-loading-plugins="isLoadingComposerPlugins"
+                :has-loaded-plugins="hasLoadedComposerPlugins"
+                :send-with-enter="sendWithEnter"
+                :dictation-click-to-toggle="dictationClickToToggle"
+                :dictation-auto-send="dictationAutoSend"
+                :show-dictation-button="dictationButtonVisible"
+                :dictation-language="dictationLanguage"
+                @update:active-kind="threadSidePanelMode = $event"
+                @resize="resizeThreadSidePanel"
+                @refresh-plugins="refreshComposerPlugins"
+                @reload-plugins="reloadComposerPlugins"
+                @login-plugin="loginComposerPlugin"
+                @close="threadSidePanelMode = null"
+              />
             </div>
           </template>
           <template v-else-if="isThreadRoute">
@@ -877,16 +926,32 @@
                     @interrupt="onInterruptTurn('composer-stop')" />
                 </div>
             </div>
-            <ThreadSidePanel
+            <ThreadSideWorkspace
               v-if="threadSidePanelMode"
               :thread-id="displayedThreadConversationId"
               :cwd="displayedThreadCwd"
               :title="displayedThreadTitle"
-              :messages="displayedThreadMessages"
-              :mode="threadSidePanelMode"
-              :is-sending="isSendingMessage || isThreadContentSwitching"
-              @update:mode="threadSidePanelMode = $event"
-              @send="onSubmitThreadSideChatMessage"
+              :initial-mode="threadSidePanelMode"
+              :width-percent="threadSidePanelWidthPercent"
+              :model="selectedModelId"
+              :models="availableModelIds"
+              :available-models="availableModels"
+              :selected-reasoning-effort="selectedReasoningEffort"
+              :skills="enabledComposerSkills"
+              :has-loaded-skills="hasLoadedSkills"
+              :plugins="availableComposerPlugins"
+              :is-loading-plugins="isLoadingComposerPlugins"
+              :has-loaded-plugins="hasLoadedComposerPlugins"
+              :send-with-enter="sendWithEnter"
+              :dictation-click-to-toggle="dictationClickToToggle"
+              :dictation-auto-send="dictationAutoSend"
+              :show-dictation-button="dictationButtonVisible"
+              :dictation-language="dictationLanguage"
+              @update:active-kind="threadSidePanelMode = $event"
+              @resize="resizeThreadSidePanel"
+              @refresh-plugins="refreshComposerPlugins"
+              @reload-plugins="reloadComposerPlugins"
+              @login-plugin="loginComposerPlugin"
               @close="threadSidePanelMode = null"
             />
             </div>
@@ -1123,7 +1188,7 @@ import DesktopLayout from './components/layout/DesktopLayout.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadGoalBar from './components/content/ThreadGoalBar.vue'
-import ThreadSidePanel from './components/content/ThreadSidePanel.vue'
+import ThreadSideWorkspace from './components/content/ThreadSideWorkspace.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import PageLoadingSkeleton from './components/content/PageLoadingSkeleton.vue'
@@ -1135,6 +1200,7 @@ import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
 import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
+import IconTablerMessageCircle from './components/icons/IconTablerMessageCircle.vue'
 import IconTablerRefresh from './components/icons/IconTablerRefresh.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
@@ -1257,8 +1323,6 @@ const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v2'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
-const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
-const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
 const THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS = 6500
@@ -1536,6 +1600,7 @@ const {
   setSelectedCollaborationMode,
   saveSelectedThreadGoal,
   saveThreadGoalById,
+  updateThreadGoalStatusById,
   updateSelectedThreadGoalStatus,
   clearSelectedThreadGoal,
   refreshSelectedThreadGoal,
@@ -1616,6 +1681,7 @@ const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
 type ThreadSidePanelMode = 'chat' | 'terminal'
 const threadSidePanelMode = ref<ThreadSidePanelMode | null>(null)
+const threadSidePanelWidthPercent = ref(38)
 const isCommandMenuOpen = ref(false)
 const commandMenuInitialMode = ref<'root' | 'files'>('root')
 const commandMenuModeRequestId = ref(0)
@@ -1851,6 +1917,37 @@ const displayWorktreeName = computed(() => {
 const mobileShellServerUrlLabel = computed(() => (
   mobileShellServerConfig.value?.serverUrl.trim() || '未配置'
 ))
+const mobileShellPairingUrl = computed(() => {
+  if (typeof window === 'undefined') return ''
+  try {
+    const url = new URL(window.location.href)
+    url.hash = ''
+    url.search = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return ''
+  }
+})
+const mobileShellPairingUrlLabel = computed(() => mobileShellPairingUrl.value || '无法读取当前页面地址')
+const isNgrokMobileShellPairingUrl = computed(() => {
+  try {
+    return /(^|\.)ngrok(?:-free)?\.app$/i.test(new URL(mobileShellPairingUrl.value).hostname)
+  } catch {
+    return false
+  }
+})
+const isMobileShellPairingPublicUrl = computed(() => {
+  try {
+    const url = new URL(mobileShellPairingUrl.value)
+    const hostname = url.hostname.toLowerCase()
+    return url.protocol === 'https:'
+      && hostname !== 'localhost'
+      && hostname !== '127.0.0.1'
+      && hostname !== '::1'
+  } catch {
+    return false
+  }
+})
 const isMobileShellConfigBooting = computed(() => (
   isMobileShellAvailable.value
   && !mobileShellSetupChecked.value
@@ -1959,15 +2056,6 @@ const mobileShellReleaseComparison = computed(() => {
   const latest = mobileShellLatestRelease.value?.tagName ?? ''
   if (!installed.trim() || !latest.trim()) return 0
   return compareMobileReleaseVersions(installed, latest)
-})
-const mobileShellVersionActionLabel = computed(() => {
-  if (!isMobileShellAvailable.value) return '打开 GitHub 发布页'
-  if (isMobileShellInstalling.value) return '正在下载更新...'
-  if (isMobileShellUpdateLoading.value) return '检查中...'
-  if (hasMobileShellUpdate.value) return `下载 ${mobileShellLatestVersionLabel.value}`
-  if (mobileShellReleaseComparison.value > 0) return '当前安装包比 GitHub 更新'
-  if (mobileShellLatestRelease.value?.tagName.trim()) return '已是最新'
-  return '检查更新'
 })
 const canInstallLatestMobileShellRelease = computed(() => (
   isMobileShellAvailable.value
@@ -2143,13 +2231,13 @@ const mobileThreadRefreshButtonTitle = computed(() => (
 ))
 const contentContextUsage = computed(() => {
   if (isNonThreadRoute.value || isRouteOnlyEmptyThread.value) return null
-  if (!selectedThread.value) return null
+  if (!selectedThreadId.value) return null
   return selectedThreadTokenUsage.value
 })
 const showContentContextBadge = computed(() => (
   !isNonThreadRoute.value &&
   !isRouteOnlyEmptyThread.value &&
-  Boolean(selectedThread.value) &&
+  Boolean(selectedThreadId.value) &&
   (!isCompactTouchContent.value || contentContextHasReliablePercent.value)
 ))
 const contentContextHasReliablePercent = computed(() => (
@@ -2877,6 +2965,20 @@ function normalizeUrlInput(value: string): string {
     normalized = normalized.slice(0, -1)
   }
   return normalized
+}
+
+async function copyMobileShellPairingUrl(): Promise<void> {
+  const url = mobileShellPairingUrl.value
+  if (!url) {
+    setMobileShellStatus('无法读取当前页面的连接地址')
+    return
+  }
+  try {
+    await copyTextToClipboard(url)
+    setMobileShellStatus('连接地址已复制；请在 Android App 的“服务地址”中粘贴')
+  } catch {
+    setMobileShellStatus('复制失败，请手动复制上方地址')
+  }
 }
 
 function formatFileSize(value: number): string {
@@ -4036,35 +4138,14 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
 }
 
 function toggleThreadSidePanel(mode: ThreadSidePanelMode): void {
-  if (!isThreadRoute.value || !selectedThreadId.value.trim()) return
+  const canOpenForHome = isHomeRoute.value
+  const canOpenForThread = isThreadRoute.value && selectedThreadId.value.trim().length > 0
+  if (!canOpenForHome && !canOpenForThread) return
   threadSidePanelMode.value = threadSidePanelMode.value === mode ? null : mode
 }
 
-function onSubmitThreadSideChatMessage(text: string): void {
-  const targetThreadId = displayedThreadConversationId.value.trim()
-  if (!targetThreadId || isThreadContentSwitching.value) return
-  const mode: 'steer' | 'queue' = selectedThreadExecutionActive.value ? 'queue' : 'steer'
-  void sendMessageToSelectedThread(
-    text,
-    [],
-    [],
-    mode,
-    [],
-    undefined,
-    selectedCollaborationMode.value,
-    undefined,
-    {
-      targetThreadId,
-      feedbackStartedAtMs: chatFeedbackNow(),
-      onDeliveryPersisted: () => { void ensureMobileShellTaskNotificationPermission() },
-      onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
-      onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
-    },
-  ).then(() => {
-    if (mode !== 'queue') markDesktopSyncPending(targetThreadId)
-  }).catch(() => {
-    // The shared send path exposes the failure and keeps the message retryable.
-  })
+function resizeThreadSidePanel(widthPercent: number): void {
+  threadSidePanelWidthPercent.value = Math.min(52, Math.max(24, widthPercent))
 }
 
 function onSubmitThreadMessage(payload: SubmitPayload): void {
@@ -4117,6 +4198,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
           if (payload.mode !== 'queue') {
             markDesktopSyncPending(targetThreadId)
           }
+          return updateThreadGoalStatusById(targetThreadId, 'paused')
         })
         .catch(() => {
           // Both the goal save and message path expose failures in the shared state.
@@ -4168,7 +4250,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
 watch(
   () => [isThreadRoute.value, selectedThreadId.value] as const,
   ([isThread, threadId]) => {
-    if (!isThread || !threadId.trim()) threadSidePanelMode.value = null
+    if (!isHomeRoute.value && (!isThread || !threadId.trim())) threadSidePanelMode.value = null
   },
   { immediate: true },
 )
@@ -5240,6 +5322,7 @@ async function submitFirstMessageForNewThreadOnce(
     }
     if (threadGoalObjective.trim()) {
       await saveThreadGoalById(threadId, threadGoalObjective, true)
+      await updateThreadGoalStatusById(threadId, 'paused')
     }
     if (routeToCreatedThreadPromise) {
       await routeToCreatedThreadPromise
@@ -5455,13 +5538,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-side-panel-toggle-icon {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
   font-size: 1rem;
   line-height: 1;
 }
 
 .content-side-panel-toggle-icon--terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-mono-ui);
   font-size: 0.7rem;
+  transform: translateY(1px);
 }
 
 .content-root--dual-pane-touch {
@@ -6026,15 +6117,22 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-workspace {
-  @apply flex-1 min-h-0 min-w-0 flex w-full gap-3;
-  width: min(100%, var(--content-shell-max-width));
-  margin-inline: auto;
+  @apply flex-1 min-h-0 min-w-0 flex w-full;
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
 }
 
 .content-workspace > .content-grid {
+  /* The side pane owns an explicit percentage; the main pane fills the rest. */
+  flex: 1 1 0;
   width: auto;
   min-width: 0;
   margin-inline: 0;
+}
+
+.content-body--side-workspace {
+  padding-inline: 0;
 }
 
 .content-thread {
@@ -6049,6 +6147,16 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .content-root--dual-pane-touch .content-grid {
   width: 100%;
+}
+
+@media (max-width: 1023px) {
+  .content-workspace {
+    flex-direction: column;
+  }
+
+  .content-workspace > .content-grid {
+    width: 100%;
+  }
 }
 
 .composer-with-queue {
@@ -6382,6 +6490,10 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   display: none;
 }
 
+.sidebar-settings-hint--visible {
+  display: block !important;
+}
+
 .sidebar-settings-language-dropdown {
   @apply min-w-0 max-w-52;
 }
@@ -6543,41 +6655,6 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   border-color: var(--ui-border-subtle);
 }
 
-.sidebar-settings-brand-card {
-  @apply flex items-center gap-2 border px-2.5 py-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-  box-shadow: none;
-}
-
-.sidebar-settings-brand-logo {
-  @apply h-8 w-8 shrink-0 border object-cover;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  box-shadow: none;
-}
-
-.sidebar-settings-brand-copy {
-  @apply min-w-0 flex flex-col gap-0.5;
-}
-
-.sidebar-settings-brand-kicker {
-  @apply text-[9px] font-semibold uppercase tracking-[0.08em];
-  color: var(--ui-text-tertiary);
-}
-
-.sidebar-settings-brand-title {
-  @apply text-[13px] leading-4 font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.sidebar-settings-brand-subtitle {
-  @apply hidden text-[11px] leading-4;
-  color: var(--ui-text-secondary);
-}
-
 .sidebar-settings-about-main {
   @apply flex items-center justify-between gap-2;
 }
@@ -6601,7 +6678,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-settings-about-copy {
-  @apply min-w-0 flex flex-col gap-0.5;
+  @apply min-w-0 flex items-center gap-1.5;
 }
 
 .sidebar-settings-about-label {
@@ -6612,11 +6689,6 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 .sidebar-settings-about-version {
   @apply text-sm leading-5 font-semibold;
   color: var(--ui-text-primary);
-}
-
-.sidebar-settings-about-action {
-  @apply inline-flex items-center gap-1 text-[11px] leading-4;
-  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-about-spinner {
@@ -6823,6 +6895,10 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
   .content-body {
     @apply px-4;
+  }
+
+  .content-body--side-workspace {
+    padding-inline: 0;
   }
 
   .content-grid {

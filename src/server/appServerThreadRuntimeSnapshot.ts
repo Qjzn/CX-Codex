@@ -21,9 +21,11 @@ import type {
   ThreadRuntimeSnapshot,
 } from './runtimeState.js'
 import {
+  readThreadTokenUsageFromSessionLog,
   readThreadTokenUsageFromThreadReadPayload,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
+import { cacheSessionAttachmentPaths } from './sessionAttachmentAccess.js'
 
 export type AppServerThreadRuntimeSnapshotDependencies = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -68,6 +70,7 @@ export async function readAppServerThreadRuntimeSnapshot(
       threadId: normalizedThreadId,
       includeTurns: false,
     })
+    await cacheSessionAttachmentPaths(lightThreadRead)
     dependencies.observeThreadRead({
       threadId: normalizedThreadId,
       payload: lightThreadRead,
@@ -107,6 +110,7 @@ export async function readAppServerThreadRuntimeSnapshot(
       const recoveredThreadRead = await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
       if (recoveredThreadRead) {
         threadRead = trimThreadTurnsInRpcResult('thread/read', recoveredThreadRead)
+        await cacheSessionAttachmentPaths(threadRead)
         messageState = 'cached'
         dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead, 'session-log')
       }
@@ -122,6 +126,7 @@ export async function readAppServerThreadRuntimeSnapshot(
           includeTurns: true,
         })
         threadRead = trimThreadTurnsInRpcResult('thread/read', rawThreadRead)
+        await cacheSessionAttachmentPaths(threadRead)
         dependencies.observeThreadRead({
           threadId: normalizedThreadId,
           payload: threadRead,
@@ -147,6 +152,7 @@ export async function readAppServerThreadRuntimeSnapshot(
             : null
           if (recoveredThreadRead) {
             threadRead = trimThreadTurnsInRpcResult('thread/read', recoveredThreadRead)
+            await cacheSessionAttachmentPaths(threadRead)
             messageState = 'cached'
             dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead, 'session-log')
             dependencies.writeWarning('Heavy thread snapshot fell back to session log messages', {
@@ -168,9 +174,14 @@ export async function readAppServerThreadRuntimeSnapshot(
     }
   }
 
-  const tokenUsage = dependencies.getThreadTokenUsage(normalizedThreadId)
+  const knownTokenUsage = dependencies.getThreadTokenUsage(normalizedThreadId)
     ?? (threadRead ? readThreadTokenUsageFromThreadReadPayload(threadRead) : null)
     ?? (lightThreadRead ? readThreadTokenUsageFromThreadReadPayload(lightThreadRead) : null)
+  const tokenUsageSessionPath = sessionPath || cachedThreadRead?.sessionPath?.trim() || ''
+  const tokenUsage = knownTokenUsage
+    ?? (tokenUsageSessionPath
+      ? await readThreadTokenUsageFromSessionLog(tokenUsageSessionPath)
+      : null)
 
   const updatedAtIso =
     messageState === 'cached'

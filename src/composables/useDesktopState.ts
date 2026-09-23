@@ -346,8 +346,8 @@ const LIVE_DELTA_BATCH_MS = 48
 const THREAD_GOAL_CONTINUATION_DELAY_MS = 750
 const NOTIFICATION_STALE_MS = 30000
 const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
-const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
-const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 11000
+const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 30 * 1000
+const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 1600
 const THREAD_SELECTION_SKILLS_IDLE_DELAY_MS = 8000
 const MODEL_PREFERENCES_IDLE_DELAY_MS = 1200
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
@@ -1327,13 +1327,17 @@ function mergeIncomingWithLocalInProgressThreads(
   previous: UiProjectGroup[],
   incoming: UiProjectGroup[],
   inProgressById: Record<string, boolean>,
+  preservedThreadId = '',
 ): UiProjectGroup[] {
   const incomingThreadIds = new Set(flattenThreads(incoming).map((thread) => thread.id))
-  const localInProgressThreads = flattenThreads(previous).filter(
-    (thread) => inProgressById[thread.id] === true && !incomingThreadIds.has(thread.id),
+  const localThreadsToPreserve = flattenThreads(previous).filter(
+    (thread) => (
+      (inProgressById[thread.id] === true || thread.id === preservedThreadId) &&
+      !incomingThreadIds.has(thread.id)
+    ),
   )
 
-  if (localInProgressThreads.length === 0) {
+  if (localThreadsToPreserve.length === 0) {
     return incoming
   }
 
@@ -1346,7 +1350,7 @@ function mergeIncomingWithLocalInProgressThreads(
     threads: [...group.threads],
   }))
 
-  for (const thread of localInProgressThreads) {
+  for (const thread of localThreadsToPreserve) {
     const existingGroup = incomingByProjectName.get(thread.projectName)
     if (existingGroup) {
       const mergedGroupIndex = merged.findIndex((group) => group.projectName === thread.projectName)
@@ -2653,6 +2657,12 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function pruneThreadScopedState(flatThreads: UiThread[]): void {
     const activeThreadIds = new Set(flatThreads.map((thread) => thread.id))
+    // A background thread-list refresh can temporarily omit the selected thread
+    // while its project/group data is being rebuilt. Keep its scoped state until
+    // selection actually moves, otherwise the context usage badge disappears on
+    // the next refresh even though the thread is still open.
+    const selectedId = selectedThreadId.value.trim()
+    if (selectedId) activeThreadIds.add(selectedId)
     const nextReadState = pruneThreadStateMap(readStateByThreadId.value, activeThreadIds)
     if (nextReadState !== readStateByThreadId.value) {
       readStateByThreadId.value = nextReadState
@@ -2912,19 +2922,16 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function setThreadTokenUsage(threadId: string, tokenUsage: UiThreadTokenUsage | null): void {
     if (!threadId) return
+    // Runtime snapshots are allowed to omit token usage while the app-server is
+    // catching up. Missing data is not a deletion signal: keep the last known
+    // value and let the explicit disconnect/reset path clear the map.
+    if (!tokenUsage) return
     const previous = threadTokenUsageByThreadId.value[threadId] ?? null
     if (areThreadTokenUsagesEqual(previous, tokenUsage)) return
 
-    if (tokenUsage) {
-      threadTokenUsageByThreadId.value = {
-        ...threadTokenUsageByThreadId.value,
-        [threadId]: tokenUsage,
-      }
-      return
-    }
-
-    if (previous) {
-      threadTokenUsageByThreadId.value = omitKey(threadTokenUsageByThreadId.value, threadId)
+    threadTokenUsageByThreadId.value = {
+      ...threadTokenUsageByThreadId.value,
+      [threadId]: tokenUsage,
     }
   }
 
@@ -4270,25 +4277,32 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     await saveThreadGoalById(selectedThreadId.value, objective, activate)
   }
 
-  async function updateSelectedThreadGoalStatus(status: Extract<UiThreadGoalStatus, 'active' | 'paused'>): Promise<void> {
-    const threadId = selectedThreadId.value
-    if (!threadId || !threadGoalByThreadId.value[threadId] || threadGoalUpdatingByThreadId.value[threadId]) return
-    setThreadGoalUpdating(threadId, true)
-    invalidateThreadGoalRefresh(threadId)
-    setThreadGoalError(threadId, '')
+  async function updateThreadGoalStatusById(
+    threadId: string,
+    status: Extract<UiThreadGoalStatus, 'active' | 'paused'>,
+  ): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || !threadGoalByThreadId.value[normalizedThreadId] || threadGoalUpdatingByThreadId.value[normalizedThreadId]) return
+    setThreadGoalUpdating(normalizedThreadId, true)
+    invalidateThreadGoalRefresh(normalizedThreadId)
+    setThreadGoalError(normalizedThreadId, '')
     error.value = ''
-    if (status === 'paused') cancelThreadGoalContinuation(threadId)
+    if (status === 'paused') cancelThreadGoalContinuation(normalizedThreadId)
     try {
-      const goal = await setThreadGoal(threadId, { status })
-      setThreadGoalState(threadId, goal)
-      if (status === 'active') scheduleThreadGoalContinuation(threadId)
+      const goal = await setThreadGoal(normalizedThreadId, { status })
+      setThreadGoalState(normalizedThreadId, goal)
+      if (status === 'active') scheduleThreadGoalContinuation(normalizedThreadId)
     } catch (unknownError) {
       error.value = readThreadGoalError(unknownError, '更新持续目标失败')
-      setThreadGoalError(threadId, error.value)
+      setThreadGoalError(normalizedThreadId, error.value)
       throw unknownError
     } finally {
-      setThreadGoalUpdating(threadId, false)
+      setThreadGoalUpdating(normalizedThreadId, false)
     }
+  }
+
+  async function updateSelectedThreadGoalStatus(status: Extract<UiThreadGoalStatus, 'active' | 'paused'>): Promise<void> {
+    await updateThreadGoalStatusById(selectedThreadId.value, status)
   }
 
   async function clearSelectedThreadGoal(): Promise<void> {
@@ -7486,6 +7500,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         sourceGroups.value,
         orderedGroups,
         executionStateByThreadId,
+        options.preserveMissingSelected === true || options.backgroundIfCached === true
+          ? selectedThreadId.value.trim()
+          : '',
       )
       sourceGroups.value = mergeThreadGroups(sourceGroups.value, mergedWithInProgress)
       saveCachedThreadGroups(sourceGroups.value)
@@ -7503,7 +7520,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
       const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
 
-      if (!currentExists && options.preserveMissingSelected !== true) {
+      const preserveSelectedThread = options.preserveMissingSelected === true || options.backgroundIfCached === true
+      if (!currentExists && !preserveSelectedThread) {
         setSelectedThreadId(flatThreads[0]?.id ?? '')
       }
       if (shouldLoadInitialPageFirst) {
@@ -10830,6 +10848,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     refreshSelectedThreadGoal,
     saveSelectedThreadGoal,
     saveThreadGoalById,
+    updateThreadGoalStatusById,
     updateSelectedThreadGoalStatus,
     clearSelectedThreadGoal,
     setSelectedReasoningEffort,

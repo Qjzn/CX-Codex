@@ -221,7 +221,10 @@ function switchFixtureGoalThread(): void {
 
 function onSubmit(payload: SubmitPayload): void {
   submitCount.value += 1
-  if (payload.threadGoalObjective) updateFixtureGoal(payload.threadGoalObjective)
+  if (payload.threadGoalObjective) {
+    updateFixtureGoal(payload.threadGoalObjective)
+    updateFixtureGoalStatus('paused')
+  }
 }
 
 function insertMockDictation(): void {

@@ -10,5 +10,5 @@ export default defineConfig({
   banner: {
     js: '#!/usr/bin/env node',
   },
-  external: ['express', 'commander', 'better-sqlite3'],
+  external: ['express', 'commander', 'better-sqlite3', 'node-pty'],
 })

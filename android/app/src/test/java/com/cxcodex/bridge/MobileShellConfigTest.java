@@ -94,4 +94,14 @@ public class MobileShellConfigTest {
         assertFalse(MobileShellConfig.shouldAcknowledgePendingTaskPetThreadOpen("", "thread-123"));
         assertFalse(MobileShellConfig.shouldAcknowledgePendingTaskPetThreadOpen(null, "thread-123"));
     }
+
+    @Test
+    public void recognizesSupportedNgrokTunnelDomainsWithoutTrustingLookalikes() {
+        assertTrue(MobileShellConfig.isNgrokTunnelUrl("https://bright-sheep-123.ngrok-free.app"));
+        assertTrue(MobileShellConfig.isNgrokTunnelUrl("https://legacy-tunnel.ngrok.app/#/thread/old"));
+        assertTrue(MobileShellConfig.isNgrokTunnelUrl("https://legacy-tunnel.ngrok-free.dev"));
+        assertFalse(MobileShellConfig.isNgrokTunnelUrl("https://ngrok-free.app.attacker.example"));
+        assertFalse(MobileShellConfig.isNgrokTunnelUrl("https://ngrok-free.dev.attacker.example"));
+        assertFalse(MobileShellConfig.isNgrokTunnelUrl("https://example.com"));
+    }
 }

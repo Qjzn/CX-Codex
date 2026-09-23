@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import { getCodexGlobalStatePath } from './codexPaths.js'
 import { readWorkspaceRootsState } from './workspaceRootsState.js'
@@ -55,6 +55,33 @@ function normalizeWorkspaceRoots(values: string[]): string[] {
   return roots
 }
 
+async function isWorkspaceDemoOutputAlias(
+  rootPath: string,
+  normalizedCandidate: string,
+  canonicalCandidate: string,
+  resolveRealPath: typeof realpath,
+): Promise<boolean> {
+  const demoOutputRoot = resolve(rootPath, 'demo_output')
+  if (!isPathWithinRoot(demoOutputRoot, normalizedCandidate)) return false
+
+  const relativeOutputPath = relative(demoOutputRoot, normalizedCandidate)
+  const firstOutputEntry = relativeOutputPath.split(sep)[0]
+  if (!firstOutputEntry || firstOutputEntry === '.' || firstOutputEntry === '..') return false
+
+  const outputEntry = join(demoOutputRoot, firstOutputEntry)
+  try {
+    const canonicalOutputEntry = await resolveRealPath(outputEntry)
+    const canonicalOutputParent = dirname(canonicalOutputEntry)
+    // Generated demo outputs may be stored in a sibling physical directory.
+    // Keep this exception scoped to that output namespace; arbitrary workspace
+    // symlinks remain denied.
+    if (basename(canonicalOutputParent) !== 'demo_output') return false
+    return isPathWithinRoot(canonicalOutputEntry, canonicalCandidate)
+  } catch {
+    return false
+  }
+}
+
 export async function resolveWorkspaceLocalPath(
   candidatePath: string,
   dependencies: LocalFileAccessDependencies = {},
@@ -85,7 +112,10 @@ export async function resolveWorkspaceLocalPath(
       const rootStat = await readStat(rootPath)
       if (!rootStat.isDirectory()) continue
       const canonicalRoot = await resolveRealPath(rootPath)
-      if (isPathWithinRoot(canonicalRoot, canonicalCandidate)) {
+      if (
+        isPathWithinRoot(canonicalRoot, canonicalCandidate)
+        || await isWorkspaceDemoOutputAlias(rootPath, normalizedCandidate, canonicalCandidate, resolveRealPath)
+      ) {
         return canonicalCandidate
       }
     } catch {
