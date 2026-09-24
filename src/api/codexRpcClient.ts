@@ -60,6 +60,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function getRpcFetchTimeoutMs(method: string, params: unknown): number {
   if (method === 'turn/start') return RPC_INTERACTIVE_FETCH_TIMEOUT_MS
+  if (method === 'command/exec') return RPC_LONG_FETCH_TIMEOUT_MS
   if (method === 'turn/interrupt') return RPC_LONG_FETCH_TIMEOUT_MS
   if (method === 'thread/start' || method === 'thread/resume') return RPC_LONG_FETCH_TIMEOUT_MS
   if (method === 'thread/fork' || method === 'thread/rollback') return RPC_LONG_FETCH_TIMEOUT_MS
@@ -67,6 +68,9 @@ function getRpcFetchTimeoutMs(method: string, params: unknown): number {
     return asRecord(params)?.includeTurns === true
       ? RPC_LONG_FETCH_TIMEOUT_MS
       : RPC_LIGHT_READ_FETCH_TIMEOUT_MS
+  }
+  if (method === 'thread/turns/list' || method === 'thread/items/list') {
+    return RPC_LIGHT_READ_FETCH_TIMEOUT_MS
   }
   if (method === 'thread/list') return RPC_LIST_FETCH_TIMEOUT_MS
   if (method === 'skills/list') return RPC_LIGHT_READ_FETCH_TIMEOUT_MS

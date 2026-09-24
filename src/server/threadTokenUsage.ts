@@ -22,6 +22,7 @@ export type ThreadTokenUsage = {
 export type ThreadTokenUsageSources = {
   getCachedTokenUsage: (threadId: string) => ThreadTokenUsage | null
   getCachedThreadRead: (threadId: string) => CachedThreadRead | null
+  readSessionPathForThread?: (threadId: string) => Promise<string | null>
   readSessionLogTokenUsage?: (sessionPath: string) => Promise<ThreadTokenUsage | null>
 }
 
@@ -216,7 +217,10 @@ export async function resolveThreadTokenUsage(
     : null
   if (cachedPayloadTokenUsage) return cachedPayloadTokenUsage
 
-  const sessionPath = cachedThreadRead?.sessionPath?.trim() ?? ''
+  let sessionPath = cachedThreadRead?.sessionPath?.trim() ?? ''
+  if (!sessionPath && sources.readSessionPathForThread) {
+    sessionPath = (await sources.readSessionPathForThread(normalizedThreadId))?.trim() ?? ''
+  }
   if (!sessionPath) return null
 
   const readSessionLogTokenUsage = sources.readSessionLogTokenUsage ?? readThreadTokenUsageFromSessionLog
@@ -240,10 +244,10 @@ export class ThreadTokenUsageStore {
     const tokenUsage = normalizeThreadTokenUsage(record?.tokenUsage)
     if (tokenUsage) {
       this.tokenUsageByThreadId.set(threadId, tokenUsage)
-      return
     }
-
-    this.tokenUsageByThreadId.delete(threadId)
+    // A token-usage notification with an absent/invalid payload means that this
+    // event has no usable update. Do not erase a previously observed value;
+    // callers will clear the store when the app-server session is reset.
   }
 
   get(threadId: string): ThreadTokenUsage | null {

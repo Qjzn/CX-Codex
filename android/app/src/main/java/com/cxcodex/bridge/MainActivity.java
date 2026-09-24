@@ -33,6 +33,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.util.Collections;
 import com.getcapacitor.CapConfig;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
@@ -43,6 +44,7 @@ public class MainActivity extends BridgeActivity {
     private static final long RESUME_RENDERER_PROBE_DELAY_MS = 180L;
     private static final long RESUME_RENDERER_PROBE_TIMEOUT_MS = 2500L;
     private static final String EXTRA_RENDERER_RECOVERY_URL = "cxcodex.rendererRecoveryUrl";
+    private static final String NGROK_SKIP_BROWSER_WARNING_HEADER = "ngrok-skip-browser-warning";
     private static volatile boolean appForeground;
     private boolean initialCreateComplete;
     private boolean mainFrameLoadFailed;
@@ -73,6 +75,7 @@ public class MainActivity extends BridgeActivity {
         } else {
             installConnectionUi();
             configureWebViewDownloadListener();
+            loadServerUrl(bridge.getWebView(), MobileShellConfig.getStoredServerUrl(this));
             openPendingTaskPetThread();
         }
     }
@@ -163,7 +166,7 @@ public class MainActivity extends BridgeActivity {
             }
             webView.post(() -> {
                 if (MobileShellConfig.shouldLoadPendingAppRoute(webView.getUrl(), targetUrl)) {
-                    webView.loadUrl(targetUrl);
+                    loadServerUrl(webView, targetUrl);
                 }
             });
         }
@@ -393,7 +396,7 @@ public class MainActivity extends BridgeActivity {
             }
             mainFrameLoadFailed = false;
             showConnectionLoading();
-            webView.loadUrl(MobileShellConfig.resolveAppRetryUrl(serverUrl, webView.getUrl()));
+            loadServerUrl(webView, MobileShellConfig.resolveAppRetryUrl(serverUrl, webView.getUrl()));
         });
         LinearLayout.LayoutParams actionButtonParams = new LinearLayout.LayoutParams(
             0,
@@ -486,7 +489,16 @@ public class MainActivity extends BridgeActivity {
         mainFrameLoadFailed = false;
         showConnectionLoading("页面恢复超时，正在重新连接并恢复当前会话…");
         webView.stopLoading();
-        webView.loadUrl(MobileShellConfig.resolveAppRetryUrl(serverUrl, webView.getUrl()));
+        loadServerUrl(webView, MobileShellConfig.resolveAppRetryUrl(serverUrl, webView.getUrl()));
+    }
+
+    private void loadServerUrl(WebView webView, String url) {
+        if (webView == null || url == null || url.trim().isEmpty()) return;
+        if (MobileShellConfig.isNgrokTunnelUrl(url)) {
+            webView.loadUrl(url, Collections.singletonMap(NGROK_SKIP_BROWSER_WARNING_HEADER, "1"));
+            return;
+        }
+        webView.loadUrl(url);
     }
 
     private void recreateActivityAfterRendererLoss(String recoveryUrl) {

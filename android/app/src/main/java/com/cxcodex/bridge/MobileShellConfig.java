@@ -164,4 +164,21 @@ public final class MobileShellConfig {
             return false;
         }
     }
+
+    public static boolean isNgrokTunnelUrl(String value) {
+        try {
+            URI uri = new URI(normalizeServerUrl(value));
+            String host = uri.getHost();
+            if (host == null) return false;
+            String normalizedHost = host.toLowerCase(Locale.ROOT);
+            return normalizedHost.equals("ngrok.app")
+                || normalizedHost.endsWith(".ngrok.app")
+                || normalizedHost.equals("ngrok-free.app")
+                || normalizedHost.endsWith(".ngrok-free.app")
+                || normalizedHost.equals("ngrok-free.dev")
+                || normalizedHost.endsWith(".ngrok-free.dev");
+        } catch (URISyntaxException exception) {
+            return false;
+        }
+    }
 }

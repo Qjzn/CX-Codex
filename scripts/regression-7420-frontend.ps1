@@ -419,6 +419,8 @@ function Assert-SemanticConversationMarkdownSource {
   Assert-True ($markdownSource -match "import\s+MarkdownIt\s+from\s+'markdown-it'" -and $markdownSource -match "html:\s*false") "conversation Markdown must use the installed parser with raw HTML disabled"
   Assert-True ($markdownSource -match "kind:\s*'heading'" -and $markdownSource -match "kind:\s*'list'" -and $markdownSource -match "kind:\s*'blockquote'" -and $markdownSource -match "kind:\s*'thematicBreak'") "conversation Markdown must expose headings, lists, quotes, and thematic breaks as semantic blocks"
   Assert-True ($conversationSource -match "parseConversationMarkdownBlocks" -and $conversationSource -match "block\.kind\s*===\s*'heading'" -and $conversationSource -match "block\.kind\s*===\s*'list'" -and $conversationSource -match "block\.kind\s*===\s*'blockquote'") "the conversation renderer must consume semantic Markdown blocks"
+  Assert-True ($conversationSource -match 'message-math-inline' -and $conversationSource -match 'message-math-block' -and $conversationSource -match 'v-html="segment\.html"') "the conversation renderer must consume sanitized inline and display math output"
+  Assert-True ($fixtureSource -match 'markdownMath' -and $fixtureSource -match '\$E=mc\^2\$' -and $fixtureSource -match '\\frac') "the conversation fixture must retain representative inline and display math"
   Assert-True ($conversationSource -notmatch 'v-else-if="isStreamingAgentMessage\(entry\.message\)"[\s\S]{0,180}?\{\{\s*entry\.message\.text\s*\}\}') "streaming assistant output must use the same Markdown path as settled output"
   Assert-True ($conversationSource -match "\.message-card\[data-role='assistant'\][\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;") "assistant replies must read as document content instead of nested cards"
   Assert-True ($fixtureSource -match "markdownSemantic" -and $fixtureSource -match "## 三、关键验证结果" -and $fixtureSource -match "- 运行时间：7200 秒") "the conversation fixture must retain a representative semantic Markdown report"
@@ -4898,6 +4900,42 @@ JSON.stringify((() => {
   Save-RegressionScreenshot -Session $Session -Name "conversation-markdown-semantics-$ViewportName" | Out-Null
 }
 
+function Assert-ConversationMarkdownMath {
+  param(
+    [string]$Session,
+    [string]$ViewportName
+  )
+
+  $metrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const message = document.querySelector('[data-message-id="fixture-markdown-math"]');
+  const card = message?.querySelector('.message-card[data-role="assistant"]');
+  const inlineMath = card?.querySelectorAll('.message-math-inline') || [];
+  const displayMath = card?.querySelectorAll('.message-math-block') || [];
+  const codeText = card?.querySelector('.message-code-pre')?.textContent || '';
+  const displayStyle = displayMath[0] instanceof HTMLElement ? getComputedStyle(displayMath[0]) : null;
+  return {
+    ready: card instanceof HTMLElement,
+    inlineCount: inlineMath.length,
+    displayCount: displayMath.length,
+    inlineHasKatex: Array.from(inlineMath).every((node) => node.querySelector('.katex, math') !== null),
+    displayHasKatex: Array.from(displayMath).every((node) => node.querySelector('.katex, math') !== null),
+    codeKeepsDollarSource: codeText.includes('$x$'),
+    displayOverflow: displayStyle?.overflowX || '',
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+
+  Assert-True ($metrics.ready -eq $true) "$ViewportName math fixture did not render"
+  Assert-True ([int]$metrics.inlineCount -eq 2 -and [int]$metrics.displayCount -eq 2) "$ViewportName math fixture has the wrong inline/display formula count"
+  Assert-True ($metrics.inlineHasKatex -eq $true -and $metrics.displayHasKatex -eq $true) "$ViewportName math fixture did not produce KaTeX/MathML output"
+  Assert-True ($metrics.codeKeepsDollarSource -eq $true) "$ViewportName code fence incorrectly parsed dollar text as math"
+  Assert-True ($metrics.displayOverflow -in @('auto', 'scroll')) "$ViewportName display math is missing an internal horizontal overflow boundary"
+  Assert-True ($metrics.hasHorizontalOverflow -eq $false) "$ViewportName math fixture introduced page-level horizontal overflow"
+  Save-RegressionScreenshot -Session $Session -Name "conversation-markdown-math-$ViewportName" | Out-Null
+}
+
 function Assert-ConversationFixture {
   param(
     [object]$Metrics,
@@ -8044,6 +8082,17 @@ Assert-ThreadAttentionChromeSource
   Assert-Page -Page $markdownSemanticPhone -Name "conversation semantic Markdown fixture phone"
   Assert-ConversationMarkdownSemantics -Session $session -ViewportName 'phone'
   Add-RegressionResult -Name "conversation-markdown-semantics-phone" -Page $markdownSemanticPhone
+
+  $markdownMathFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&markdownMath=1"
+  $markdownMathDesktop = Open-And-ReadPage -Session $session -Url $markdownMathFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $markdownMathDesktop -Name "conversation math fixture desktop"
+  Assert-ConversationMarkdownMath -Session $session -ViewportName 'desktop'
+  Add-RegressionResult -Name "conversation-markdown-math-desktop" -Page $markdownMathDesktop
+
+  $markdownMathPhone = Open-And-ReadPage -Session $session -Url $markdownMathFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $markdownMathPhone -Name "conversation math fixture phone"
+  Assert-ConversationMarkdownMath -Session $session -ViewportName 'phone'
+  Add-RegressionResult -Name "conversation-markdown-math-phone" -Page $markdownMathPhone
 
   $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&messageActionHit=1"
   $scrollSwitchFixture = Open-And-ReadPage -Session $session -Url $scrollSwitchFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

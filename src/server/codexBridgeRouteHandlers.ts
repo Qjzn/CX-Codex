@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 
-import type { AppServerHealth } from './appServerHealth.js'
+import type { AppServerHandoffResult, AppServerHealth } from './appServerHealth.js'
 import type { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import type { RuntimeRequestRecord } from './runtimeStore.js'
 import type { ThreadRuntimeSnapshot } from './runtimeState.js'
@@ -43,6 +43,7 @@ import {
 } from './diagnosticsRoutes.js'
 import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
 import { handleWorktreeRoutes } from './worktreeRoutes.js'
+import { handleTerminalRoutes } from './terminalRoutes.js'
 import {
   handleWorkspaceMetaRoutes,
   type WorkspaceMetaRoutesDependencies,
@@ -74,6 +75,7 @@ type CodexBridgeRouteAppServer = {
   listPendingServerRequestsForThread: RuntimeStateRoutesDependencies['listPendingServerRequestsForThread']
   getThreadTokenUsage: RuntimeStateRoutesDependencies['getThreadTokenUsage']
   getStatus(): AppServerHealth
+  handoffToDesktop(): AppServerHandoffResult | Promise<AppServerHandoffResult>
 }
 
 type RuntimeRouteStore = RuntimeStateRoutesDependencies['runtimeRequestStore']
@@ -234,6 +236,10 @@ export function createCodexBridgeRouteHandlers(
     () => handleWorktreeRoutes(req, res, url, {
       readJsonBody,
     }),
+    () => handleTerminalRoutes(req, res, url, {
+      readJsonBody,
+      rpc: (method, params) => appServer.rpc(method, params),
+    }),
     () => handleWorkspaceMetaRoutes(req, res, url, {
       methodCatalog: dependencies.methodCatalog,
       readJsonBody,
@@ -252,6 +258,7 @@ export function createCodexBridgeRouteHandlers(
     () => handleStatusRoutes(req, res, url, {
       readJsonBody,
       remoteAccessProtected: dependencies.remoteAccessProtected,
+      handoffAppServerToDesktop: () => appServer.handoffToDesktop(),
     }),
     () => handleNotificationSseRoute(req, res, url, {
       latestSeq: () => dependencies.notificationReplay.latestSeq,

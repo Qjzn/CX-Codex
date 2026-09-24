@@ -272,8 +272,9 @@
                   {{ webBridgeSettingsStatus }}
                 </p>
               </section>
-              <section id="mobile-shell-connection-settings" v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="移动端连接">
-                <p class="sidebar-settings-section-title">移动端连接</p>
+              <section id="mobile-shell-connection-settings" class="sidebar-settings-section" aria-label="安卓端连接">
+                <p class="sidebar-settings-section-title">安卓端连接</p>
+                <template v-if="isMobileShellAvailable">
                 <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
                   <span class="sidebar-settings-label">当前地址</span>
                   <span class="sidebar-settings-code">{{ mobileShellServerUrlLabel }}</span>
@@ -369,6 +370,35 @@
                 <p v-if="mobileShellStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
                   {{ mobileShellStatus }}
                 </p>
+                </template>
+                <template v-else>
+                  <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
+                    <span class="sidebar-settings-label">此页面的连接地址</span>
+                    <span class="sidebar-settings-code">{{ mobileShellPairingUrlLabel }}</span>
+                  </div>
+                  <div class="sidebar-settings-actions">
+                    <button
+                      class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
+                      type="button"
+                      :disabled="!mobileShellPairingUrl"
+                      @click="copyMobileShellPairingUrl"
+                    >
+                      复制到安卓端
+                    </button>
+                  </div>
+                  <p class="sidebar-settings-hint sidebar-settings-hint--visible">
+                    在 Android App 首次打开的“服务地址”中粘贴此地址；该网页不能直接改写手机 App 的本机配置。
+                  </p>
+                  <p v-if="isNgrokMobileShellPairingUrl" class="sidebar-settings-hint sidebar-settings-hint--visible">
+                    已识别 ngrok HTTPS 隧道。可直接使用其域名根地址；不要粘贴 ngrok 检查页、查询参数或网页路由（例如 #/thread/...）。
+                  </p>
+                  <p v-else-if="!isMobileShellPairingPublicUrl" class="sidebar-settings-hint sidebar-settings-hint--visible">
+                    当前是本机或非 HTTPS 地址，手机通常无法访问。请先从 ngrok、Tailscale 或受认证保护的 HTTPS 入口打开本页。
+                  </p>
+                  <p v-if="mobileShellStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
+                    {{ mobileShellStatus }}
+                  </p>
+                </template>
               </section>
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="任务宠物">
                 <p class="sidebar-settings-section-title">任务宠物</p>
@@ -427,15 +457,20 @@
                 <span class="sidebar-settings-label">刷新桌面端</span>
                 <span class="sidebar-settings-value">{{ desktopRefreshButtonLabel }}</span>
               </button>
+              <button
+                class="sidebar-settings-row"
+                type="button"
+                :title="desktopHandoffButtonTitle"
+                :disabled="isDesktopHandoffRunning"
+                @click="onHandoffAppServerToDesktop"
+              >
+                <span class="sidebar-settings-label">释放 WebUI 会话</span>
+                <span class="sidebar-settings-value">{{ desktopHandoffButtonLabel }}</span>
+              </button>
+              <p class="sidebar-settings-hint">
+                交接前会检查活动请求；释放后即可在远程 Codex Desktop 打开同一会话。
+              </p>
               <section class="sidebar-settings-about" aria-label="项目版本和 GitHub 仓库">
-                <div class="sidebar-settings-brand-card">
-                  <img class="sidebar-settings-brand-logo" :src="MOBILE_SHELL_BRANDING_LOGO_URL" alt="CX-Codex 标识" />
-                  <div class="sidebar-settings-brand-copy">
-                    <span class="sidebar-settings-brand-kicker">Android Shell</span>
-                    <strong class="sidebar-settings-brand-title">{{ MOBILE_SHELL_BRAND_NAME }}</strong>
-                    <span class="sidebar-settings-brand-subtitle">面向手机远程访问 Codex 的原生入口</span>
-                  </div>
-                </div>
                 <div class="sidebar-settings-about-main">
                   <button
                     class="sidebar-settings-about-trigger"
@@ -447,14 +482,11 @@
                     <div class="sidebar-settings-about-copy">
                       <span class="sidebar-settings-about-label">当前版本</span>
                       <strong class="sidebar-settings-about-version">{{ aboutAppVersionLabel }}</strong>
-                      <span class="sidebar-settings-about-action">
-                        <span
-                          v-if="isMobileShellUpdateLoading || isMobileShellInstalling"
-                          class="sidebar-settings-about-spinner"
-                          aria-hidden="true"
-                        />
-                        {{ mobileShellVersionActionLabel }}
-                      </span>
+                      <span
+                        v-if="isMobileShellUpdateLoading || isMobileShellInstalling"
+                        class="sidebar-settings-about-spinner"
+                        aria-hidden="true"
+                      />
                     </div>
                     <span
                       v-if="isMobileShellAvailable && hasMobileShellUpdate"
@@ -486,7 +518,13 @@
               <span class="sidebar-current-thread-icon" aria-hidden="true">◎</span>
               <span>当前会话</span>
             </button>
-            <button class="sidebar-settings-button" type="button" :aria-expanded="isSettingsOpen" @click="isSettingsOpen = !isSettingsOpen">
+            <button
+              class="sidebar-settings-button"
+              :class="{ 'sidebar-settings-button--active': isSettingsOpen }"
+              type="button"
+              :aria-expanded="isSettingsOpen"
+              @click="isSettingsOpen = !isSettingsOpen"
+            >
               <IconTablerSettings class="sidebar-settings-icon" />
               <span>设置</span>
             </button>
@@ -537,6 +575,32 @@
           </template>
           <template #subtitle>
             <p v-if="headerSubtitle" class="content-header-subtitle">{{ headerSubtitle }}</p>
+          </template>
+          <template #actions>
+            <button
+              v-if="isHomeRoute || (isThreadRoute && selectedThreadId)"
+              class="content-side-panel-toggle"
+              :class="{ 'is-active': threadSidePanelMode === 'chat' }"
+              type="button"
+              :aria-pressed="threadSidePanelMode === 'chat'"
+              :title="isHomeRoute ? '为新会话打开侧边聊天' : '为当前会话打开侧边聊天'"
+              @click="toggleThreadSidePanel('chat')"
+            >
+              <IconTablerMessageCircle class="content-side-panel-toggle-icon" />
+              <span class="content-side-panel-toggle-label">侧边聊天</span>
+            </button>
+            <button
+              v-if="isHomeRoute || (isThreadRoute && selectedThreadId)"
+              class="content-side-panel-toggle"
+              :class="{ 'is-active': threadSidePanelMode === 'terminal' }"
+              type="button"
+              :aria-pressed="threadSidePanelMode === 'terminal'"
+              :title="isHomeRoute ? '为新会话打开侧边终端' : '为当前会话打开侧边终端'"
+              @click="toggleThreadSidePanel('terminal')"
+            >
+              <span class="content-side-panel-toggle-icon content-side-panel-toggle-icon--terminal" aria-hidden="true">&gt;_</span>
+              <span class="content-side-panel-toggle-label">侧边终端</span>
+            </button>
           </template>
           <template #leading>
             <SidebarThreadControls
@@ -609,7 +673,7 @@
           </template>
         </ContentHeader>
 
-        <section class="content-body">
+        <section class="content-body" :class="{ 'content-body--side-workspace': Boolean(threadSidePanelMode) }">
           <template v-if="isSkillsRoute">
             <SkillsHub @skills-changed="onSkillsChanged" />
           </template>
@@ -626,7 +690,8 @@
             />
           </template>
           <template v-else-if="isHomeRoute">
-            <div class="content-grid">
+            <div class="content-workspace">
+              <div class="content-grid">
               <div
                 v-if="pendingNewThreadPreview"
                 class="content-thread"
@@ -700,6 +765,7 @@
                 :selected-reasoning-effort="selectedReasoningEffort"
                 :selected-speed-mode="selectedSpeedMode"
                 :selected-collaboration-mode="selectedCollaborationMode"
+                :thread-goal="null"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
                 :disabled="Boolean(pendingNewThreadPreview)"
                 :skills="enabledComposerSkills"
@@ -721,110 +787,173 @@
                 @refresh-plugins="refreshComposerPlugins"
                 @reload-plugins="reloadComposerPlugins"
                 @login-plugin="loginComposerPlugin" />
+              </div>
+              <ThreadSideWorkspace
+                v-if="threadSidePanelMode"
+                thread-id="__new-thread__"
+                :cwd="composerCwd"
+                title="新会话"
+                :initial-mode="threadSidePanelMode"
+                :width-percent="threadSidePanelWidthPercent"
+                :model="selectedModelId"
+                :models="availableModelIds"
+                :available-models="availableModels"
+                :selected-reasoning-effort="selectedReasoningEffort"
+                :skills="enabledComposerSkills"
+                :has-loaded-skills="hasLoadedSkills"
+                :plugins="availableComposerPlugins"
+                :is-loading-plugins="isLoadingComposerPlugins"
+                :has-loaded-plugins="hasLoadedComposerPlugins"
+                :send-with-enter="sendWithEnter"
+                :dictation-click-to-toggle="dictationClickToToggle"
+                :dictation-auto-send="dictationAutoSend"
+                :show-dictation-button="dictationButtonVisible"
+                :dictation-language="dictationLanguage"
+                @update:active-kind="threadSidePanelMode = $event"
+                @resize="resizeThreadSidePanel"
+                @refresh-plugins="refreshComposerPlugins"
+                @reload-plugins="reloadComposerPlugins"
+                @login-plugin="loginComposerPlugin"
+                @close="threadSidePanelMode = null"
+              />
             </div>
           </template>
           <template v-else-if="isThreadRoute">
-            <div class="content-grid">
-              <div class="content-thread">
-                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
-                  :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
-                  :live-overlay="displayedThreadLiveOverlay"
-                  :pending-requests="displayedThreadPendingRequests"
-                  :load-error="selectedThreadLoadError"
-                  :show-connection-settings-action="isMobileShellAvailable"
-                  :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
-                  :is-thread-switching="isThreadContentSwitching"
-                  :compact-runtime-chrome="true"
-                  :show-empty-thread-actions="isRouteOnlyEmptyThread"
-                  :allow-failed-message-edit="true"
-                  :is-turn-in-progress="isSelectedThreadInProgress"
-                  :is-rolling-back="isRollingBack"
-                  :implementing-plan-id="implementingPlanId"
-                  :implemented-plan-ids="implementedPlanIds"
-                  @update-scroll-state="onUpdateThreadScrollState"
-                  @respond-server-request="onRespondServerRequest"
-                  @toggle-favorite="onToggleFavoriteMessage"
-                  @load-older-history="loadOlderHistoryForSelectedThread"
-                  @retry-load="onRefreshSelectedThreadContent"
-                  @open-connection-settings="onOpenThreadConnectionSettings"
-                  @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
-                  @dismiss-empty-thread="onDismissEmptyThread"
-                  @copy-status="onConversationCopyStatus"
-                  @retry-failed-message="retryFailedUserMessage"
-                  @edit-failed-message="onEditFailedMessage"
-                  @implement-plan="onImplementPlan"
-                  @rollback="onRollback" />
-              </div>
-
-              <div class="composer-with-queue">
-                <div
-                  v-if="quotaReminder"
-                  class="quota-reminder"
-                  :data-tone="quotaReminder.tone"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span class="quota-reminder-dot" aria-hidden="true" />
-                  <span class="quota-reminder-title">{{ quotaReminder.title }}</span>
-                  <span class="quota-reminder-detail">{{ quotaReminder.detail }}</span>
+            <div class="content-workspace">
+              <div class="content-grid">
+                <div class="content-thread">
+                  <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
+                    :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
+                    :live-overlay="displayedThreadLiveOverlay"
+                    :pending-requests="displayedThreadPendingRequests"
+                    :load-error="selectedThreadLoadError"
+                    :show-connection-settings-action="isMobileShellAvailable"
+                    :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
+                    :is-thread-switching="isThreadContentSwitching"
+                    :compact-runtime-chrome="true"
+                    :show-empty-thread-actions="isRouteOnlyEmptyThread"
+                    :allow-failed-message-edit="true"
+                    :is-turn-in-progress="isSelectedThreadInProgress"
+                    :is-rolling-back="isRollingBack"
+                    :implementing-plan-id="implementingPlanId"
+                    :implemented-plan-ids="implementedPlanIds"
+                    @update-scroll-state="onUpdateThreadScrollState"
+                    @respond-server-request="onRespondServerRequest"
+                    @toggle-favorite="onToggleFavoriteMessage"
+                    @load-older-history="loadOlderHistoryForSelectedThread"
+                    @retry-load="onRefreshSelectedThreadContent"
+                    @open-connection-settings="onOpenThreadConnectionSettings"
+                    @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
+                    @dismiss-empty-thread="onDismissEmptyThread"
+                    @copy-status="onConversationCopyStatus"
+                    @retry-failed-message="retryFailedUserMessage"
+                    @edit-failed-message="onEditFailedMessage"
+                    @implement-plan="onImplementPlan"
+                    @rollback="onRollback" />
                 </div>
-                <QueuedMessages
-                  :messages="selectedThreadQueuedMessages"
-                  :is-processing="selectedThreadQueueProcessing"
-                  @edit="onEditQueuedMessage"
-                  @quote="onQuoteQueuedMessage"
-                  @retry="retryQueuedMessage"
-                  @delete="deleteQueuedMessage"
-                />
-                <ThreadGoalBar
-                  :key="selectedThreadId"
-                  :goal="selectedThreadGoal"
-                  :is-loading="isSelectedThreadGoalLoading"
-                  :is-updating="isSelectedThreadGoalUpdating"
-                  :error="selectedThreadGoalError"
-                  :execution-hint="selectedThreadGoalExecutionHint"
-                  :plan-mode-active="selectedCollaborationMode === 'plan'"
-                  :disabled="isThreadContentSwitching"
-                  @set-goal="onSaveThreadGoal"
-                  @set-status="onSetThreadGoalStatus"
-                  @clear-goal="onClearThreadGoal"
-                  @retry="refreshSelectedThreadGoal"
-                />
-                <FailedMessagesTray
-                  :messages="selectedThreadDetachedFailedMessages"
-                  @edit="onEditFailedMessage"
-                  @retry="retryFailedUserMessage"
-                  @delete="deleteFailedUserMessage"
-                />
-                <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
-                  :cwd="composerCwd"
-                  :models="availableModelIds"
-                  :available-models="availableModels"
-                  :selected-model="selectedModelId"
-                  :selected-reasoning-effort="selectedReasoningEffort"
-                  :selected-speed-mode="selectedSpeedMode"
-                  :selected-collaboration-mode="selectedCollaborationMode"
-                  :is-updating-speed-mode="isUpdatingSpeedMode"
-                  :skills="enabledComposerSkills"
-                  :has-loaded-skills="hasLoadedSkills"
-                  :plugins="availableComposerPlugins"
-                  :is-loading-plugins="isLoadingComposerPlugins"
-                  :has-loaded-plugins="hasLoadedComposerPlugins"
-                  :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
-                  :send-with-enter="sendWithEnter"
-                  :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
-                  :show-dictation-button="dictationButtonVisible"
-                  :prepend-draft-request="rollbackDraftPrependRequest"
-                  :dictation-language="dictationLanguage"
-                  @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
-                  @update:selected-reasoning-effort="onSelectReasoningEffort"
-                  @update:selected-speed-mode="onSelectSpeedMode"
-                  @update:selected-collaboration-mode="onSelectCollaborationMode"
-                  @refresh-plugins="refreshComposerPlugins"
-                  @reload-plugins="reloadComposerPlugins"
-                  @login-plugin="loginComposerPlugin"
-                  @interrupt="onInterruptTurn('composer-stop')" />
-              </div>
+
+                <div class="composer-with-queue">
+                  <div
+                    v-if="quotaReminder"
+                    class="quota-reminder"
+                    :data-tone="quotaReminder.tone"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <span class="quota-reminder-dot" aria-hidden="true" />
+                    <span class="quota-reminder-title">{{ quotaReminder.title }}</span>
+                    <span class="quota-reminder-detail">{{ quotaReminder.detail }}</span>
+                  </div>
+                  <QueuedMessages
+                    :messages="selectedThreadQueuedMessages"
+                    :is-processing="selectedThreadQueueProcessing"
+                    @edit="onEditQueuedMessage"
+                    @quote="onQuoteQueuedMessage"
+                    @retry="retryQueuedMessage"
+                    @delete="deleteQueuedMessage"
+                  />
+                  <FailedMessagesTray
+                    :messages="selectedThreadDetachedFailedMessages"
+                    @edit="onEditFailedMessage"
+                    @retry="retryFailedUserMessage"
+                    @delete="deleteFailedUserMessage"
+                  />
+                  <ThreadGoalBar
+                    v-if="selectedThreadGoal || isSelectedThreadGoalLoading || selectedThreadGoalError"
+                    :goal="selectedThreadGoal"
+                    :is-loading="isSelectedThreadGoalLoading"
+                    :is-updating="isSelectedThreadGoalUpdating"
+                    :error="selectedThreadGoalError"
+                    :disabled="isThreadContentSwitching"
+                    @set-goal="onSaveThreadGoal"
+                    @set-status="onSetThreadGoalStatus"
+                    @clear-goal="onClearThreadGoal"
+                    @retry="onRetryThreadGoal"
+                  />
+                  <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
+                    :cwd="composerCwd"
+                    :models="availableModelIds"
+                    :available-models="availableModels"
+                    :selected-model="selectedModelId"
+                    :selected-reasoning-effort="selectedReasoningEffort"
+                    :selected-speed-mode="selectedSpeedMode"
+                    :selected-collaboration-mode="selectedCollaborationMode"
+                    :thread-goal="selectedThreadGoal"
+                    :is-thread-goal-loading="isSelectedThreadGoalLoading"
+                    :is-thread-goal-updating="isSelectedThreadGoalUpdating"
+                    :thread-goal-error="selectedThreadGoalError"
+                    :thread-goal-disabled="isThreadContentSwitching"
+                    :is-updating-speed-mode="isUpdatingSpeedMode"
+                    :skills="enabledComposerSkills"
+                    :has-loaded-skills="hasLoadedSkills"
+                    :plugins="availableComposerPlugins"
+                    :is-loading-plugins="isLoadingComposerPlugins"
+                    :has-loaded-plugins="hasLoadedComposerPlugins"
+                    :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
+                    :send-with-enter="sendWithEnter"
+                    :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
+                    :show-dictation-button="dictationButtonVisible"
+                    :prepend-draft-request="rollbackDraftPrependRequest"
+                    :dictation-language="dictationLanguage"
+                    @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
+                    @update:selected-reasoning-effort="onSelectReasoningEffort"
+                    @update:selected-speed-mode="onSelectSpeedMode"
+                    @update:selected-collaboration-mode="onSelectCollaborationMode"
+                    @set-thread-goal-status="onSetThreadGoalStatus"
+                    @refresh-plugins="refreshComposerPlugins"
+                    @reload-plugins="reloadComposerPlugins"
+                    @login-plugin="loginComposerPlugin"
+                    @interrupt="onInterruptTurn('composer-stop')" />
+                </div>
+            </div>
+            <ThreadSideWorkspace
+              v-if="threadSidePanelMode"
+              :thread-id="displayedThreadConversationId"
+              :cwd="displayedThreadCwd"
+              :title="displayedThreadTitle"
+              :initial-mode="threadSidePanelMode"
+              :width-percent="threadSidePanelWidthPercent"
+              :model="selectedModelId"
+              :models="availableModelIds"
+              :available-models="availableModels"
+              :selected-reasoning-effort="selectedReasoningEffort"
+              :skills="enabledComposerSkills"
+              :has-loaded-skills="hasLoadedSkills"
+              :plugins="availableComposerPlugins"
+              :is-loading-plugins="isLoadingComposerPlugins"
+              :has-loaded-plugins="hasLoadedComposerPlugins"
+              :send-with-enter="sendWithEnter"
+              :dictation-click-to-toggle="dictationClickToToggle"
+              :dictation-auto-send="dictationAutoSend"
+              :show-dictation-button="dictationButtonVisible"
+              :dictation-language="dictationLanguage"
+              @update:active-kind="threadSidePanelMode = $event"
+              @resize="resizeThreadSidePanel"
+              @refresh-plugins="refreshComposerPlugins"
+              @reload-plugins="reloadComposerPlugins"
+              @login-plugin="loginComposerPlugin"
+              @close="threadSidePanelMode = null"
+            />
             </div>
           </template>
           <PageLoadingSkeleton v-else />
@@ -865,6 +994,43 @@
             @click="confirmDesktopRefresh"
           >
             {{ isDesktopRefreshRiskHigh ? '仍然刷新' : '刷新桌面端' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="isDesktopHandoffConfirmVisible"
+      class="desktop-refresh-confirm-overlay"
+      @click.self="closeDesktopHandoffConfirm"
+    >
+      <div
+        ref="desktopHandoffConfirmDialogRef"
+        class="desktop-refresh-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="desktop-handoff-confirm-title"
+        tabindex="-1"
+      >
+        <p class="desktop-refresh-confirm-kicker">确认交接会话</p>
+        <h2 id="desktop-handoff-confirm-title" class="desktop-refresh-confirm-title">
+          是否释放 WebUI 会话？
+        </h2>
+        <p class="desktop-refresh-confirm-text">
+          这会停止 WebUI 到 app-server 的连接，释放同一会话的占用，让远程 Codex Desktop 可以打开它。活动任务不会被强行中断；如果仍有活动请求，系统会拒绝交接。
+        </p>
+        <div class="desktop-refresh-confirm-actions">
+          <button class="desktop-refresh-confirm-button" type="button" @click="closeDesktopHandoffConfirm">
+            取消
+          </button>
+          <button
+            class="desktop-refresh-confirm-button desktop-refresh-confirm-button-primary"
+            type="button"
+            @click="confirmDesktopHandoff"
+          >
+            {{ isDesktopHandoffRunning ? '释放中...' : '释放并交接' }}
           </button>
         </div>
       </div>
@@ -1021,6 +1187,8 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
+import ThreadGoalBar from './components/content/ThreadGoalBar.vue'
+import ThreadSideWorkspace from './components/content/ThreadSideWorkspace.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import PageLoadingSkeleton from './components/content/PageLoadingSkeleton.vue'
@@ -1032,6 +1200,7 @@ import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
 import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
+import IconTablerMessageCircle from './components/icons/IconTablerMessageCircle.vue'
 import IconTablerRefresh from './components/icons/IconTablerRefresh.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
@@ -1052,6 +1221,7 @@ import {
   getProjectRootSuggestion,
   getWebBridgeSettings,
   getWorkspaceRootsState,
+  handoffAppServerToDesktop,
   openProjectRoot,
   refreshDesktopApp,
   startRuntimeThreadTurn,
@@ -1134,7 +1304,6 @@ const ThreadConversation = defineAsyncComponent({
   loadingComponent: ConversationLoadingSkeleton,
   delay: 0,
 })
-const ThreadGoalBar = defineAsyncComponent(() => import('./components/content/ThreadGoalBar.vue'))
 const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
 const FailedMessagesTray = defineAsyncComponent(() => import('./components/content/FailedMessagesTray.vue'))
 const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
@@ -1149,11 +1318,11 @@ const GithubTrendingHub = defineAsyncComponent({
 })
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
 
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
+// v1 could retain the collapsed state from the broken sidebar layout. Start
+// with a fresh key so that stale state cannot hide the desktop sidebar again.
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v2'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
-const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
-const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
 const THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS = 6500
@@ -1429,10 +1598,12 @@ const {
   setWorktreeGitAutomationEnabled,
   setSelectedReasoningEffort,
   setSelectedCollaborationMode,
-  refreshSelectedThreadGoal,
   saveSelectedThreadGoal,
+  saveThreadGoalById,
+  updateThreadGoalStatusById,
   updateSelectedThreadGoalStatus,
   clearSelectedThreadGoal,
+  refreshSelectedThreadGoal,
   updateSelectedSpeedMode,
   respondToPendingServerRequest,
   renameProject,
@@ -1508,12 +1679,16 @@ let threadExportPromise: Promise<void> | null = null
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
+type ThreadSidePanelMode = 'chat' | 'terminal'
+const threadSidePanelMode = ref<ThreadSidePanelMode | null>(null)
+const threadSidePanelWidthPercent = ref(38)
 const isCommandMenuOpen = ref(false)
 const commandMenuInitialMode = ref<'root' | 'files'>('root')
 const commandMenuModeRequestId = ref(0)
 const BLOCKING_DIALOG_REGRESSION_EVENT = 'cx-codex-regression-open-blocking-dialog'
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const desktopRefreshConfirmDialogRef = ref<HTMLElement | null>(null)
+const desktopHandoffConfirmDialogRef = ref<HTMLElement | null>(null)
 const queuedMessageEditDialogRef = ref<HTMLElement | null>(null)
 const mobileUpdateConfirmDialogRef = ref<HTMLElement | null>(null)
 let blockingDialogPreviousFocus: HTMLElement | null = null
@@ -1653,13 +1828,16 @@ const desktopAppStatus = ref<DesktopAppStatus>({
 })
 const isDesktopRefreshRunning = ref(false)
 const isDesktopRefreshConfirmVisible = ref(false)
+const isDesktopHandoffRunning = ref(false)
+const isDesktopHandoffConfirmVisible = ref(false)
 const desktopSyncPendingThreadId = ref('')
 const desktopSyncPendingAtMs = ref(0)
-type BlockingDialogKind = '' | 'mobile-update' | 'queued-edit' | 'desktop-refresh'
+type BlockingDialogKind = '' | 'mobile-update' | 'queued-edit' | 'desktop-refresh' | 'desktop-handoff'
 const activeBlockingDialogKind = computed<BlockingDialogKind>(() => {
   if (isMobileShellUpdatePromptVisible.value) return 'mobile-update'
   if (pendingQueuedMessageEditId.value) return 'queued-edit'
   if (isDesktopRefreshConfirmVisible.value) return 'desktop-refresh'
+  if (isDesktopHandoffConfirmVisible.value) return 'desktop-handoff'
   return ''
 })
 
@@ -1739,6 +1917,37 @@ const displayWorktreeName = computed(() => {
 const mobileShellServerUrlLabel = computed(() => (
   mobileShellServerConfig.value?.serverUrl.trim() || '未配置'
 ))
+const mobileShellPairingUrl = computed(() => {
+  if (typeof window === 'undefined') return ''
+  try {
+    const url = new URL(window.location.href)
+    url.hash = ''
+    url.search = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return ''
+  }
+})
+const mobileShellPairingUrlLabel = computed(() => mobileShellPairingUrl.value || '无法读取当前页面地址')
+const isNgrokMobileShellPairingUrl = computed(() => {
+  try {
+    return /(^|\.)ngrok(?:-free)?\.app$/i.test(new URL(mobileShellPairingUrl.value).hostname)
+  } catch {
+    return false
+  }
+})
+const isMobileShellPairingPublicUrl = computed(() => {
+  try {
+    const url = new URL(mobileShellPairingUrl.value)
+    const hostname = url.hostname.toLowerCase()
+    return url.protocol === 'https:'
+      && hostname !== 'localhost'
+      && hostname !== '127.0.0.1'
+      && hostname !== '::1'
+  } catch {
+    return false
+  }
+})
 const isMobileShellConfigBooting = computed(() => (
   isMobileShellAvailable.value
   && !mobileShellSetupChecked.value
@@ -1847,15 +2056,6 @@ const mobileShellReleaseComparison = computed(() => {
   const latest = mobileShellLatestRelease.value?.tagName ?? ''
   if (!installed.trim() || !latest.trim()) return 0
   return compareMobileReleaseVersions(installed, latest)
-})
-const mobileShellVersionActionLabel = computed(() => {
-  if (!isMobileShellAvailable.value) return '打开 GitHub 发布页'
-  if (isMobileShellInstalling.value) return '正在下载更新...'
-  if (isMobileShellUpdateLoading.value) return '检查中...'
-  if (hasMobileShellUpdate.value) return `下载 ${mobileShellLatestVersionLabel.value}`
-  if (mobileShellReleaseComparison.value > 0) return '当前安装包比 GitHub 更新'
-  if (mobileShellLatestRelease.value?.tagName.trim()) return '已是最新'
-  return '检查更新'
 })
 const canInstallLatestMobileShellRelease = computed(() => (
   isMobileShellAvailable.value
@@ -2031,13 +2231,13 @@ const mobileThreadRefreshButtonTitle = computed(() => (
 ))
 const contentContextUsage = computed(() => {
   if (isNonThreadRoute.value || isRouteOnlyEmptyThread.value) return null
-  if (!selectedThread.value) return null
+  if (!selectedThreadId.value) return null
   return selectedThreadTokenUsage.value
 })
 const showContentContextBadge = computed(() => (
   !isNonThreadRoute.value &&
   !isRouteOnlyEmptyThread.value &&
-  Boolean(selectedThread.value) &&
+  Boolean(selectedThreadId.value) &&
   (!isCompactTouchContent.value || contentContextHasReliablePercent.value)
 ))
 const contentContextHasReliablePercent = computed(() => (
@@ -2185,15 +2385,19 @@ function visibleConversationMessages(sourceMessages: UiMessage[]): UiMessage[] {
 }
 
 const filteredMessages = computed(() => visibleConversationMessages(messages.value))
-const latestUserTurnIndex = computed(() => {
-  let latest = -1
+const latestUserMessage = computed<UiMessage | null>(() => {
+  let latest: UiMessage | null = null
   for (const message of filteredMessages.value) {
     if (message.role !== 'user') continue
     if (typeof message.turnIndex !== 'number') continue
-    if (message.turnIndex > latest) latest = message.turnIndex
+    if (!latest || message.turnIndex > (latest.turnIndex ?? -1)) latest = message
   }
   return latest
 })
+const latestUserTurnIndex = computed(() => {
+  return latestUserMessage.value?.turnIndex ?? -1
+})
+const latestUserTurnId = computed(() => latestUserMessage.value?.turnId?.trim() ?? '')
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const composerCwd = computed(() => {
@@ -2235,13 +2439,17 @@ const displayFavorites = computed<FavoriteRecord[]>(() => (
 ))
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThreadExecutionActive.value)
 const isSelectedThreadInterruptible = computed(() => !isHomeRoute.value && selectedThreadCanStop.value)
-const selectedThreadGoalExecutionHint = computed(() => {
-  if (selectedThreadGoal.value?.status !== 'active') return ''
-  if (selectedThreadServerRequests.value.length > 0) return '等待确认'
-  if (selectedThreadQueuedMessages.value.length > 0) return '等待消息队列'
-  if (isSelectedThreadInProgress.value) return '正在推进'
-  return '等待继续'
-})
+
+watch(
+  [selectedCollaborationMode, () => selectedThreadGoal.value?.status],
+  ([mode, goalStatus]) => {
+    if (mode === 'plan' && goalStatus === 'active') {
+      setSelectedCollaborationMode('execute')
+    }
+  },
+  { immediate: true },
+)
+
 const shouldShowSelectedThreadProcessing = computed(() => (
   selectedThreadServerRequests.value.length > 0 ||
   selectedLiveOverlay.value !== null ||
@@ -2508,6 +2716,12 @@ const desktopRefreshConfirmMessage = computed(() => (
     ? '这会关闭并重开当前机器上的官方 Codex 桌面端。桌面端正在执行的任务可能会停止，7420 网页端不会关闭。'
     : '这会关闭并重开官方 Codex 桌面端，让它重新载入最新的本地会话记录。'
 ))
+const desktopHandoffButtonTitle = computed(() => (
+  '释放 WebUI 对 app-server 的占用，让远程 Codex Desktop 可以打开同一会话；活动任务运行时会拒绝操作。'
+))
+const desktopHandoffButtonLabel = computed(() => (
+  isDesktopHandoffRunning.value ? '释放中...' : '结束占用会话'
+))
 
 type IdleSchedulerWindow = Window & typeof globalThis & {
   requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
@@ -2751,6 +2965,20 @@ function normalizeUrlInput(value: string): string {
     normalized = normalized.slice(0, -1)
   }
   return normalized
+}
+
+async function copyMobileShellPairingUrl(): Promise<void> {
+  const url = mobileShellPairingUrl.value
+  if (!url) {
+    setMobileShellStatus('无法读取当前页面的连接地址')
+    return
+  }
+  try {
+    await copyTextToClipboard(url)
+    setMobileShellStatus('连接地址已复制；请在 Android App 的“服务地址”中粘贴')
+  } catch {
+    setMobileShellStatus('复制失败，请手动复制上方地址')
+  }
 }
 
 function formatFileSize(value: number): string {
@@ -3139,6 +3367,11 @@ function onRefreshDesktopApp(): void {
   isDesktopRefreshConfirmVisible.value = true
 }
 
+function onHandoffAppServerToDesktop(): void {
+  if (isDesktopHandoffRunning.value) return
+  isDesktopHandoffConfirmVisible.value = true
+}
+
 async function openMobileShellServerUrl(): Promise<void> {
   const url = mobileShellServerConfig.value?.serverUrl.trim() || ''
   if (!url) {
@@ -3257,6 +3490,11 @@ function closeDesktopRefreshConfirm(): void {
   isDesktopRefreshConfirmVisible.value = false
 }
 
+function closeDesktopHandoffConfirm(): void {
+  if (isDesktopHandoffRunning.value) return
+  isDesktopHandoffConfirmVisible.value = false
+}
+
 function markDesktopSyncPending(threadId: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
@@ -3291,6 +3529,27 @@ function confirmDesktopRefresh(): void {
     .finally(() => {
       isDesktopRefreshRunning.value = false
       void refreshDesktopAppAvailability()
+    })
+}
+
+function confirmDesktopHandoff(): void {
+  if (isDesktopHandoffRunning.value) return
+
+  blockingDialogShouldRestoreFocus = false
+  isDesktopHandoffConfirmVisible.value = false
+  isDesktopHandoffRunning.value = true
+  void handoffAppServerToDesktop()
+    .then((result) => {
+      stopPolling()
+      clearDesktopSyncPending()
+      showProductToast(result.message, 'success', 5200)
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : '释放 WebUI 会话失败'
+      showProductToast(message, 'danger', 5600)
+    })
+    .finally(() => {
+      isDesktopHandoffRunning.value = false
     })
 }
 
@@ -3707,6 +3966,10 @@ function dismissTopmostBlockingDialog(): boolean {
     closeDesktopRefreshConfirm()
     return true
   }
+  if (isDesktopHandoffConfirmVisible.value) {
+    closeDesktopHandoffConfirm()
+    return true
+  }
   return false
 }
 
@@ -3714,12 +3977,14 @@ function isAnyBlockingDialogVisible(): boolean {
   return isMobileShellUpdatePromptVisible.value
     || Boolean(pendingQueuedMessageEditId.value)
     || isDesktopRefreshConfirmVisible.value
+    || isDesktopHandoffConfirmVisible.value
 }
 
 function resolveBlockingDialogElement(kind: BlockingDialogKind): HTMLElement | null {
   if (kind === 'mobile-update') return mobileUpdateConfirmDialogRef.value
   if (kind === 'queued-edit') return queuedMessageEditDialogRef.value
   if (kind === 'desktop-refresh') return desktopRefreshConfirmDialogRef.value
+  if (kind === 'desktop-handoff') return desktopHandoffConfirmDialogRef.value
   return null
 }
 
@@ -3872,9 +4137,21 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
   isSettingsOpen.value = false
 }
 
+function toggleThreadSidePanel(mode: ThreadSidePanelMode): void {
+  const canOpenForHome = isHomeRoute.value
+  const canOpenForThread = isThreadRoute.value && selectedThreadId.value.trim().length > 0
+  if (!canOpenForHome && !canOpenForThread) return
+  threadSidePanelMode.value = threadSidePanelMode.value === mode ? null : mode
+}
+
+function resizeThreadSidePanel(widthPercent: number): void {
+  threadSidePanelWidthPercent.value = Math.min(52, Math.max(24, widthPercent))
+}
+
 function onSubmitThreadMessage(payload: SubmitPayload): void {
   const feedbackStartedAtMs = isHomeRoute.value || payload.mode === 'steer' ? chatFeedbackNow() : undefined
   const text = payload.text
+  const threadGoalObjective = payload.threadGoalObjective?.trim() ?? ''
   const editingState = editingQueuedMessageState.value
   const queueInsertIndex =
     payload.mode === 'queue'
@@ -3883,6 +4160,52 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       ? editingState.queueIndex
       : undefined
   editingQueuedMessageState.value = null
+  if (threadGoalObjective) {
+    if (isHomeRoute.value) {
+      if (newThreadSubmitInFlight || isSendingMessage.value || pendingNewThreadPreview.value) return
+      void submitFirstMessageForNewThread(
+        text,
+        payload.imageUrls,
+        payload.skills,
+        payload.fileAttachments,
+        payload.collaborationMode,
+        payload.turnOptions,
+        feedbackStartedAtMs,
+        threadGoalObjective,
+      )
+    } else {
+      const targetThreadId = selectedThreadId.value.trim()
+      if (!targetThreadId) return
+      void onSaveThreadGoal(threadGoalObjective, true)
+        .then(() => sendMessageToSelectedThread(
+          text,
+          payload.imageUrls,
+          payload.skills,
+          payload.mode,
+          payload.fileAttachments,
+          queueInsertIndex,
+          payload.collaborationMode,
+          payload.turnOptions,
+          {
+            targetThreadId,
+            feedbackStartedAtMs,
+            onDeliveryPersisted: () => { void ensureMobileShellTaskNotificationPermission() },
+            onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
+            onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+          },
+        ))
+        .then(() => {
+          if (payload.mode !== 'queue') {
+            markDesktopSyncPending(targetThreadId)
+          }
+          return updateThreadGoalStatusById(targetThreadId, 'paused')
+        })
+        .catch(() => {
+          // Both the goal save and message path expose failures in the shared state.
+        })
+    }
+    return
+  }
   if (isHomeRoute.value) {
     if (newThreadSubmitInFlight || isSendingMessage.value || pendingNewThreadPreview.value) return
     void submitFirstMessageForNewThread(
@@ -3923,6 +4246,14 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     // The send path already reflects failures in the main state.
   })
 }
+
+watch(
+  () => [isThreadRoute.value, selectedThreadId.value] as const,
+  ([isThread, threadId]) => {
+    if (!isHomeRoute.value && (!isThread || !threadId.trim())) threadSidePanelMode.value = null
+  },
+  { immediate: true },
+)
 
 function onGithubTipsScopeChange(nextValue: string): void {
   const allowed = new Set<GithubTipsScope>([
@@ -4129,7 +4460,8 @@ async function rollbackAndResendDictation(payload: {
   }
   const rollbackTargetTurnIndex = latestUserTurnIndex.value
   if (rollbackTargetTurnIndex >= 0) {
-    await rollbackSelectedThread(rollbackTargetTurnIndex)
+    const rolledBack = await rollbackSelectedThread(rollbackTargetTurnIndex, latestUserTurnId.value)
+    if (!rolledBack) return
   }
   await sendMessageToSelectedThread(
     payload.text,
@@ -4313,16 +4645,21 @@ function onSelectSpeedMode(mode: SpeedMode): void {
 }
 
 function onSelectCollaborationMode(mode: CollaborationMode): void {
+  if (mode === 'plan' && selectedThreadGoal.value?.status === 'active') return
   setSelectedCollaborationMode(mode)
 }
 
-function onSaveThreadGoal(objective: string): void {
-  void saveSelectedThreadGoal(objective).catch(() => {
-    // The desktop state exposes the actionable RPC error in the shared error banner.
-  })
+function onSaveThreadGoal(objective: string, activate = false): Promise<void> {
+  if (selectedCollaborationMode.value === 'plan') {
+    setSelectedCollaborationMode('execute')
+  }
+  return saveSelectedThreadGoal(objective, activate)
 }
 
 function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
+  if (status === 'active' && selectedCollaborationMode.value === 'plan') {
+    setSelectedCollaborationMode('execute')
+  }
   void updateSelectedThreadGoalStatus(status).catch(() => {
     // Keep the existing goal visible so the user can retry without re-entering it.
   })
@@ -4330,8 +4667,12 @@ function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
 
 function onClearThreadGoal(): void {
   void clearSelectedThreadGoal().catch(() => {
-    // The goal remains visible when the authoritative clear fails.
+    // Keep the goal visible so the user can retry without losing its controls.
   })
+}
+
+function onRetryThreadGoal(): void {
+  void refreshSelectedThreadGoal()
 }
 
 async function onImplementPlan(message: UiMessage): Promise<void> {
@@ -4375,13 +4716,13 @@ function onInterruptTurn(source: 'composer-stop' | 'runtime-status-stop' | 'unkn
   void interruptSelectedThreadTurn(source)
 }
 
-function onRollback(payload: { turnIndex: number; prependText?: string }): void {
+function onRollback(payload: { turnIndex: number; turnId: string; prependText?: string }): void {
   const prependText = payload.prependText?.trim() ?? ''
-  if (prependText.length > 0) {
+  void rollbackSelectedThread(payload.turnIndex, payload.turnId).then((succeeded) => {
+    if (!succeeded || prependText.length === 0) return
     rollbackDraftPrependRequestId += 1
     rollbackDraftPrependRequest.value = { id: rollbackDraftPrependRequestId, text: prependText }
-  }
-  void rollbackSelectedThread(payload.turnIndex)
+  })
 }
 
 function loadBoolPref(key: string, fallback: boolean): boolean {
@@ -4878,6 +5219,7 @@ function submitFirstMessageForNewThread(
   collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   turnOptions?: ComposerTurnOptions,
   feedbackStartedAtMs?: number,
+  threadGoalObjective = '',
 ): Promise<string> {
   if (newThreadSubmitInFlight) return newThreadSubmitInFlight
 
@@ -4889,6 +5231,7 @@ function submitFirstMessageForNewThread(
     collaborationMode,
     turnOptions,
     feedbackStartedAtMs,
+    threadGoalObjective,
   ))
   newThreadSubmitInFlight = request
   const clearInFlight = (): void => {
@@ -4906,6 +5249,7 @@ async function submitFirstMessageForNewThreadOnce(
   collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   turnOptions?: ComposerTurnOptions,
   feedbackStartedAtMs?: number,
+  threadGoalObjective = '',
 ): Promise<string> {
   let activatedThreadId = ''
   let routeToCreatedThreadPromise: Promise<void> | null = null
@@ -4975,6 +5319,10 @@ async function submitFirstMessageForNewThreadOnce(
         })
       }
       return ''
+    }
+    if (threadGoalObjective.trim()) {
+      await saveThreadGoalById(threadId, threadGoalObjective, true)
+      await updateThreadGoalStatusById(threadId, 'paused')
     }
     if (routeToCreatedThreadPromise) {
       await routeToCreatedThreadPromise
@@ -5154,6 +5502,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   background: var(--ui-bg-sidebar);
+  scrollbar-width: none;
+}
+
+.sidebar-scrollable::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar-top-shell {
@@ -5164,8 +5517,42 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .content-root {
   @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-visible;
+  position: relative;
   --content-shell-max-width: min(var(--ui-content-max), calc(100vw - 2.75rem));
   background: var(--ui-bg-surface);
+}
+
+.content-side-panel-toggle {
+  @apply inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.content-side-panel-toggle:hover,
+.content-side-panel-toggle:focus-visible,
+.content-side-panel-toggle.is-active {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.content-side-panel-toggle-icon {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.content-side-panel-toggle-icon--terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono-ui);
+  font-size: 0.7rem;
+  transform: translateY(1px);
 }
 
 .content-root--dual-pane-touch {
@@ -5729,6 +6116,25 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   margin-inline: auto;
 }
 
+.content-workspace {
+  @apply flex-1 min-h-0 min-w-0 flex w-full;
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+}
+
+.content-workspace > .content-grid {
+  /* The side pane owns an explicit percentage; the main pane fills the rest. */
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  margin-inline: 0;
+}
+
+.content-body--side-workspace {
+  padding-inline: 0;
+}
+
 .content-thread {
   @apply flex-1 min-h-0 min-w-0 overflow-hidden;
 }
@@ -5741,6 +6147,16 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .content-root--dual-pane-touch .content-grid {
   width: 100%;
+}
+
+@media (max-width: 1023px) {
+  .content-workspace {
+    flex-direction: column;
+  }
+
+  .content-workspace > .content-grid {
+    width: 100%;
+  }
 }
 
 .composer-with-queue {
@@ -5928,6 +6344,13 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   color: var(--ui-text-primary);
 }
 
+.sidebar-settings-button--active,
+.sidebar-settings-button--active:hover,
+.sidebar-settings-button--active:focus-visible {
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
 .sidebar-settings-icon {
   @apply w-4.5 h-4.5;
 }
@@ -5937,15 +6360,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-settings-panel {
-  @apply mb-1 border;
+  @apply absolute bottom-full z-[69] mb-2 border;
+  left: 2px;
+  right: 2px;
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
   max-height: min(72dvh, 38rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.sidebar-settings-panel::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar-settings-mobile-backdrop {
@@ -5954,6 +6383,8 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .sidebar-settings-panel-mobile {
   @apply fixed inset-x-0 bottom-0 z-[69] m-0 rounded-b-none;
+  left: 0;
+  right: 0;
   border-top-left-radius: var(--ui-radius-composer);
   border-top-right-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
@@ -6057,6 +6488,10 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .sidebar-settings-hint:not(.sidebar-settings-hint-status):not(.sidebar-settings-hint-compact) {
   display: none;
+}
+
+.sidebar-settings-hint--visible {
+  display: block !important;
 }
 
 .sidebar-settings-language-dropdown {
@@ -6220,41 +6655,6 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   border-color: var(--ui-border-subtle);
 }
 
-.sidebar-settings-brand-card {
-  @apply flex items-center gap-2 border px-2.5 py-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-  box-shadow: none;
-}
-
-.sidebar-settings-brand-logo {
-  @apply h-8 w-8 shrink-0 border object-cover;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  box-shadow: none;
-}
-
-.sidebar-settings-brand-copy {
-  @apply min-w-0 flex flex-col gap-0.5;
-}
-
-.sidebar-settings-brand-kicker {
-  @apply text-[9px] font-semibold uppercase tracking-[0.08em];
-  color: var(--ui-text-tertiary);
-}
-
-.sidebar-settings-brand-title {
-  @apply text-[13px] leading-4 font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.sidebar-settings-brand-subtitle {
-  @apply hidden text-[11px] leading-4;
-  color: var(--ui-text-secondary);
-}
-
 .sidebar-settings-about-main {
   @apply flex items-center justify-between gap-2;
 }
@@ -6278,7 +6678,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-settings-about-copy {
-  @apply min-w-0 flex flex-col gap-0.5;
+  @apply min-w-0 flex items-center gap-1.5;
 }
 
 .sidebar-settings-about-label {
@@ -6289,11 +6689,6 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 .sidebar-settings-about-version {
   @apply text-sm leading-5 font-semibold;
   color: var(--ui-text-primary);
-}
-
-.sidebar-settings-about-action {
-  @apply inline-flex items-center gap-1 text-[11px] leading-4;
-  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-about-spinner {
@@ -6347,6 +6742,14 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   .content-title-refresh-button,
   .content-favorites-button {
     @apply h-9 min-w-9;
+  }
+
+  .content-side-panel-toggle {
+    @apply h-9 min-w-9 justify-center rounded-[10px] px-2;
+  }
+
+  .content-side-panel-toggle-label {
+    display: none;
   }
 }
 
@@ -6411,6 +6814,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
   .content-grid {
     @apply gap-1;
+  }
+
+  .content-workspace {
+    position: relative;
+    width: 100%;
   }
 
   .content-meta-row {
@@ -6489,12 +6897,23 @@ function onEditPendingNewThreadMessage(messageId: string): void {
     @apply px-4;
   }
 
+  .content-body--side-workspace {
+    padding-inline: 0;
+  }
+
   .content-grid {
     @apply gap-3.5;
   }
 
   .content-status-detail {
     max-width: min(44rem, 48vw);
+  }
+}
+
+@media (min-width: 1280px) {
+  .content-root {
+    --content-shell-max-width: min(60rem, calc(100vw - 2.75rem));
+    --ui-composer-max: 60rem;
   }
 }
 

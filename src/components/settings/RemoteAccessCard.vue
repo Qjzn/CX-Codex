@@ -1,14 +1,24 @@
 <template>
-  <section class="remote-access" aria-label="手机访问">
-    <div class="remote-access-heading">
-      <div>
-        <p class="remote-access-kicker">手机访问</p>
-        <p class="remote-access-title">{{ title }}</p>
-      </div>
-      <span class="remote-access-state" :data-tone="tone">{{ stateLabel }}</span>
-    </div>
+  <section class="remote-access" :data-expanded="isExpanded" aria-label="手机访问">
+    <button
+      class="remote-access-summary"
+      type="button"
+      aria-controls="remote-access-details"
+      :aria-expanded="isExpanded"
+      @click="isExpanded = !isExpanded"
+    >
+      <span class="remote-access-heading-copy">
+        <span class="remote-access-kicker">手机访问</span>
+        <span class="remote-access-title">{{ title }}</span>
+      </span>
+      <span class="remote-access-heading-end">
+        <span class="remote-access-state" :data-tone="tone">{{ stateLabel }}</span>
+        <IconTablerChevronDown class="remote-access-chevron" aria-hidden="true" />
+      </span>
+    </button>
 
-    <p class="remote-access-description">{{ description }}</p>
+    <div v-if="isExpanded" id="remote-access-details" class="remote-access-details">
+      <p class="remote-access-description">{{ description }}</p>
 
     <div v-if="status?.active && status.publicUrl" class="remote-access-url-row">
       <code class="remote-access-url">{{ status.publicUrl }}</code>
@@ -104,6 +114,7 @@
     <p class="remote-access-footnote">
       固定地址首次需安装并登录免费的 Tailscale；以后会随电脑重启恢复。临时备用地址可能变化。访问密码仅在你手动修改时改变。{{ networkHint }}
     </p>
+    </div>
   </section>
 </template>
 
@@ -117,8 +128,10 @@ import {
   type TunnelStatus,
 } from '../../api/codexGateway'
 import { copyTextToClipboard } from '../../utils/clipboard'
+import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 
 const status = ref<TunnelStatus | null>(null)
+const isExpanded = ref(false)
 const startingMode = ref<'stable' | 'quick' | ''>('')
 const isStopping = ref(false)
 const message = ref('')
@@ -332,11 +345,50 @@ onUnmounted(() => {
   padding: 10px 12px 12px;
 }
 
-.remote-access-heading {
+.remote-access-summary {
+  width: 100%;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.remote-access-summary:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 3px;
+}
+
+.remote-access-heading-copy,
+.remote-access-heading-end {
+  display: flex;
+}
+
+.remote-access-heading-copy {
+  min-width: 0;
+  flex-direction: column;
+}
+
+.remote-access-heading-end {
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.remote-access-chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--ui-text-tertiary);
+  transition: transform 120ms ease;
+}
+
+.remote-access[data-expanded='true'] .remote-access-chevron {
+  transform: rotate(180deg);
 }
 
 .remote-access-kicker,
@@ -345,6 +397,11 @@ onUnmounted(() => {
 .remote-access-message,
 .remote-access-footnote {
   margin: 0;
+}
+
+.remote-access-kicker,
+.remote-access-title {
+  display: block;
 }
 
 .remote-access-kicker {

@@ -5,6 +5,7 @@ export const APP_SERVER_RPC_INIT_TIMEOUT_MS = 60_000
 export const APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS = 15_000
 export const APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS = 30_000
 export const APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS = 60_000
+export const APP_SERVER_RPC_TERMINAL_MAX_TIMEOUT_MS = 305_000
 
 export function getRpcTimeoutMs(method: string, params: unknown): number {
   if (method === 'initialize') {
@@ -18,8 +19,15 @@ export function getRpcTimeoutMs(method: string, params: unknown): number {
       ? APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS
       : APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS
   }
-  if (method === 'thread/resume') {
+  if (method === 'thread/resume' || method === 'thread/rollback') {
     return APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS
+  }
+  if (method === 'command/exec') {
+    const configuredTimeout = (params as { timeoutMs?: unknown } | null)?.timeoutMs
+    const requestedTimeout = typeof configuredTimeout === 'number' && Number.isFinite(configuredTimeout)
+      ? Math.trunc(configuredTimeout)
+      : APP_SERVER_RPC_TIMEOUT_MS
+    return Math.min(APP_SERVER_RPC_TERMINAL_MAX_TIMEOUT_MS, Math.max(APP_SERVER_RPC_TIMEOUT_MS, requestedTimeout + 5_000))
   }
   return APP_SERVER_RPC_TIMEOUT_MS
 }

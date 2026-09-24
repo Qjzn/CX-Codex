@@ -13,6 +13,7 @@ import type {
   ThreadRuntimeSnapshot,
 } from './runtimeState.js'
 import type { RuntimeSnapshotRecord } from './runtimeStore.js'
+import { readThreadSessionPathFromThreadReadPayload } from './appServerThreadPayload.js'
 import {
   createThreadTokenUsageResolver,
   type ThreadTokenUsage,
@@ -76,6 +77,19 @@ export function createAppServerRuntimeReaders(
     readCachedThreadTokenUsage: createThreadTokenUsageResolver({
       getCachedTokenUsage: dependencies.getThreadTokenUsage,
       getCachedThreadRead: dependencies.getCachedThreadRead,
+      readSessionPathForThread: async (threadId) => {
+        try {
+          const threadRead = await dependencies.rpc('thread/read', {
+            threadId,
+            includeTurns: false,
+          })
+          const sessionPath = readThreadSessionPathFromThreadReadPayload(threadRead)
+          if (sessionPath) dependencies.rememberCachedThreadRead(threadId, threadRead)
+          return sessionPath || null
+        } catch {
+          return null
+        }
+      },
     }),
   }
 }

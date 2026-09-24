@@ -539,6 +539,7 @@ const isForegroundResumeScrollFixture = fixtureParams.get('foregroundResumeScrol
 const isImagePreviewFixture = fixtureParams.get('imagePreview') === '1'
 const isMarkdownImageFixture = fixtureParams.get('markdownImage') === '1'
 const isMarkdownSemanticFixture = fixtureParams.get('markdownSemantic') === '1'
+const isMarkdownMathFixture = fixtureParams.get('markdownMath') === '1'
 const isAttachmentEnvelopeFixture = fixtureParams.get('attachmentEnvelope') === '1'
 const isMessageActionHitFixture = fixtureParams.get('messageActionHit') === '1'
 const isPlanFixture = fixtureParams.get('plan') === '1'
@@ -608,6 +609,28 @@ const markdownSemanticMessages: UiMessage[] = [
       '[soak-20260829-090007.json](E:/workspace/CXCodex/reports/soak-20260829-090007.json)',
     ].join('\n'),
     turnIndex: 12,
+  },
+]
+const markdownMathMessages: UiMessage[] = [
+  {
+    id: 'fixture-markdown-math',
+    role: 'assistant',
+    text: [
+      '行内公式：$E=mc^2$，以及 \\(a^2+b^2=c^2\\)。',
+      '',
+      '$$',
+      '\\frac{1}{n}\\sum_{i=1}^{n} i = \\frac{n+1}{2}',
+      '$$',
+      '',
+      '\\[',
+      '\\int_0^1 x^2\\,dx = \\frac{1}{3}',
+      '\\]',
+      '',
+      '```latex',
+      '$x$ should stay source text inside a code fence.',
+      '```',
+    ].join('\n'),
+    turnIndex: 13,
   },
 ]
 const attachmentEnvelopeMessages = normalizeThreadMessagesV2({
@@ -807,6 +830,7 @@ const fixtureMessages = computed(() => {
   if (isImagePreviewFixture) return [...messages, imagePreviewMessage]
   if (isMarkdownImageFixture) return [...messages, ...markdownImageMessages]
   if (isMarkdownSemanticFixture) return markdownSemanticMessages
+  if (isMarkdownMathFixture) return markdownMathMessages
   if (isAttachmentEnvelopeFixture) return attachmentEnvelopeMessages
   if (isFileCitationFixture) return fileCitationMessages
   if (isPlanFixture) {

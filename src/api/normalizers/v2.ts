@@ -394,6 +394,68 @@ function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
   ]
 }
 
+function isAssistantTextMessage(message: UiMessage): boolean {
+  return message.role === 'assistant'
+    && message.messageType === 'agentMessage'
+    && message.text.trim().length > 0
+}
+
+function isAssistantCommentaryMessage(message: UiMessage): boolean {
+  return isAssistantTextMessage(message) && message.phase === 'commentary'
+}
+
+function isAssistantImageOnlyMessage(message: UiMessage): boolean {
+  return message.role === 'assistant'
+    && message.text.trim().length === 0
+    && (message.images?.length ?? 0) > 0
+}
+
+function findNearestAssistantTextMessageIndex(messages: UiMessage[], imageIndex: number): number {
+  for (let index = imageIndex - 1; index >= 0; index -= 1) {
+    if (isAssistantCommentaryMessage(messages[index]!)) return index
+  }
+  for (let index = imageIndex + 1; index < messages.length; index += 1) {
+    if (isAssistantCommentaryMessage(messages[index]!)) return index
+  }
+  for (let index = imageIndex - 1; index >= 0; index -= 1) {
+    if (isAssistantTextMessage(messages[index]!)) return index
+  }
+  for (let index = imageIndex + 1; index < messages.length; index += 1) {
+    if (isAssistantTextMessage(messages[index]!)) return index
+  }
+  return -1
+}
+
+function mergeTurnAssistantImages(messages: UiMessage[]): UiMessage[] {
+  const imageIndexes = messages
+    .map((message, index) => (isAssistantImageOnlyMessage(message) ? index : -1))
+    .filter((index) => index >= 0)
+  if (imageIndexes.length === 0) return messages
+
+  const mergedImagesByTarget = new Map<number, string[]>()
+  const mergedImageIndexes = new Set<number>()
+  for (const imageIndex of imageIndexes) {
+    const imageMessage = messages[imageIndex]
+    if (!imageMessage) continue
+    const targetIndex = findNearestAssistantTextMessageIndex(messages, imageIndex)
+    if (targetIndex < 0) continue
+
+    const targetImages = mergedImagesByTarget.get(targetIndex) ?? [...(messages[targetIndex]?.images ?? [])]
+    for (const image of imageMessage.images ?? []) {
+      if (image.trim().length > 0 && !targetImages.includes(image)) targetImages.push(image)
+    }
+    mergedImagesByTarget.set(targetIndex, targetImages)
+    mergedImageIndexes.add(imageIndex)
+  }
+
+  if (mergedImageIndexes.size === 0) return messages
+  return messages.flatMap((message, index) => {
+    if (mergedImageIndexes.has(index)) return []
+    const images = mergedImagesByTarget.get(index)
+    return images ? [{ ...message, images }] : [message]
+  })
+}
+
 function normalizeCommandStatus(value: unknown): CommandExecutionData['status'] {
   if (value === 'completed' || value === 'failed' || value === 'declined' || value === 'interrupted') return value
   if (value === 'inProgress' || value === 'in_progress') return 'inProgress'
@@ -566,6 +628,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
       })
       continue
     }
+    const turnMessages: UiMessage[] = []
     for (const item of items) {
       const threadItem = (
         item && typeof item === 'object' && !Array.isArray(item)
@@ -574,9 +637,10 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
       ) as ThreadItem
       const turnId = readTrimmedString(rawTurn.id)
       for (const msg of toUiMessages(threadItem, turnId)) {
-        messages.push({ ...msg, turnIndex: absoluteTurnIndex, ...(turnId ? { turnId } : {}) })
+        turnMessages.push({ ...msg, turnIndex: absoluteTurnIndex, ...(turnId ? { turnId } : {}) })
       }
     }
+    messages.push(...mergeTurnAssistantImages(turnMessages))
   }
   return messages
 }

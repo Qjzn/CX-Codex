@@ -1,5 +1,162 @@
 # Tests
 
+## 侧边终端 WebSocket 来源校验（2026-09-24）
+
+浏览器连接终端时，`Origin` 必须与请求 `Host` 的主机和端口一致；缺失、跨域、端口不同或无效来源返回 403，且不得启动 PTY。原有会话鉴权仍需通过。`npm run verify:server-modules` 覆盖本机和远程域名的同源请求以及上述拒绝场景；真实 Tailscale 远程连接尚未测试。回滚时一起回退 `terminalPtyWebSocket.ts`、server smoke 和本节记录。
+
+## 远程隧道账号密码登录（2026-09-23）
+
+### Expected behavior
+
+1. 远程登录页直接显示网页内的账号和密码表单；账号可填任意非空名称，访问权限仍由当前访问密码验证。
+2. 登录页不返回 `WWW-Authenticate`，避免浏览器或 Android WebView 打开原生 Basic 认证框；`GET /auth/basic-login` 回到普通登录页。
+3. 表单继续通过 `POST /auth/login` 换发 HttpOnly、SameSite=Strict 会话 Cookie；错误密码仍受五次失败后暂时封锁限制，仅带 Basic 头不能访问 API 或 WebSocket。
+
+### Verification
+
+- `npm run build`：验证前端/CLI 构建。
+- `npm run verify:server-modules`：验证隧道 Host 下返回普通登录页、不含 Basic challenge、账号/密码表单登录、Secure 会话 Cookie、错误密码限流和 API 鉴权。
+- 本地反向代理 HTTP smoke：`GET /auth/basic-login` 返回 303 并回到根路径；根路径及携带旧 Basic 凭据的请求均返回 200 表单且不含 `WWW-Authenticate`。
+- 手工经 ngrok/同类 HTTPS 隧道访问登录页，确认桌面浏览器和 Android WebView 均显示网页内表单，不弹原生认证框；成功登录后确认会话 Cookie 及 API/WebSocket 会话。
+- 本次未连接真实隧道端点执行浏览器和 Android 联调；该行为仍需在实际隧道地址上复核。
+
+### Rollback
+
+- 回退 `src/server/authMiddleware.ts` 与本节即可恢复仅访问密码表单登录；不改动现有密码配置或令牌状态文件。
+
+## 持续目标发送后自动关闭（2026-09-22）
+
+### Expected behavior
+
+1. 已开启 `持续目标` 时发送消息，消息提交成功后目标状态变为 `paused`，Composer 中的持续目标开关自动关闭。
+2. 新会话和已有会话使用相同规则；消息保存或发送失败时不自动暂停目标，保留可重试状态。
+
+### Verification
+
+- `npm run build:frontend`：验证 Composer、App 和持续目标状态同步的 Vue 类型与前端构建。
+- 打开 `/#/__regression/composer-shell?regression=frontend&goal=1&goalSwitch=1`，确认发送带持续目标的消息后 `.thread-composer-switch.is-on` 数量归零，并截图记录关闭后的 Composer。
+- Headless Chromium（1440×900）实测 `activeSwitchCount=0`、`goalChipCount=0`、无 `pageerror`；截图：`/mnt/nvme1/PUBLIC/xinrui/.codex/visualizations/2026/09/22/01a0c928-0221-7db1-ae90-d3f28fb4bc51/continuous-goal-submit/continuous-goal-off.png`。
+
+### Rollback
+
+- 一起回退 `src/App.vue`、`src/composables/useDesktopState.ts`、`src/components/content/ThreadComposer.vue`、Composer 回归夹具及本节记录；不删除已保存的线程目标。
+
+## 设置版本入口收紧（2026-09-22）
+
+### Expected behavior
+
+1. 设置中的 Android Shell / CX-Codex 标识区域不再显示。
+2. 版本入口压缩为单行，仅显示当前版本号；点击入口仍打开 GitHub Releases 页面。
+
+### Verification
+
+- `npm run build:frontend`：Vue 类型检查、前端构建、本地预览构建和 Brotli 预压缩通过。
+- Headless Chromium（桌面 1440×900、手机 393×852）：设置面板中版本内容高度均为 20px，版本号为 `2.8.0`，品牌区域和可见“打开 GitHub 发布页”文字均为 0，无横向溢出；点击入口捕获到 `https://github.com/Qjzn/CX-Codex/releases`。
+- 截图：`output/regression-7420/settings-brand-removal-20260922/about-one-line-desktop.png`、`output/regression-7420/settings-brand-removal-20260922/about-one-line-phone.png`。
+
+### Rollback
+
+- 回退 `src/App.vue` 中设置版本入口的模板和样式改动；不影响版本检查、更新安装或 GitHub Releases 地址逻辑。
+
+## 侧边终端隐藏垂直滚动栏（2026-09-22）
+
+### Expected behavior
+
+1. 侧边真实终端不显示上下滚动栏，但终端内容仍可通过滚轮、触控板或键盘滚动。
+
+### Verification
+
+- `npm run build:frontend`：验证 Vue 样式编译和前端构建。
+- Headless Chromium fallback 打开侧边终端并截图，确认 xterm viewport 的 `scrollbar-width` 为 `none`、WebKit 滚动条不显示，且侧边终端无页面级横向溢出；本机未安装 Playwright npm 包。
+
+### Rollback
+
+- 回退 `src/components/content/ThreadSidePanel.vue` 中 xterm viewport 的滚动栏样式和本节测试记录。
+
+## 原生侧边会话生命周期（2026-09-22）
+
+### Expected behavior
+
+1. 侧边聊天使用 App Server 原生 `thread/start`/`thread/fork`：新会话带 `ephemeral: true`；已有会话 fork 同时带 `ephemeral: true` 与 `excludeTurns: true`，主会话历史仅作为参考上下文，不回填到侧边消息列表。
+2. 创建成功后注入明确的 side-conversation boundary 和 developer policy；边界前的主会话指令、计划、工具调用和审批均不得被侧边会话当作当前任务继续执行。
+3. 关闭侧边聊天、切换到终端、切换主会话或卸载组件时，先中断活动 turn，再调用 `thread/unsubscribe`；通知订阅和 turn waiter 同时清理，ephemeral thread id 不写回可恢复的 localStorage 状态。
+4. 侧边标签切换只挂载当前 panel，旧聊天 panel 卸载并执行上述生命周期；重新打开侧边工作区创建新的 ephemeral thread。
+
+### Verification
+
+- `npm run build:frontend`、`npm run build:cli`、`npm run verify:frontend-normalizers`、使用 `CX_CODEX_NODE_LOADER`/`CX_CODEX_NODE_LIBRARY_PATH`/`CX_CODEX_NODE_EXECUTABLE` 的 `npm run verify:server-modules` 与 `git diff --check`：验证 Vue/CLI 构建、normalizer、server smoke 和差异格式。
+- server smoke 在本机系统 glibc 2.27 上必须通过任务级用户态 glibc 2.39 loader 运行；不修改系统 `/lib` 或 loader。浏览器回归需检查创建侧边聊天、标签切换卸载和关闭/unmount 清理。
+- Codex CLI `0.155.1` 的 `/side` 协议探针确认 `thread/start { ephemeral: true }`、`thread/fork { ephemeral: true, excludeTurns: true }` 可用；本机未安装 `/Applications/Codex.app`，因此本项采用 CLI/App Server 协议 fallback，未宣称桌面 bundle parity 已验证。
+
+### Verification result
+
+- 直接用系统 Node 运行 server smoke 会因 `better-sqlite3` 需要 `GLIBC_2.29` 而在系统 glibc 2.27 上失败；用 AGENTS.md 记录的用户态 glibc 2.39 loader 重跑通过，输出为 `server module smoke ok`。
+- Headless Chromium 实测新会话侧边聊天：真实 RPC 依次出现 `thread/start { ephemeral: true }`、`thread/inject_items`、切换到终端后的 `thread/unsubscribe`；随后选取已有主会话，真实 RPC 出现 `thread/fork { ephemeral: true, excludeTurns: true }`、boundary `thread/inject_items` 和关闭后的 `thread/unsubscribe`。两组 localStorage side-chat 状态的 `threadId` 均为空，关闭工作区后无残留。证据截图：`output/regression-7420/native-side-thread-20260922/side-chat-open-latest.png`。
+- 本次 smoke 没有活动 side turn，因此未产生 `turn/interrupt`；有活动 turn 时的实现顺序仍是 interrupt 后 unsubscribe。页面脚本没有 `pageerror`，但现有 7420 服务在加载期间仍报告资源级 404/502 探针警告，未将其归因于本次侧边线程改动。
+
+### Rollback
+
+- 一起回退 `src/api/codexGateway.ts` 的 side RPC/lifecycle、`src/components/content/ThreadSidePanel.vue`、`src/components/content/ThreadSideWorkspace.vue`、`src/App.vue` 的侧边挂载和本节文档；不删除主会话、Runtime Store 或用户配置。
+
+## 侧边聊天连续输入与窄屏工作区（2026-09-23）
+
+1. 侧边聊天提交后保持 composer 可编辑；第二条消息不能取消、覆盖或误报第一条消息的流式回复。每个 side turn 必须拥有独立的完成等待器，关闭、切换主会话或切换侧边标签时才统一取消仍活动的等待器。
+2. 侧边工作区在桌面仅以一条左侧分隔线与主聊天划分，不使用独立外框；在 1023px 及以下视口覆盖主内容，并在工作区标题栏提供“主聊天”返回操作。
+3. 标签栏在当前标签切换时将该标签滚入可视范围；标签超出可视区时可横向滚动访问，新增“+”按钮紧邻最后一个标签。标签可收缩且名称省略，不得挤出关闭按钮或造成页面级横向滚动。
+
+验证与回滚：
+
+- 运行 `npm run build:frontend`；在有 Playwright 的环境中以 1440×900 和 393×852 打开含多个侧边标签的真实会话，连续发送两条消息，确认输入框在首条回复期间仍可输入和发送、两条回复均按其 turn 归属更新，窄屏返回后回到主聊天，标签栏无左右翻页箭头且“+”按钮紧邻最后一个标签；横向滚动后仍可访问所有标签。保留截图。
+- 本机 `npm run test:7420:frontend` 需要 PowerShell，但当前 Linux 用户态环境没有 `pwsh`/`powershell`；浏览器端 Playwright npm 包同样未安装，故尚未在本机执行该项真实浏览器验证。
+- 回退 `src/components/content/ThreadSidePanel.vue`、`src/components/content/ThreadSideWorkspace.vue` 与本节记录即可恢复此前行为；不会影响主聊天、Runtime Store 或已存在的 side thread。
+
+## 侧边工作区全宽双栏与可伸缩标签（2026-09-23）
+
+### Expected behavior
+
+1. 横屏打开侧边工作区时，主聊天和侧边区域从内容左边界连续铺到右边界，中间只有一条可拖拽的垂直分隔线；拖动范围为侧边区域 24%–52%，两侧内容在各自区域内居中并随区域宽度缩放。
+2. 标签栏保持透明，不使用整栏底色；每个标签是可伸缩的圆角矩形，名称过长时省略，关闭按钮不被挤出。标签超出可视区时可横向滚动，当前标签自动滚入可见范围；“+”按钮位于滚动容器内并紧邻最后一个标签。
+3. 竖屏仍覆盖主内容；“主聊天”返回按钮可关闭覆盖层并恢复主聊天。
+
+### Verification
+
+- `npm run build:frontend`：验证双栏布局、标签分页状态和并发侧边消息类型检查与构建。
+- `git diff --check`：确认样式与文档差异无空白错误。
+- Headless Chromium CDP fallback（1440×900）实测 `.content-workspace` 从内容区 `x=294` 延伸至 `right=1440`，主聊天和侧边区域无中间留白；默认侧边宽度为 38%（435.47px），拖动后可到 24%（275.03px）和 52%，两侧子面板仍分别贴住对应区域边界。820px 紧凑视口下工作区切换为全屏覆盖，`主聊天` 返回按钮可见；截图：`/tmp/cx-codex-side-layout.png`。
+- 本轮 Headless Chromium CDP fallback（393×852 与 1440×900）确认标签栏不再渲染左右箭头（`.thread-side-workspace-tab-scroll` 数量为 0），8 个标签保持最小可读宽度并可横向滚动；“+”按钮位于滚动容器内并紧邻最后一个标签。点击“+”后菜单左边缘在手机视口与按钮左边缘重合；桌面端在靠右时按工作区边界收敛但仍贴近按钮。截图：`/tmp/cx-codex-side-tabs-mobile.png`、`/tmp/cx-codex-side-menu-mobile-final.png`、`/tmp/cx-codex-side-menu-desktop.png`。
+- 有 Playwright 时，以 1440×900 检查工作区是否无内容级最大宽度留白、拖动分隔线后两侧宽度变化、标签栏无左右箭头且“+”按钮紧邻最后一个标签；以 393×852 检查覆盖层、返回主聊天和标签横向滚动可达性。当前环境缺少 Playwright npm 包及 `pwsh`，Codex.app 也未安装；本轮使用 Chromium CDP fallback 作为局部交互证据，未宣称 Playwright/full frontend gate 通过。
+
+### Rollback
+
+- 回退 `src/App.vue`、`src/components/content/ThreadSideWorkspace.vue`、`src/components/content/ThreadSidePanel.vue`、`src/api/codexGateway.ts` 与本节记录即可恢复此前侧边布局和关闭清理行为；不影响主聊天或 Runtime Store。
+
+## 会话正文 LaTeX/数学公式渲染（2026-09-21）
+
+### Expected behavior
+
+1. 助手正文支持 `$...$` 与 `\\(...\\)` 行内公式，以及独立行的 `$$...$$` 与 `\\[...\\]` 块级公式。
+2. 公式使用 KaTeX 的 HTML + MathML 输出，并保留源公式的可访问标签；KaTeX `trust` 保持关闭，原始 HTML 仍不进入消息 DOM。
+3. 完整代码围栏和行内代码中的 `$...$` 必须保持代码文本，不得误判为公式；不完整或无法解析的公式必须回退为可读源文本。
+4. 长块级公式在桌面和手机端只能在消息内容内部横向滚动，不得造成页面级横向溢出。
+
+### Dependency impact
+
+- 新增 `katex` 作为唯一数学排版运行时依赖，替代维护不完整的自定义 TeX 排版器；生产构建会附带 KaTeX 字体与样式，公式能力因此增加固定前端体积。
+- `DOMPurify` 已是现有运行时依赖，本项复用它清理 KaTeX 生成的 HTML/MathML；KaTeX 的 `trust: false` 和 DOMPurify 不能被移除后直接使用 `v-html`。
+- 若后续不再需要公式能力，按本节 Rollback 一起移除 KaTeX 依赖、CSS 引入、解析模块和回归夹具，不影响会话协议或 Runtime 数据。
+
+### Verification
+
+- `npm run build:frontend`：验证 Vue 类型、主前端、本地预览和预压缩构建。
+- `npm run verify:frontend-normalizers`：验证两种行内/块级分隔符、代码围栏保护，以及 KaTeX HTML + MathML 输出。
+- `git diff --check`：验证源码和文档差异格式。
+- 打开 `/#/__regression/conversation-blocks?regression=frontend&markdownMath=1`，在桌面与 393px 手机宽度确认至少有两个 `.message-math-inline`、两个 `.message-math-block`，块级公式包含 KaTeX 输出，代码围栏仍显示 `$x$` 源文本，且页面无横向溢出。
+- 现有 `markdownSemantic=1`、图片、代码块、表格和附件夹具继续作为兼容性回归；本项尚未替代真实 7420 会话中的浏览器验证。
+
+### Rollback
+
+- 一起回退 `katex` 依赖及锁文件、`src/utils/conversationMath.ts`、Markdown/ThreadConversation 解析显示改动、KaTeX 样式引入和数学公式回归夹具；不迁移或清理会话、Runtime SQLite 或用户配置。
+
 ## Markdown 15 compatibility (2026-09-08)
 
 - Conversation ordered lists preserve their original starting number when parser attributes are numeric or textual. Headings, quotes and unfinished code fences retain their existing behavior.
@@ -275,6 +432,8 @@
 1. 首页 H5 回归必须通过真实 7420 `model/list` 分页读取当前可见模型，不能只验证静态 Composer 夹具。
 2. 模型面板中的模型数量、显示名、描述和默认标记与实时目录一致；元数据完成后不残留禁用占位项，并且恰好有一个当前选中模型。
 3. 检查只读取模型目录并打开/关闭配置面板，不切换模型、不修改配置，也不把具体模型名称固化为产品常量。
+4. 桌面端模型选项使用双列布局；描述不直接显示在模型名称下，鼠标悬停模型项时通过提示显示解释。
+5. 侧栏会话标题与右侧时间/操作控件在各自行框内视觉居中，切换 hover 操作不改变会话行高度。
 
 ### Verification
 
@@ -649,6 +808,8 @@ This file tracks manual regression and feature verification steps.
 2. Users do not need to scroll past package usage or permission controls before they can generate, copy, open, refresh, stop, or inspect the local pairing password.
 3. Package usage, permission controls, Android-only settings, voice settings, and version information retain their existing behavior and relative order.
 4. The phone-access card keeps its safety verification and responsive layout while clearly distinguishing the recommended fixed address from the temporary fallback.
+5. Opening settings displays the settings panel as an overlay above the bottom actions; expanding it does not move the sidebar conversation list upward.
+6. The settings overlay hides its visible scrollbar, keeps rounded corners, and the active 设置 button uses a white background.
 
 ### Verification
 
@@ -1867,7 +2028,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm internal `<recommended_plugins>` / Codex context messages, trailing `<oai-mem-citation>` blocks, and supported `::git-*` / task directives do not appear as chat content.
 5. Reload the thread and confirm the existing conversation is readable before deferred capability metadata completes; after the background refresh, open the model control.
 6. Confirm the model list matches visible `model/list` entries, uses server display names/descriptions/default markers, and only offers reasoning levels supported by the selected model. If the runtime later exposes GPT-5.6 variants, confirm they appear without a frontend code change.
-7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, persistent `计划模式`, `本轮要求（一次性）`, `插件`, and enabled skills remain available with concise descriptions.
+7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, persistent `计划模式`, `持续目标`, `本轮要求（一次性）`, `插件`, and enabled skills remain available with concise descriptions. With an active 持续目标, confirm 计划模式 cannot be enabled; pause or clear the goal and confirm 计划模式 can be enabled again. Confirm 本轮要求（一次性） remains independent and still applies only to the next message.
 8. Open the plugin subview and confirm installed/enabled native plugins appear as soon as `plugin/list` returns without waiting for the slower MCP scan; after background completion, search by name and confirm only usable ready/login-required MCP servers are merged. Use Tab/Shift+Tab to confirm focus stays inside the mobile sheet, then close it with Escape or the close control and confirm focus returns to `+`.
 9. Save a draft with one skill/plugin selected and reload. Before capability metadata completes, confirm a compact `正在恢复 N 项能力` state is shown and Send is disabled; after loading, confirm valid selections are restored, unavailable selections are removed, and the draft text is preserved.
 10. Start a reply from the second client. Confirm the first assistant text appears immediately, subsequent text remains smooth, only one copy of the live answer is visible, and the compact activity overlay yields to the answer text.
@@ -4821,23 +4982,24 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 准备一个当前无运行任务的已有会话。
 
 #### Steps
-1. 打开会话，点击输入区上方的 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
-2. 确认目标条显示目标、运行提示、预算使用百分比和耗时；刷新页面并重新进入会话。
-3. 在目标运行时点击 `暂停`，确认任务完成后不会自动继续；再点击 `继续`，确认空闲时继续推进。
-4. 点击 `编辑` 修改目标，确认状态和已用量保持为服务端返回值。
-5. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
-6. 点击 `清除`，确认界面先展示目标摘要和 `确认清除`，取消一次后重新确认清除，刷新页面确认目标不再出现。
-7. 在移动宽度确认只保留 `暂停/继续` 主操作，`编辑/清除` 收入更多菜单，所有直接操作目标至少为 44px；目标正文最多显示两行且页面无横向溢出。
-8. 模拟 `thread/goal/get` 失败，确认错误显示在目标栏附近、草稿不丢失且 `重试` 可恢复；快速重复触发刷新时只保留一个读取请求，较旧响应不会覆盖更新后的目标。
-9. 打开目标编辑器并输入未保存内容，切换到另一个会话，确认编辑器、更多菜单和清除确认全部关闭，新会话不会继承上一会话草稿。
-10. 同时开启计划模式与活跃持续目标，确认目标栏明确提示 `计划模式只影响新消息；持续目标仍会推进`，暂停目标仍是直接操作。
-11. 在手机宽度用键盘打开目标更多菜单，确认焦点进入第一个菜单项，方向键可移动，Escape 关闭并回到触发按钮；点击菜单外部也会关闭。打开清除确认后等待超过 6 秒，确认操作不会自行消失。
+1. 打开会话，点击输入框的 `+` 菜单，打开 `持续目标` 开关；在主输入框输入可衡量目标并发送。
+2. 在首页新建任务时也打开 `持续目标` 开关，输入目标并发送；确认先创建新线程，再用返回的真实 `threadId` 调用 `thread/goal/set`，目标状态变为 active。
+3. 确认发送消息后持续目标开关自动关闭；刷新页面并重新进入会话时，已暂停目标仍显示为暂停状态。
+4. 在目标运行时关闭 `持续目标` 开关，确认任务完成后不会自动继续；再次打开开关，确认目标恢复推进。
+5. 打开 `持续目标` 开关，在主输入框输入新目标并发送，确认状态和已用量保持为服务端返回值且目标内容更新。
+6. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
+7. 通过服务端清除目标后刷新页面，确认 `持续目标` 开关恢复为关闭状态；重新打开开关可设置新目标。
+8. 在移动宽度确认持续目标仍以 `+` 菜单中的单个开关显示，主输入框可直接编辑目标并发送，页面无横向溢出。
+9. 模拟 `thread/goal/get` 失败，确认错误显示在 `+` 菜单中的持续目标项附近、主输入框草稿不丢失；快速重复触发刷新时只保留一个读取请求，较旧响应不会覆盖更新后的目标。
+10. 打开持续目标开关并输入未发送内容，切换到另一个会话，确认目标草稿按普通输入草稿隔离，新会话不会继承上一会话内容。
+11. 在活跃持续目标时打开 `+` 菜单，确认 `计划模式` 不能开启；暂停或清除目标后确认可以重新开启计划模式。确认 `本轮要求（一次性）` 仍可独立开启，不会被持续目标或计划模式改写。
+12. 在手机宽度用键盘打开 `+` 菜单，确认持续目标开关与计划模式使用相同的可聚焦开关样式，输入框仍可正常编辑和发送，页面无横向溢出。
 
 #### Expected Results
 - 目标状态以 App Server 为唯一事实来源，通过 `thread/goal/updated` / `thread/goal/cleared` 实时同步。
 - 活跃目标仅在会话空闲、无排队消息且无待处理授权时继续，不与用户消息抢占执行。
 - 目标读取失败不阻塞会话加载；读取请求按会话去重并以状态代次阻止旧响应回写；保存、状态切换或清除失败会保留当前草稿和可重试界面并显示就近错误。
-- 目标用量在移动端仍可见，计划模式与持续目标并存时不隐藏执行边界；切换会话不会携带任何目标栏临时交互状态。
+- 目标用量在移动端仍可见；持续目标开关位于 `+` 菜单，选中后像计划模式一样在输入框上方显示状态标注；活跃持续目标与计划模式互斥，切换会话不会携带任何目标控件临时交互状态。
 
 #### Rollback/Cleanup
 - 清除回归目标；若需回退，恢复 `threadGoal.ts`、`useDesktopState.ts`、`ThreadGoalBar.vue` 及 App 接线改动。
@@ -16895,3 +17057,8 @@ Verification:
 ### Rollback
 
 - 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。
+## Feature: Web settings Android pairing address and ngrok entry (2026-09-23)
+
+The Web settings panel always exposes an Android pairing address. In a browser it copies the current page's origin/path without its query string or hash; it does not claim it can change the separate Android app's local configuration. HTTPS ngrok domains are identified with setup guidance, while loopback and non-HTTPS pages warn that a phone normally cannot reach them. Native Android continues to validate and persist the canonical base URL, and sends `ngrok-skip-browser-warning: 1` for recognized `*.ngrok.app`, `*.ngrok-free.app`, and `*.ngrok-free.dev` main-frame loads so ngrok's browser warning does not replace the app.
+
+Manual check: open Settings from a normal browser through an `https://<name>.ngrok-free.app/#/thread/...` or `https://<name>.ngrok-free.dev/#/thread/...` URL, verify the Android card is visible, copy its address, and confirm the clipboard value contains only the origin. Paste it into the Android app's initial connection screen, then confirm the app reaches the CX-Codex page rather than ngrok's warning page. Repeat from `http://localhost:7420` and verify the card shows the unreachable-address warning.

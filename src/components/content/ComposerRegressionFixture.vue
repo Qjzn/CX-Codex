@@ -24,20 +24,6 @@
         <span v-if="isGoalSwitchFixture" data-testid="active-goal-thread">{{ fixtureThreadId }}</span>
         <span class="composer-regression-submit-count">{{ submitCount }}</span>
       </div>
-      <ThreadGoalBar
-        v-if="showGoalFixture"
-        :key="fixtureThreadId"
-        :goal="fixtureGoal"
-        :is-loading="false"
-        :is-updating="false"
-        :error="fixtureGoalError"
-        :plan-mode-active="selectedCollaborationMode === 'plan'"
-        execution-hint="等待消息队列"
-        @set-goal="updateFixtureGoal"
-        @set-status="updateFixtureGoalStatus"
-        @clear-goal="fixtureGoal = null"
-        @retry="fixtureGoalError = ''"
-      />
       <ThreadComposer
         ref="composerRef"
         active-thread-id="fixture-thread-composer"
@@ -48,6 +34,10 @@
         selected-reasoning-effort="high"
         selected-speed-mode="fast"
         :selected-collaboration-mode="selectedCollaborationMode"
+        :thread-goal="showGoalFixture ? fixtureGoal : undefined"
+        :is-thread-goal-loading="false"
+        :is-thread-goal-updating="false"
+        :thread-goal-error="fixtureGoalError"
         :skills="skills"
         :plugins="plugins"
         :is-loading-plugins="false"
@@ -64,6 +54,7 @@
         @update:selected-reasoning-effort="noop"
         @update:selected-speed-mode="noop"
         @update:selected-collaboration-mode="selectedCollaborationMode = $event"
+        @set-thread-goal-status="updateFixtureGoalStatus"
         @refresh-plugins="noop"
         @reload-plugins="noop"
         @login-plugin="noop"
@@ -76,7 +67,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import ThreadComposer, { type SubmitPayload, type ThreadComposerExposed } from './ThreadComposer.vue'
-import ThreadGoalBar from './ThreadGoalBar.vue'
 import type { CollaborationMode, ComposerModelInfo, ComposerPluginInfo, ReasoningEffort, UiThreadGoal } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import { resolveSendWithEnterPreference } from '../../composables/composerEnterBehavior'
@@ -197,7 +187,7 @@ function noop(): void {
 
 function updateFixtureGoal(objective: string): void {
   fixtureGoal.value = fixtureGoal.value
-    ? { ...fixtureGoal.value, objective, updatedAt: Date.now() }
+    ? { ...fixtureGoal.value, objective, status: 'active', updatedAt: Date.now() }
     : {
         threadId: fixtureThreadId.value,
         objective,
@@ -229,8 +219,12 @@ function switchFixtureGoalThread(): void {
   }
 }
 
-function onSubmit(_payload: SubmitPayload): void {
+function onSubmit(payload: SubmitPayload): void {
   submitCount.value += 1
+  if (payload.threadGoalObjective) {
+    updateFixtureGoal(payload.threadGoalObjective)
+    updateFixtureGoalStatus('paused')
+  }
 }
 
 function insertMockDictation(): void {

@@ -346,8 +346,8 @@ const LIVE_DELTA_BATCH_MS = 48
 const THREAD_GOAL_CONTINUATION_DELAY_MS = 750
 const NOTIFICATION_STALE_MS = 30000
 const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
-const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
-const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 11000
+const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 30 * 1000
+const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 1600
 const THREAD_SELECTION_SKILLS_IDLE_DELAY_MS = 8000
 const MODEL_PREFERENCES_IDLE_DELAY_MS = 1200
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
@@ -1327,13 +1327,17 @@ function mergeIncomingWithLocalInProgressThreads(
   previous: UiProjectGroup[],
   incoming: UiProjectGroup[],
   inProgressById: Record<string, boolean>,
+  preservedThreadId = '',
 ): UiProjectGroup[] {
   const incomingThreadIds = new Set(flattenThreads(incoming).map((thread) => thread.id))
-  const localInProgressThreads = flattenThreads(previous).filter(
-    (thread) => inProgressById[thread.id] === true && !incomingThreadIds.has(thread.id),
+  const localThreadsToPreserve = flattenThreads(previous).filter(
+    (thread) => (
+      (inProgressById[thread.id] === true || thread.id === preservedThreadId) &&
+      !incomingThreadIds.has(thread.id)
+    ),
   )
 
-  if (localInProgressThreads.length === 0) {
+  if (localThreadsToPreserve.length === 0) {
     return incoming
   }
 
@@ -1346,7 +1350,7 @@ function mergeIncomingWithLocalInProgressThreads(
     threads: [...group.threads],
   }))
 
-  for (const thread of localInProgressThreads) {
+  for (const thread of localThreadsToPreserve) {
     const existingGroup = incomingByProjectName.get(thread.projectName)
     if (existingGroup) {
       const mergedGroupIndex = merged.findIndex((group) => group.projectName === thread.projectName)
@@ -1614,6 +1618,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   let pendingThreadsRefresh = false
   const pendingThreadMessageRefresh = new Set<string>()
   const pendingSessionLogMessageRefresh = new Set<string>()
+  // A successful thread/rollback response already contains the authoritative
+  // post-revert messages. Keep the next background sync from immediately
+  // replacing that local projection with a stale thread snapshot.
+  const locallyRevertedThreadIds = new Set<string>()
   let visibilitySyncTimer: number | null = null
   const resumeSyncTimers = new Set<number>()
   let foregroundRecoveryFeedbackTimer: number | null = null
@@ -2300,10 +2308,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     pendingThreadsRefresh = true
   }
 
-  async function retryPendingTurnWithFallback(threadId: string): Promise<void> {
+  async function retryPendingTurnWithFallback(threadId: string, failedTurnId: string): Promise<void> {
     if (fallbackRetryInFlightThreadIds.has(threadId)) return
     const pending = pendingTurnRequestByThreadId.value[threadId]
     if (!pending || pending.fallbackRetried) return
+    const normalizedFailedTurnId = failedTurnId.trim()
+    if (!normalizedFailedTurnId) {
+      const errorMessage = '无法确定失败回合，已停止自动重试以避免重复发送。'
+      setTurnErrorForThread(threadId, errorMessage)
+      error.value = errorMessage
+      return
+    }
 
     fallbackRetryInFlightThreadIds.add(threadId)
     setPendingTurnRequest(threadId, {
@@ -2314,16 +2329,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     try {
       await applyFallbackModelSelection()
       // Remove the failed user turn before replaying on fallback model to avoid duplicated user messages.
-      try {
-        const rolledBackMessages = await rollbackThread(threadId, 1)
-        setPersistedMessagesForThread(threadId, rolledBackMessages)
-        setLiveAgentMessagesForThread(threadId, [])
-        clearLiveReasoningForThread(threadId)
-        if (liveCommandsByThreadId.value[threadId]) {
-          liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
-        }
-      } catch {
-        // If rollback fails, continue with retry rather than dropping the turn.
+      // The stable protocol identifies the rollback target by count rather than
+      // turn id. The completed notification's turn id is still a required gate:
+      // without it, do not risk replaying the pending request as a duplicate.
+      const rolledBackMessages = await rollbackThread(threadId, 1)
+      setPersistedMessagesForThread(threadId, rolledBackMessages)
+      setLiveAgentMessagesForThread(threadId, [])
+      clearLiveReasoningForThread(threadId)
+      if (liveCommandsByThreadId.value[threadId]) {
+        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
       }
       setTurnErrorForThread(threadId, null)
       error.value = ''
@@ -2643,6 +2657,12 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function pruneThreadScopedState(flatThreads: UiThread[]): void {
     const activeThreadIds = new Set(flatThreads.map((thread) => thread.id))
+    // A background thread-list refresh can temporarily omit the selected thread
+    // while its project/group data is being rebuilt. Keep its scoped state until
+    // selection actually moves, otherwise the context usage badge disappears on
+    // the next refresh even though the thread is still open.
+    const selectedId = selectedThreadId.value.trim()
+    if (selectedId) activeThreadIds.add(selectedId)
     const nextReadState = pruneThreadStateMap(readStateByThreadId.value, activeThreadIds)
     if (nextReadState !== readStateByThreadId.value) {
       readStateByThreadId.value = nextReadState
@@ -2902,19 +2922,16 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function setThreadTokenUsage(threadId: string, tokenUsage: UiThreadTokenUsage | null): void {
     if (!threadId) return
+    // Runtime snapshots are allowed to omit token usage while the app-server is
+    // catching up. Missing data is not a deletion signal: keep the last known
+    // value and let the explicit disconnect/reset path clear the map.
+    if (!tokenUsage) return
     const previous = threadTokenUsageByThreadId.value[threadId] ?? null
     if (areThreadTokenUsagesEqual(previous, tokenUsage)) return
 
-    if (tokenUsage) {
-      threadTokenUsageByThreadId.value = {
-        ...threadTokenUsageByThreadId.value,
-        [threadId]: tokenUsage,
-      }
-      return
-    }
-
-    if (previous) {
-      threadTokenUsageByThreadId.value = omitKey(threadTokenUsageByThreadId.value, threadId)
+    threadTokenUsageByThreadId.value = {
+      ...threadTokenUsageByThreadId.value,
+      [threadId]: tokenUsage,
     }
   }
 
@@ -4233,8 +4250,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     await refreshThreadGoal(threadId)
   }
 
-  async function saveSelectedThreadGoal(objective: string): Promise<void> {
-    const threadId = selectedThreadId.value
+  async function saveThreadGoalById(threadId: string, objective: string, activate = false): Promise<void> {
     const normalizedObjective = objective.trim()
     if (!threadId || !normalizedObjective || threadGoalUpdatingByThreadId.value[threadId]) return
     setThreadGoalUpdating(threadId, true)
@@ -4244,7 +4260,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     try {
       const current = threadGoalByThreadId.value[threadId]
       const goal = await setThreadGoal(threadId, current
-        ? { objective: normalizedObjective }
+        ? { objective: normalizedObjective, ...(activate ? { status: 'active' as const } : {}) }
         : { objective: normalizedObjective, status: 'active' })
       setThreadGoalState(threadId, goal)
       if (goal.status === 'active') scheduleThreadGoalContinuation(threadId)
@@ -4257,25 +4273,36 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function updateSelectedThreadGoalStatus(status: Extract<UiThreadGoalStatus, 'active' | 'paused'>): Promise<void> {
-    const threadId = selectedThreadId.value
-    if (!threadId || !threadGoalByThreadId.value[threadId] || threadGoalUpdatingByThreadId.value[threadId]) return
-    setThreadGoalUpdating(threadId, true)
-    invalidateThreadGoalRefresh(threadId)
-    setThreadGoalError(threadId, '')
+  async function saveSelectedThreadGoal(objective: string, activate = false): Promise<void> {
+    await saveThreadGoalById(selectedThreadId.value, objective, activate)
+  }
+
+  async function updateThreadGoalStatusById(
+    threadId: string,
+    status: Extract<UiThreadGoalStatus, 'active' | 'paused'>,
+  ): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || !threadGoalByThreadId.value[normalizedThreadId] || threadGoalUpdatingByThreadId.value[normalizedThreadId]) return
+    setThreadGoalUpdating(normalizedThreadId, true)
+    invalidateThreadGoalRefresh(normalizedThreadId)
+    setThreadGoalError(normalizedThreadId, '')
     error.value = ''
-    if (status === 'paused') cancelThreadGoalContinuation(threadId)
+    if (status === 'paused') cancelThreadGoalContinuation(normalizedThreadId)
     try {
-      const goal = await setThreadGoal(threadId, { status })
-      setThreadGoalState(threadId, goal)
-      if (status === 'active') scheduleThreadGoalContinuation(threadId)
+      const goal = await setThreadGoal(normalizedThreadId, { status })
+      setThreadGoalState(normalizedThreadId, goal)
+      if (status === 'active') scheduleThreadGoalContinuation(normalizedThreadId)
     } catch (unknownError) {
       error.value = readThreadGoalError(unknownError, '更新持续目标失败')
-      setThreadGoalError(threadId, error.value)
+      setThreadGoalError(normalizedThreadId, error.value)
       throw unknownError
     } finally {
-      setThreadGoalUpdating(threadId, false)
+      setThreadGoalUpdating(normalizedThreadId, false)
     }
+  }
+
+  async function updateSelectedThreadGoalStatus(status: Extract<UiThreadGoalStatus, 'active' | 'paused'>): Promise<void> {
+    await updateThreadGoalStatusById(selectedThreadId.value, status)
   }
 
   async function clearSelectedThreadGoal(): Promise<void> {
@@ -6948,9 +6975,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const completedTurn = readTurnCompletedInfo(notification)
     const turnErrorMessage = readTurnErrorMessage(notification)
-    const completedThreadId = completedTurn?.threadId ?? extractThreadIdFromNotification(notification)
     const shouldRetryWithFallback =
-      Boolean(completedThreadId) &&
+      Boolean(completedTurn?.threadId && completedTurn.turnId) &&
       Boolean(turnErrorMessage) &&
       selectedModelId.value !== MODEL_FALLBACK_ID &&
       isUnsupportedChatGptModelError(new Error(turnErrorMessage))
@@ -7013,7 +7039,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
       error.value = turnErrorMessage
       if (failedThreadId && shouldRetryWithFallback) {
-        void retryPendingTurnWithFallback(failedThreadId)
+        void retryPendingTurnWithFallback(failedThreadId, completedTurn?.turnId ?? '')
       }
     } else if (completedTurn) {
       setTurnErrorForThread(completedTurn.threadId, null)
@@ -7057,7 +7083,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         error.value = notificationErrorMessage
         if (selectedModelId.value !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorMessage))) {
           if (errorThreadId) {
-            void retryPendingTurnWithFallback(errorThreadId)
+            void retryPendingTurnWithFallback(
+              errorThreadId,
+              activeTurnIdByThreadId.value[errorThreadId] ?? '',
+            )
           } else {
             void applyFallbackModelSelection()
           }
@@ -7471,6 +7500,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         sourceGroups.value,
         orderedGroups,
         executionStateByThreadId,
+        options.preserveMissingSelected === true || options.backgroundIfCached === true
+          ? selectedThreadId.value.trim()
+          : '',
       )
       sourceGroups.value = mergeThreadGroups(sourceGroups.value, mergedWithInProgress)
       saveCachedThreadGroups(sourceGroups.value)
@@ -7488,7 +7520,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
       const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
 
-      if (!currentExists && options.preserveMissingSelected !== true) {
+      const preserveSelectedThread = options.preserveMissingSelected === true || options.backgroundIfCached === true
+      if (!currentExists && !preserveSelectedThread) {
         setSelectedThreadId(flatThreads[0]?.id ?? '')
       }
       if (shouldLoadInitialPageFirst) {
@@ -9491,22 +9524,22 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function rollbackSelectedThread(turnIndex: number): Promise<void> {
+  async function rollbackSelectedThread(turnIndex: number, turnId: string): Promise<boolean> {
     const threadId = selectedThreadId.value
-    if (!threadId) return
-    if (isRollingBack.value) return
+    if (!threadId) return false
+    if (isRollingBack.value) return false
 
-    const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const maxTurnIndex = persisted.reduce((max, m) => (typeof m.turnIndex === 'number' && m.turnIndex > max ? m.turnIndex : max), -1)
-    if (maxTurnIndex < 0 || turnIndex > maxTurnIndex) return
-    const numTurns = maxTurnIndex - turnIndex + 1
-    if (numTurns < 1) return
+    const normalizedTurnId = turnId.trim()
+    if (!normalizedTurnId) {
+      error.value = '无法确定该消息所属的回合，未执行回滚。'
+      return false
+    }
+    if (!Number.isFinite(turnIndex) || turnIndex < 0) return false
 
     isRollingBack.value = true
     error.value = ''
-    try {
-      await rollbackWorktreeGitToTurnMessage(threadId, turnIndex)
-      const nextMessages = await rollbackThread(threadId, numTurns)
+    let revertedMessages: UiMessage[] | null = null
+    const applyRevertedMessages = (nextMessages: UiMessage[]): void => {
       setPersistedMessagesForThread(threadId, nextMessages)
       setLiveAgentMessagesForThread(threadId, [])
       setLivePlanMessagesForThread(threadId, [])
@@ -9517,10 +9550,58 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, null)
       setTurnErrorForThread(threadId, null)
+      pendingThreadMessageRefresh.delete(threadId)
+      pendingSessionLogMessageRefresh.delete(threadId)
+      locallyRevertedThreadIds.add(threadId)
+      loadedMessagesByThreadId.value = {
+        ...loadedMessagesByThreadId.value,
+        [threadId]: true,
+      }
+      lastThreadDetailSyncAtById.value = {
+        ...lastThreadDetailSyncAtById.value,
+        [threadId]: Date.now(),
+      }
       pendingThreadsRefresh = true
-      await syncFromNotifications()
+    }
+    try {
+      const persisted = persistedMessagesByThreadId.value[threadId] ?? []
+      const matchingMessage = persisted.find((message) => (
+        message.turnIndex === turnIndex && message.turnId?.trim() === normalizedTurnId
+      ))
+      const maxTurnIndex = persisted.reduce(
+        (max, message) => (
+          typeof message.turnIndex === 'number' && message.turnIndex > max ? message.turnIndex : max
+        ),
+        -1,
+      )
+      if (!matchingMessage || maxTurnIndex < turnIndex) {
+        error.value = '无法确认要回滚的回合，未执行回滚。'
+        return false
+      }
+      const numTurns = maxTurnIndex - turnIndex + 1
+
+      // Roll back the server thread first. This prevents a failed RPC from leaving the
+      // worktree changed while the conversation remains at its old history.
+      revertedMessages = await rollbackThread(threadId, numTurns)
+      await rollbackWorktreeGitToTurnMessage(threadId, turnIndex)
+      applyRevertedMessages(revertedMessages)
+      // Let Vue paint the authoritative local result first. The scheduled sync
+      // refreshes the sidebar, while its active-message refresh is suppressed
+      // once because the revert RPC already supplied the complete message set.
+      abortCurrentSync()
+      scheduleEventSync(0)
+      return true
     } catch (unknownError) {
+      // thread/rollback may have succeeded before the local worktree rollback failed.
+      // Reflect the authoritative thread state even though the combined operation
+      // is reported as failed, and do not let callers continue with a resend.
+      if (revertedMessages) {
+        applyRevertedMessages(revertedMessages)
+        abortCurrentSync()
+        scheduleEventSync(0)
+      }
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to rollback thread'
+      return false
     } finally {
       isRollingBack.value = false
     }
@@ -10214,10 +10295,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     try {
       const initialActiveThreadId = selectedThreadId.value
+      const locallyRevertedInitialThreadId = (
+        initialActiveThreadId && locallyRevertedThreadIds.has(initialActiveThreadId)
+      ) ? initialActiveThreadId : ''
       if (initialActiveThreadId) {
         await refreshRuntimeStatusSnapshot(initialActiveThreadId, controller?.signal)
       }
-      if (initialActiveThreadId && threadIdsToRefresh.has(initialActiveThreadId)) {
+      if (
+        initialActiveThreadId &&
+        threadIdsToRefresh.has(initialActiveThreadId) &&
+        initialActiveThreadId !== locallyRevertedInitialThreadId
+      ) {
         await refreshActiveMessagesNow(initialActiveThreadId)
       }
 
@@ -10231,12 +10319,32 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       const activeThreadId = selectedThreadId.value
       if (!activeThreadId) return
 
+      const locallyRevertedActiveThread = locallyRevertedThreadIds.has(activeThreadId)
+      if (locallyRevertedActiveThread) {
+        locallyRevertedThreadIds.delete(activeThreadId)
+        const version = currentThreadVersion(activeThreadId)
+        if (version) {
+          loadedVersionByThreadId.value = {
+            ...loadedVersionByThreadId.value,
+            [activeThreadId]: version,
+          }
+        }
+        lastThreadDetailSyncAtById.value = {
+          ...lastThreadDetailSyncAtById.value,
+          [activeThreadId]: Date.now(),
+        }
+      }
+
       const isActiveDirty = threadIdsToRefresh.has(activeThreadId)
       const currentVersion = currentThreadVersion(activeThreadId)
       const loadedVersion = loadedVersionByThreadId.value[activeThreadId] ?? ''
       const hasVersionChange = currentVersion.length > 0 && currentVersion !== loadedVersion
 
-      if ((isActiveDirty || hasVersionChange || shouldRefreshThreads) && refreshedMessageThreadId !== activeThreadId) {
+      if (
+        !locallyRevertedActiveThread &&
+        (isActiveDirty || hasVersionChange || shouldRefreshThreads) &&
+        refreshedMessageThreadId !== activeThreadId
+      ) {
         await refreshActiveMessagesNow(activeThreadId)
       }
     } catch (error) {
@@ -10451,6 +10559,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
     pendingSessionLogMessageRefresh.clear()
+    locallyRevertedThreadIds.clear()
     sessionLogAuthoritativeRefreshGenerationByThreadId.clear()
     pendingTurnStartsById.clear()
     clearNonFreshThreadDetailRetries()
@@ -10738,6 +10847,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     setSelectedCollaborationMode,
     refreshSelectedThreadGoal,
     saveSelectedThreadGoal,
+    saveThreadGoalById,
+    updateThreadGoalStatusById,
     updateSelectedThreadGoalStatus,
     clearSelectedThreadGoal,
     setSelectedReasoningEffort,

@@ -13,6 +13,7 @@ const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
 const conversationMarkdownImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'conversationMarkdown.ts')))
+const conversationMathImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'conversationMath.ts')))
 const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
 const connectionManagerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'connectionManager.ts')))
 const conversationViewportImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationViewport.ts')))
@@ -47,12 +48,51 @@ try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
 import { parseConversationMarkdownBlocks } from '${conversationMarkdownImport}'
+import {
+  renderConversationMath,
+  splitDisplayConversationMath,
+  splitInlineConversationMath,
+} from '${conversationMathImport}'
 assert.deepEqual(parseConversationMarkdownBlocks('3. Third\\n4. Fourth'), [
   { kind: 'list', ordered: true, start: 3, items: ['Third', 'Fourth'] },
 ])
 assert.deepEqual(parseConversationMarkdownBlocks('1. First'), [
   { kind: 'list', ordered: true, start: 1, items: ['First'] },
 ])
+const mathSlash = String.fromCharCode(92)
+const inlineMathParts = splitInlineConversationMath(
+  '行内 $E=mc^2$ 和 ' + mathSlash + '(a^2+b^2=c^2' + mathSlash + ')。',
+)
+assert.equal(
+  inlineMathParts.filter((part) => part.kind === 'math').length,
+  2,
+  'inline dollar and parenthesis math must both be recognized',
+)
+const displayMathParts = splitDisplayConversationMath([
+  '前文',
+  '$$',
+  'x^2',
+  '$$',
+  '后文',
+  mathSlash + '[',
+  'x',
+  mathSlash + ']',
+].join('\\n'))
+assert.equal(
+  displayMathParts.filter((part) => part.kind === 'math').length,
+  2,
+  'display dollar and bracket math must both be recognized',
+)
+const fenceMarker = String.fromCharCode(96).repeat(3)
+const fencedMathSource = [fenceMarker + 'latex', '$$x$$', fenceMarker].join('\\n')
+assert.deepEqual(
+  parseConversationMarkdownBlocks(fencedMathSource),
+  [{ kind: 'text', value: fencedMathSource }],
+  'a streamed code fence must keep display-math-looking source literal',
+)
+const renderedMath = renderConversationMath(mathSlash + 'frac{1}{2}', true)
+assert.ok(renderedMath?.includes('katex'), 'KaTeX HTML output must be generated')
+assert.ok(renderedMath?.includes('<math'), 'KaTeX MathML output must be generated')
 import { applyActiveTurnIdToMessages, normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
 import {
@@ -1324,6 +1364,53 @@ const generatedImageMessages = normalizeThreadMessagesV2({
 assert.equal(generatedImageMessages.length, 1)
 assert.equal(generatedImageMessages[0]?.messageType, 'imageGeneration')
 assert.deepEqual(generatedImageMessages[0]?.images, ['C:\\work\\generated.png'])
+
+const mergedAssistantImageMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-merged-image',
+    cwd: 'E:\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [{
+      id: 'turn-merged-image',
+      status: 'completed',
+      items: [
+        {
+          id: 'agent-commentary',
+          type: 'agentMessage',
+          text: '正在准备图片',
+          phase: 'commentary',
+        },
+        {
+          id: 'image-before-text',
+          type: 'imageView',
+          path: 'C:\\work\\before.png',
+        },
+        {
+          id: 'agent-with-image',
+          type: 'agentMessage',
+          text: '图片说明',
+        },
+        {
+          id: 'image-after-text',
+          type: 'imageGeneration',
+          status: 'completed',
+          savedPath: 'C:\\work\\after.png',
+        },
+      ],
+    }],
+  },
+})
+assert.equal(mergedAssistantImageMessages.length, 2)
+assert.equal(mergedAssistantImageMessages[0]?.id, 'agent-commentary')
+assert.deepEqual(mergedAssistantImageMessages[0]?.images, [
+  'C:\\work\\before.png',
+  'C:\\work\\after.png',
+])
+assert.equal(mergedAssistantImageMessages[1]?.id, 'agent-with-image')
+assert.equal(mergedAssistantImageMessages[1]?.images, undefined)
+assert.equal(mergedAssistantImageMessages[1]?.turnId, 'turn-merged-image')
 
 const internalContextMessages = normalizeThreadMessagesV2({
   thread: {
@@ -2680,6 +2767,19 @@ console.log('frontend normalizer smoke ok')
     outfile: bundledPath,
     platform: 'node',
     target: 'node22',
+    plugins: [{
+      name: 'frontend-normalizer-dompurify-shim',
+      setup(build) {
+        build.onResolve({ filter: /^dompurify$/ }, () => ({
+          path: 'frontend-normalizer-dompurify-shim',
+          namespace: 'frontend-normalizer-shim',
+        }))
+        build.onLoad({ filter: /.*/, namespace: 'frontend-normalizer-shim' }, () => ({
+          contents: 'export default { sanitize(value) { return value } }',
+          loader: 'js',
+        }))
+      },
+    }],
   })
 
   const result = spawnSync(process.execPath, [bundledPath], {

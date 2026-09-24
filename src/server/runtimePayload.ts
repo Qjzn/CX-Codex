@@ -80,9 +80,12 @@ function getErrorMessage(payload: unknown, fallback: string): string {
 
 export function readCollaborationModeFromPayload(payload: unknown): CollaborationMode {
   const root = asRecord(payload)
+  const nativeCollaborationMode = asRecord(root?.collaborationMode)
   const raw =
     typeof root?.collaborationMode === 'string'
       ? root.collaborationMode
+      : typeof nativeCollaborationMode?.mode === 'string'
+        ? nativeCollaborationMode.mode
       : typeof root?.mode === 'string'
         ? root.mode
         : ''
@@ -316,6 +319,10 @@ export function normalizePlanModeTurnStartParams(params: unknown, options: { inc
   const root = asRecord(params)
   if (!root || readCollaborationModeFromPayload(root) !== 'plan') return params
 
+  // App Server v2 accepts the structured collaborationMode object. Keep it
+  // intact; the legacy string form is the only one that needs normalization.
+  if (asRecord(root.collaborationMode)) return params
+
   const next: Record<string, unknown> = { ...root }
   delete next.collaborationMode
   if (options.includeNativeMode !== false) {
@@ -338,12 +345,13 @@ export function normalizePlanModeTurnStartParams(params: unknown, options: { inc
     return {
       ...record,
       text: buildPlanModePrompt(record.text),
+      text_elements: Array.isArray(record.text_elements) ? record.text_elements : [],
     }
   })
 
   if (!didWrapText) {
     next.input = [
-      { type: 'text', text: buildPlanModePrompt('') },
+      { type: 'text', text: buildPlanModePrompt(''), text_elements: [] },
       ...input,
     ]
   }

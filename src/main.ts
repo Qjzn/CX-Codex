@@ -9,6 +9,7 @@ import {
 } from './shared/webAuth'
 import { initializeCapacitorBridge } from './mobile/capacitorBridge'
 import './style.css'
+import 'katex/dist/katex.min.css'
 
 console.log('Welcome to CX-Codex. GitHub: https://github.com/Qjzn/CX-Codex')
 

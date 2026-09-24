@@ -22,6 +22,7 @@ const TOKEN_MAX_AGE_SECONDS = 31536000
 const TOKEN_MAX_AGE_MS = TOKEN_MAX_AGE_SECONDS * 1000
 const TOKEN_STORE_MAX_ENTRIES = 24
 const AUTH_LOGIN_REQUEST_BODY_LIMIT_BYTES = 16 * 1024
+const AUTH_BASIC_HEADER_MAX_BYTES = 4 * 1024
 const AUTH_LOGIN_FAILURE_WINDOW_MS = 5 * 60 * 1000
 const AUTH_LOGIN_BLOCK_MS = 10 * 60 * 1000
 const AUTH_LOGIN_MAX_FAILURES = 5
@@ -189,6 +190,38 @@ function readSingleHeader(value: string | string[] | undefined): string {
   return value?.split(',')[0]?.trim() ?? ''
 }
 
+type BasicAuthCredentials = {
+  username: string
+  password: string
+}
+
+function readBasicAuthCredentials(req: IncomingMessage): BasicAuthCredentials | null {
+  const authorization = readSingleHeader(req.headers.authorization)
+  if (!authorization || Buffer.byteLength(authorization, 'utf8') > AUTH_BASIC_HEADER_MAX_BYTES) return null
+  const match = /^Basic\s+([A-Za-z0-9+/]+={0,2})$/iu.exec(authorization)
+  const encoded = match?.[1]
+  if (!encoded || encoded.length % 4 !== 0) return null
+
+  try {
+    const decodedBytes = Buffer.from(encoded, 'base64')
+    if (decodedBytes.toString('base64') !== encoded) return null
+    const decoded = decodedBytes.toString('utf8')
+    if (!Buffer.from(decoded, 'utf8').equals(decodedBytes)) return null
+    const separator = decoded.indexOf(':')
+    if (separator <= 0) return null
+    const username = decoded.slice(0, separator)
+    const password = decoded.slice(separator + 1)
+    if (!username || !password) return null
+    return { username, password }
+  } catch {
+    return null
+  }
+}
+
+function isBasicAuthAttempt(req: IncomingMessage): boolean {
+  return /^Basic(?:\s|$)/iu.test(readSingleHeader(req.headers.authorization))
+}
+
 function isHttpsProxyRequest(req: Request): boolean {
   return req.secure || (
     isLocalhostRemote(req.socket.remoteAddress ?? '')
@@ -209,22 +242,11 @@ function getLoginRetryAfterSeconds(state: LoginAttemptState, now: number): numbe
   return Math.max(1, Math.ceil((state.blockedUntil - now) / 1000))
 }
 
-function isValidStoredTokenHash(hash: string, storedHash: string): boolean {
-  if (hash.length !== storedHash.length) return false
-  return timingSafeEqual(Buffer.from(hash), Buffer.from(storedHash))
-}
-
-function isAuthorizedByRequestLike(
+function isAuthorizedBySessionCookie(
   req: IncomingMessage,
   validTokenHashes: Map<string, StoredAuthToken>,
   passwordFingerprint: string,
 ): boolean {
-  // Reverse proxies connect from loopback too. The local convenience bypass is
-  // valid only when the request has a loopback Host and no forwarding headers.
-  if (isLoopbackRequest(req)) {
-    return true
-  }
-
   const cookies = parseCookies(req.headers.cookie)
   const token = cookies[TOKEN_COOKIE]
   if (!token) return false
@@ -245,6 +267,25 @@ function isAuthorizedByRequestLike(
     return true
   }
   return false
+}
+
+function isValidStoredTokenHash(hash: string, storedHash: string): boolean {
+  if (hash.length !== storedHash.length) return false
+  return timingSafeEqual(Buffer.from(hash), Buffer.from(storedHash))
+}
+
+function isAuthorizedByRequestLike(
+  req: IncomingMessage,
+  validTokenHashes: Map<string, StoredAuthToken>,
+  passwordFingerprint: string,
+): boolean {
+  // Reverse proxies connect from loopback too. The local convenience bypass is
+  // valid only when the request has a loopback Host and no forwarding headers.
+  if (isLoopbackRequest(req)) {
+    return true
+  }
+
+  return isAuthorizedBySessionCookie(req, validTokenHashes, passwordFingerprint)
 }
 
 const LOGIN_PAGE_HTML = `<!DOCTYPE html>
@@ -277,12 +318,15 @@ button:hover{background:#2563eb}
 <span id="notice-text"></span>
 </div>
 <form id="f">
+<label for="username">账号（任意名称）</label>
+<input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="128" autofocus required>
 <label for="pw">密码</label>
-<input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
+<input id="pw" name="password" type="password" autocomplete="current-password" required>
 <button type="submit">登录</button>
 <p class="error" id="err">密码错误</p>
 <p class="help">忘记密码？请在服务电脑打开“CX-Codex 管理中心”查看或重置。</p>
 </form>
+<p class="help">账号仅用于登录标识，可填任意名称；系统使用当前访问密码验证。</p>
 </div>
 <script>
 const form=document.getElementById('f');
@@ -382,8 +426,84 @@ export function createAuthSession(password: string): AuthSession {
   }
 
   const middleware: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
-    if (isAuthorizedByRequestLike(req, validTokenHashes, passwordFingerprint)) {
+    if (isLoopbackRequest(req)) {
       next()
+      return
+    }
+
+    if (isAuthorizedBySessionCookie(req, validTokenHashes, passwordFingerprint)) {
+      if (req.method === 'GET' && req.path === '/auth/basic-login') {
+        res.redirect(303, '/')
+        return
+      }
+      next()
+      return
+    }
+
+    const basicAuthAttempt = isBasicAuthAttempt(req)
+    const isBasicAuthEntry = req.method === 'GET'
+      && (req.path === '/auth/basic-login' || (req.path === '/' && basicAuthAttempt))
+    if (isBasicAuthEntry) {
+      const now = Date.now()
+      const clientKey = basicAuthAttempt ? getLoginClientKey(req) : ''
+      const currentAttempt = clientKey
+        ? loginAttempts.get(clientKey) ?? { failures: [], blockedUntil: 0 }
+        : null
+
+      if (currentAttempt) {
+        currentAttempt.failures = currentAttempt.failures.filter(
+          (failedAt) => now - failedAt <= AUTH_LOGIN_FAILURE_WINDOW_MS,
+        )
+        if (currentAttempt.blockedUntil > now) {
+          res.setHeader('Retry-After', String(getLoginRetryAfterSeconds(currentAttempt, now)))
+          res.status(429).type('text/plain; charset=utf-8').send('登录尝试过多，请稍后再试。')
+          return
+        }
+      }
+
+      const basicCredentials = basicAuthAttempt ? readBasicAuthCredentials(req) : null
+      if (basicCredentials && constantTimeCompare(basicCredentials.password, currentPassword)) {
+        if (clientKey) loginAttempts.delete(clientKey)
+        const token = randomBytes(32).toString('hex')
+        const tokenHash = hashToken(token)
+        const tokenCreatedAt = Date.now()
+        validTokenHashes.set(tokenHash, {
+          hash: tokenHash,
+          createdAt: tokenCreatedAt,
+          lastSeenAt: tokenCreatedAt,
+        })
+        persistStoredAuthTokens([...validTokenHashes.values()], passwordFingerprint)
+        const secureCookie = isHttpsProxyRequest(req) ? '; Secure' : ''
+        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${TOKEN_MAX_AGE_SECONDS}${secureCookie}`)
+        if (req.path === '/auth/basic-login') {
+          res.redirect(303, '/')
+        } else {
+          next()
+        }
+        return
+      }
+
+      if (currentAttempt && clientKey) {
+        currentAttempt.failures.push(now)
+        if (currentAttempt.failures.length >= AUTH_LOGIN_MAX_FAILURES) {
+          currentAttempt.blockedUntil = now + AUTH_LOGIN_BLOCK_MS
+        }
+        loginAttempts.set(clientKey, currentAttempt)
+        if (loginAttempts.size > AUTH_LOGIN_TRACKED_CLIENTS_MAX) {
+          const oldestKey = loginAttempts.keys().next().value
+          if (typeof oldestKey === 'string') loginAttempts.delete(oldestKey)
+        }
+      }
+      if (currentAttempt && currentAttempt.blockedUntil > now) {
+        res.setHeader('Retry-After', String(getLoginRetryAfterSeconds(currentAttempt, now)))
+      }
+      res.setHeader('Cache-Control', 'no-store')
+      if (req.path === '/auth/basic-login' && !basicAuthAttempt) {
+        res.redirect(303, '/')
+      } else {
+        res.status(200).type('html').send(LOGIN_PAGE_HTML)
+      }
       return
     }
 

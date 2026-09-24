@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import { splitDisplayConversationMath } from './conversationMath'
 
 export type ConversationMarkdownBlock =
   | { kind: 'text'; value: string }
@@ -6,6 +7,7 @@ export type ConversationMarkdownBlock =
   | { kind: 'list'; ordered: boolean; start: number; items: string[] }
   | { kind: 'blockquote'; value: string }
   | { kind: 'thematicBreak' }
+  | { kind: 'math'; value: string }
 
 const markdownParser = new MarkdownIt({
   html: false,
@@ -95,7 +97,7 @@ export function hasConversationMarkdownStructure(text: string): boolean {
   return !FENCE_LINE_PATTERN.test(text)
 }
 
-export function parseConversationMarkdownBlocks(text: string): ConversationMarkdownBlock[] {
+function parseStructuralConversationMarkdownBlocks(text: string): ConversationMarkdownBlock[] {
   if (!hasConversationMarkdownStructure(text)) return [{ kind: 'text', value: text }]
 
   const tokens = markdownParser.parse(text, {})
@@ -134,6 +136,32 @@ export function parseConversationMarkdownBlocks(text: string): ConversationMarkd
     }
 
     if (token.type === 'hr') blocks.push({ kind: 'thematicBreak' })
+  }
+
+  return blocks.length > 0 ? blocks : [{ kind: 'text', value: text }]
+}
+
+export function parseConversationMarkdownBlocks(text: string): ConversationMarkdownBlock[] {
+  // A complete fence is consumed by parseMessageBlocks before this parser is
+  // called. If a streamed fence is still open, keep the whole fragment
+  // literal so display-math delimiters inside code cannot be promoted into
+  // rendered formulas.
+  if (FENCE_LINE_PATTERN.test(text)) return [{ kind: 'text', value: text }]
+
+  const parts = splitDisplayConversationMath(text)
+  if (parts.length === 1 && parts[0]?.kind === 'text') {
+    return parseStructuralConversationMarkdownBlocks(parts[0].value)
+  }
+
+  const blocks: ConversationMarkdownBlock[] = []
+  for (const part of parts) {
+    if (part.kind === 'math') {
+      blocks.push(part)
+      continue
+    }
+    if (part.value.trim()) {
+      blocks.push(...parseStructuralConversationMarkdownBlocks(part.value))
+    }
   }
 
   return blocks.length > 0 ? blocks : [{ kind: 'text', value: text }]

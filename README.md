@@ -71,7 +71,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercont
 
 ![Mobile conversation](./docs/screenshots/chat-mobile.png)
 
-附件、文件夹、拍照、一次性计划、本轮要求、插件和技能集中在 `+` 菜单：
+附件、文件夹、拍照、一次性计划、本轮要求、持续目标、插件和技能集中在 `+` 菜单：
 
 ![Mobile composer add menu](./docs/screenshots/mobile-composer-plus.png)
 
@@ -277,7 +277,7 @@ Windows 安全一键入口（保留 `RemoteQuick` 参数名以兼容旧版本；
 - 本地文件链接、图片 / Markdown / PDF / DOCX 预览；服务端只允许读取、浏览和编辑已登记工作区根目录内的真实路径
 - GitHub 热门项目模块
 - MCP / 工具权限状态、审批边界和只读诊断
-- 模型、推理档位、已连接插件与一次性计划 / 本轮要求操作栏
+- 模型、推理档位、已连接插件与一次性计划 / 本轮要求 / 持续目标操作栏
 - Windows bootstrap 和发布包
 - 健康检查、回归脚本和浸泡脚本
 
