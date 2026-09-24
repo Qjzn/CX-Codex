@@ -469,6 +469,7 @@ import {
 } from '../src/server/projectRoots.js'
 import { handleProjectRootRoutes } from '../src/server/projectRootRoutes.js'
 import { handleTerminalRoutes } from '../src/server/terminalRoutes.js'
+import { isSameOriginTerminalRequest } from '../src/server/terminalPtyWebSocket.js'
 import {
   getOpenAiTranscribeApiKey,
   getOpenAiTranscribeModel,
@@ -539,6 +540,7 @@ try {
   smokeCliAccessPolicy()
   smokeAppServerHealth()
   await smokeAuthMiddleware()
+  smokeTerminalWebSocketOrigin()
   await smokeLocalAccessConfig()
   smokeLocalPairingPage()
   await smokeAppServerMethodCatalog()
@@ -8988,6 +8990,20 @@ async function smokeProjectRootRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/project-root'),
     dependencies,
   ), false)
+}
+
+function smokeTerminalWebSocketOrigin(): void {
+  const request = (host: string, origin?: string) => ({
+    headers: { host, origin },
+  }) as never
+
+  assert.equal(isSameOriginTerminalRequest(request('localhost:7420', 'http://localhost:7420')), true)
+  assert.equal(isSameOriginTerminalRequest(request('example.ts.net', 'https://example.ts.net')), true)
+  assert.equal(isSameOriginTerminalRequest(request('localhost:7420', 'https://attacker.example')), false)
+  assert.equal(isSameOriginTerminalRequest(request('localhost:7420')), false)
+  assert.equal(isSameOriginTerminalRequest(request('localhost:7420', 'null')), false)
+  assert.equal(isSameOriginTerminalRequest(request('localhost:7420', 'http://localhost:7421')), false)
+  assert.equal(isSameOriginTerminalRequest(request('localhost:7420', 'http://localhost:7420.evil.example')), false)
 }
 
 async function smokeTerminalRoutes(): Promise<void> {

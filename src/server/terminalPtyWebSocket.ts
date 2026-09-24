@@ -12,6 +12,25 @@ import {
 
 export const TERMINAL_PTY_WEBSOCKET_PATH = '/codex-api/terminal/ws'
 
+export function isSameOriginTerminalRequest(request: IncomingMessage): boolean {
+  const origin = request.headers.origin
+  const host = request.headers.host
+  if (typeof origin !== 'string' || typeof host !== 'string') return false
+  try {
+    const parsedOrigin = new URL(origin)
+    const parsedHost = new URL(`http://${host}`)
+    return (parsedOrigin.protocol === 'http:' || parsedOrigin.protocol === 'https:')
+      && parsedOrigin.host === parsedHost.host
+      && parsedOrigin.username === ''
+      && parsedOrigin.password === ''
+      && parsedOrigin.pathname === '/'
+      && parsedOrigin.search === ''
+      && parsedOrigin.hash === ''
+  } catch {
+    return false
+  }
+}
+
 const MAX_TERMINAL_PTY_INPUT_BYTES = 64 * 1024
 const MAX_TERMINAL_PTY_COLUMNS = 240
 const MAX_TERMINAL_PTY_ROWS = 100
@@ -221,6 +240,11 @@ export function attachTerminalPtyWebSocket(
   const onUpgrade = (request: IncomingMessage, socket: Socket, head: Buffer): void => {
     const url = new URL(request.url ?? '', 'http://localhost')
     if (url.pathname !== TERMINAL_PTY_WEBSOCKET_PATH) return
+    if (!isSameOriginTerminalRequest(request)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
     if (options.isRequestAuthorized && !options.isRequestAuthorized(request)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()

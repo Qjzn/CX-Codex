@@ -1,5 +1,9 @@
 # Tests
 
+## 侧边终端 WebSocket 来源校验（2026-09-24）
+
+浏览器连接终端时，`Origin` 必须与请求 `Host` 的主机和端口一致；缺失、跨域、端口不同或无效来源返回 403，且不得启动 PTY。原有会话鉴权仍需通过。`npm run verify:server-modules` 覆盖本机和远程域名的同源请求以及上述拒绝场景；真实 Tailscale 远程连接尚未测试。回滚时一起回退 `terminalPtyWebSocket.ts`、server smoke 和本节记录。
+
 ## 远程隧道账号密码登录（2026-09-23）
 
 ### Expected behavior
