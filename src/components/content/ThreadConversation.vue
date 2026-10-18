@@ -579,6 +579,7 @@
 </template>
 
 <script setup lang="ts">
+import { fileKindLabel, fileSummaryLabel, formatDuration } from './conversation/format'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
 import ConversationRichText from './ConversationRichText.vue'
 import ConversationMessageActions from './ConversationMessageActions.vue'
@@ -1061,30 +1062,6 @@ function planStepMark(status: ConversationPlanActivity['steps'][number]['status'
   if (status === 'completed') return '✓'
   if (status === 'in-progress') return '→'
   return '○'
-}
-
-function formatDuration(durationMs: number | null): string {
-  if (durationMs === null || !Number.isFinite(durationMs)) return '耗时未知'
-  const seconds = Math.max(0, Math.round(durationMs / 1000))
-  if (seconds < 60) return `${String(seconds)} 秒`
-  const minutes = Math.floor(seconds / 60)
-  const remainingSeconds = seconds % 60
-  if (minutes < 60) return remainingSeconds > 0 ? `${String(minutes)} 分 ${String(remainingSeconds)} 秒` : `${String(minutes)} 分钟`
-  const hours = Math.floor(minutes / 60)
-  const remainingMinutes = minutes % 60
-  return remainingMinutes > 0 ? `${String(hours)} 小时 ${String(remainingMinutes)} 分` : `${String(hours)} 小时`
-}
-
-function fileSummaryLabel(turn: ConversationTurn): string {
-  const additions = turn.fileChanges.reduce((total, file) => total + file.additions, 0)
-  const removals = turn.fileChanges.reduce((total, file) => total + file.removals, 0)
-  return `${String(turn.fileChanges.length)} 个文件 · +${String(additions)} −${String(removals)}`
-}
-
-function fileKindLabel(kind: 'add' | 'delete' | 'update'): string {
-  if (kind === 'add') return '新增'
-  if (kind === 'delete') return '删除'
-  return '修改'
 }
 
 function finalStatusTitle(turn: ConversationTurn): string {
