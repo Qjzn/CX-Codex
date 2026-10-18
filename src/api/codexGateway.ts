@@ -43,6 +43,7 @@ import type {
 import { normalizePathForUi } from '../pathUtils.js'
 import { shouldAutoLoginForResponse, tryMobileShellAutoLogin } from '../mobile/mobileAuth'
 import { normalizeThreadGoal } from '../composables/threadGoal'
+import type { ThreadTaskBoardSnapshot } from '../task-board/projectThreadTaskBoard'
 
 type CurrentModelConfig = {
   model: string
@@ -861,6 +862,133 @@ async function fetchThreadRuntimeSnapshot(
   return snapshot
 }
 
+/** K1-2: batch runtime snapshots feed the four-column task board. Max ids per request. */
+const THREAD_TASK_BOARD_MAX_THREAD_IDS = 100
+
+function readThreadTaskBoardRowTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return Number.isFinite(Date.parse(trimmed)) ? trimmed : null
+}
+
+function readThreadTaskBoardRowCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+/**
+ * Batch runtime snapshots for the task board: `{ data: [row, ...] }`, one request for all ids.
+ *
+ * Rows are validated one by one and mapped by their own threadId; a row with a missing or invalid
+ * field is omitted (the pure projection then shows it as "attention"), never repaired with a
+ * default such as `completed`. Rows for ids we did not request are ignored, and a threadId with
+ * more than one row is omitted rather than resolved arbitrarily. Only the eight snapshot fields
+ * cross this boundary: no transcripts, no pending-request payloads.
+ */
+export async function getThreadTaskBoardSnapshots(
+  threadIds: string[],
+  options: RpcCallOptions = {},
+): Promise<Record<string, ThreadTaskBoardSnapshot>> {
+  const requestedThreadIds: string[] = []
+  const requestedThreadIdSet = new Set<string>()
+  if (Array.isArray(threadIds)) {
+    for (const rawThreadId of threadIds) {
+      if (typeof rawThreadId !== 'string') continue
+      const threadId = rawThreadId.trim()
+      if (!threadId || requestedThreadIdSet.has(threadId)) continue
+      requestedThreadIdSet.add(threadId)
+      requestedThreadIds.push(threadId)
+    }
+  }
+
+  if (requestedThreadIds.length === 0) return {}
+  if (requestedThreadIds.length > THREAD_TASK_BOARD_MAX_THREAD_IDS) {
+    throw new RangeError(
+      `Thread task board snapshots accept at most ${THREAD_TASK_BOARD_MAX_THREAD_IDS} unique thread ids, received ${requestedThreadIds.length}`,
+    )
+  }
+
+  throwIfSignalAborted(options.signal)
+
+  const query = `?view=task-board&threadIds=${encodeURIComponent(requestedThreadIds.join(','))}`
+  const response = await fetchWithTimeout(`/codex-api/runtime/snapshots${query}`, {
+    signal: options.signal,
+  }, {
+    timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
+    label: `Thread task board snapshots request for ${requestedThreadIds.length} threads`,
+  })
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    throw new Error('Thread task board snapshots: response body was not valid JSON')
+  }
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to load thread task board snapshots'))
+  }
+
+  const record =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null
+  if (!record) {
+    throw new Error('Thread task board snapshots: response payload was not an object')
+  }
+  if (!Array.isArray(record.data)) {
+    throw new Error('Thread task board snapshots: response payload is missing a data array')
+  }
+  const rows = record.data
+
+  const rowCountByThreadId = new Map<string, number>()
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const rawThreadId = (row as Record<string, unknown>).threadId
+    if (typeof rawThreadId !== 'string') continue
+    const threadId = rawThreadId.trim()
+    if (!requestedThreadIdSet.has(threadId)) continue
+    rowCountByThreadId.set(threadId, (rowCountByThreadId.get(threadId) ?? 0) + 1)
+  }
+
+  const snapshots = new Map<string, ThreadTaskBoardSnapshot>()
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const rowRecord = row as Record<string, unknown>
+    const rawThreadId = rowRecord.threadId
+    if (typeof rawThreadId !== 'string') continue
+    const threadId = rawThreadId.trim()
+    if (!requestedThreadIdSet.has(threadId)) continue
+    if (rowCountByThreadId.get(threadId) !== 1) continue
+
+    const rawExecutionState = rowRecord.executionState
+    const executionState = typeof rawExecutionState === 'string' ? rawExecutionState.trim() : ''
+    // Unknown non-empty states stay visible; they are never rewritten into a known one.
+    if (!executionState) continue
+    if (typeof rowRecord.inProgress !== 'boolean') continue
+    if (typeof rowRecord.stale !== 'boolean') continue
+    if (typeof rowRecord.activeTurnId !== 'string') continue
+    const updatedAtIso = readThreadTaskBoardRowTimestamp(rowRecord.updatedAtIso)
+    if (!updatedAtIso) continue
+    const lastEventSeq = readThreadTaskBoardRowCount(rowRecord.lastEventSeq)
+    if (lastEventSeq === null) continue
+    const pendingServerRequestCount = readThreadTaskBoardRowCount(rowRecord.pendingServerRequestCount)
+    if (pendingServerRequestCount === null) continue
+
+    snapshots.set(threadId, {
+      threadId,
+      executionState,
+      inProgress: rowRecord.inProgress,
+      activeTurnId: rowRecord.activeTurnId.trim(),
+      updatedAtIso,
+      lastEventSeq,
+      stale: rowRecord.stale,
+      pendingServerRequestCount,
+    })
+  }
+
+  return Object.fromEntries(snapshots)
+}
+
 export async function getThreadRuntimeStatusSnapshot(
   threadId: string,
   options: RpcCallOptions = {},
@@ -1053,8 +1181,15 @@ export async function renameThread(threadId: string, threadName: string): Promis
 }
 
 export async function getThreadGoal(threadId: string, options: RpcCallOptions = {}): Promise<UiThreadGoal | null> {
-  const payload = await callRpc<{ goal?: unknown }>('thread/goal/get', { threadId }, options)
-  return normalizeThreadGoal(payload?.goal)
+  try {
+    const payload = await callRpc<{ goal?: unknown }>('thread/goal/get', { threadId }, options)
+    return normalizeThreadGoal(payload?.goal)
+  } catch (error) {
+    if (error instanceof Error && error.message.trim().toLowerCase() === 'goals feature is disabled') {
+      return null
+    }
+    throw error
+  }
 }
 
 export async function setThreadGoal(
@@ -1992,8 +2127,8 @@ function normalizeWebBridgeSettingsPayload(value: unknown): WebBridgeSettings {
   return {
     permissions: {
       allowAllPermissionRequests: permissions.allowAllPermissionRequests === true,
-      commandExecution: normalizePermissionDecision(permissions.commandExecution, 'allowForSession'),
-      fileChange: normalizePermissionDecision(permissions.fileChange, 'allowForSession'),
+      commandExecution: normalizePermissionDecision(permissions.commandExecution, 'ask'),
+      fileChange: normalizePermissionDecision(permissions.fileChange, 'ask'),
       mcpTools: normalizePermissionDecision(permissions.mcpTools, 'ask'),
     },
   }
@@ -2284,6 +2419,288 @@ function normalizeTunnelStatusPayload(payload: unknown): TunnelStatus {
       message: typeof stable.message === 'string' ? stable.message : '',
       verification: normalizeTunnelVerification(stable.verification),
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Read-only backend update identity / detection client.
+//
+// Same-origin only: the status route is a pure read and the check route is an
+// explicit POST with the required fixed intent header and an empty JSON body.
+// This module never imports Node/server modules, never falls back to the
+// webpage build version, and exposes no download/apply/install behaviour.
+// Responses are normalized through strict finite enums: anything unrecognised
+// becomes an explicit unknown/unavailable state instead of being guessed.
+// ---------------------------------------------------------------------------
+
+export const BACKEND_UPDATE_STATUS_PATH = '/codex-api/updates/backend'
+export const BACKEND_UPDATE_CHECK_PATH = '/codex-api/updates/backend/check'
+export const BACKEND_UPDATE_INTENT_HEADER = 'X-CX-Codex-Intent'
+export const BACKEND_UPDATE_INTENT_VALUE = 'backend-update-check'
+
+const BACKEND_UPDATE_CHECK_FETCH_TIMEOUT_MS = 20000
+const BACKEND_UPDATE_UNAVAILABLE_MESSAGE = '此后端不提供版本识别（未知）：更新接口不可用。'
+const BACKEND_UPDATE_INVALID_RESPONSE_MESSAGE = '此后端返回了无法识别的更新状态（未知）。'
+const BACKEND_UPDATE_FALLBACK_REASON = '当前安装方式不支持自动更新。'
+
+export type BackendUpdateBuildKind = 'compiled-cli' | 'candidate-entry' | 'unknown'
+
+export type BackendUpdateIdentity = {
+  version: string
+  buildId: string
+  entrySha256: string
+  instanceId: string
+  buildKind: BackendUpdateBuildKind
+  officialSourceVerified: boolean
+}
+
+export type BackendUpdateApplicability = {
+  automaticUpdateSupported: boolean
+  reason: string
+}
+
+export type BackendUpdateComparison = 'newer' | 'equal' | 'ahead' | 'unknown'
+export type BackendUpdateCheckStatus = BackendUpdateComparison | 'error'
+
+export type BackendUpdateErrorCode =
+  | 'aborted'
+  | 'timeout'
+  | 'network'
+  | 'http-status'
+  | 'redirect'
+  | 'content-type'
+  | 'too-large'
+  | 'invalid-json'
+  | 'invalid-release'
+  | 'invalid-tag'
+  | 'apply-unsupported'
+  | 'unavailable'
+  | 'unknown'
+
+export type BackendUpdateCheckResult = {
+  checkedAtIso: string
+  instanceId: string
+  releaseSource: 'official-release-metadata' | 'unknown'
+  status: BackendUpdateCheckStatus
+  comparison: BackendUpdateComparison
+  current: { version: string; buildId: string } | null
+  latest: { tag: string; version: string } | null
+  error: { code: BackendUpdateErrorCode; message: string } | null
+}
+
+export type BackendUpdateStatus = {
+  backend: BackendUpdateIdentity
+  applicability: BackendUpdateApplicability
+  result: BackendUpdateCheckResult | null
+  trustedOriginConfigured: boolean
+}
+
+export type BackendUpdateUnavailable = { ok: false; code: string; message: string }
+export type BackendUpdateStatusOutcome = { ok: true; status: BackendUpdateStatus } | BackendUpdateUnavailable
+export type BackendUpdateRequestOptions = { signal?: AbortSignal }
+
+function readBackendUpdateRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function readBackendUpdateText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeBackendUpdateBuildKind(value: unknown): BackendUpdateBuildKind {
+  return value === 'compiled-cli' || value === 'candidate-entry' ? value : 'unknown'
+}
+
+function normalizeBackendUpdateComparison(value: unknown): BackendUpdateComparison {
+  return value === 'newer' || value === 'equal' || value === 'ahead' ? value : 'unknown'
+}
+
+function normalizeBackendUpdateCheckStatus(value: unknown): BackendUpdateCheckStatus {
+  if (value === 'error') return 'error'
+  return normalizeBackendUpdateComparison(value)
+}
+
+const BACKEND_UPDATE_ERROR_CODES: readonly BackendUpdateErrorCode[] = [
+  'aborted',
+  'timeout',
+  'network',
+  'http-status',
+  'redirect',
+  'content-type',
+  'too-large',
+  'invalid-json',
+  'invalid-release',
+  'invalid-tag',
+  'apply-unsupported',
+  'unavailable',
+]
+
+function normalizeBackendUpdateErrorCode(value: unknown): BackendUpdateErrorCode {
+  const text = readBackendUpdateText(value)
+  return BACKEND_UPDATE_ERROR_CODES.includes(text as BackendUpdateErrorCode)
+    ? text as BackendUpdateErrorCode
+    : 'unknown'
+}
+
+export function normalizeBackendUpdateIdentity(value: unknown): BackendUpdateIdentity {
+  const record = readBackendUpdateRecord(value)
+  if (!record) {
+    return {
+      version: '',
+      buildId: '',
+      entrySha256: '',
+      instanceId: '',
+      buildKind: 'unknown',
+      officialSourceVerified: false,
+    }
+  }
+  return {
+    version: readBackendUpdateText(record.version),
+    buildId: readBackendUpdateText(record.buildId),
+    entrySha256: readBackendUpdateText(record.entrySha256),
+    instanceId: readBackendUpdateText(record.instanceId),
+    buildKind: normalizeBackendUpdateBuildKind(record.buildKind),
+    officialSourceVerified: record.officialSourceVerified === true,
+  }
+}
+
+export function normalizeBackendUpdateApplicability(value: unknown): BackendUpdateApplicability {
+  const record = readBackendUpdateRecord(value)
+  const reason = readBackendUpdateText(record?.reason)
+  return {
+    automaticUpdateSupported: record?.automaticUpdateSupported === true,
+    reason: reason || BACKEND_UPDATE_FALLBACK_REASON,
+  }
+}
+
+/**
+ * A result is only kept when it is bound to the exact backend instance keyed in
+ * the same payload. A mismatched (or unkeyable) instance is discarded instead of
+ * being displayed as the current backend's comparison.
+ */
+export function normalizeBackendUpdateResult(value: unknown, backendInstanceId: string): BackendUpdateCheckResult | null {
+  const record = readBackendUpdateRecord(value)
+  if (!record) return null
+  const instanceId = readBackendUpdateText(record.instanceId)
+  if (!instanceId || !backendInstanceId || instanceId !== backendInstanceId) return null
+
+  const status = normalizeBackendUpdateCheckStatus(record.status)
+  // An error result never keeps a stale comparison label.
+  const comparison = status === 'error' ? 'unknown' : normalizeBackendUpdateComparison(record.comparison)
+
+  const currentRecord = readBackendUpdateRecord(record.current)
+  const currentVersion = readBackendUpdateText(currentRecord?.version)
+  const latestRecord = readBackendUpdateRecord(record.latest)
+  const latestTag = readBackendUpdateText(latestRecord?.tag)
+  const errorRecord = readBackendUpdateRecord(record.error)
+
+  return {
+    checkedAtIso: readBackendUpdateText(record.checkedAtIso),
+    instanceId,
+    releaseSource: record.releaseSource === 'official-release-metadata' ? 'official-release-metadata' : 'unknown',
+    status,
+    comparison,
+    current: currentVersion
+      ? { version: currentVersion, buildId: readBackendUpdateText(currentRecord?.buildId) }
+      : null,
+    latest: latestTag
+      ? { tag: latestTag, version: readBackendUpdateText(latestRecord?.version) }
+      : null,
+    error: status === 'error'
+      ? {
+        code: normalizeBackendUpdateErrorCode(errorRecord?.code),
+        message: readBackendUpdateText(errorRecord?.message) || '后端更新检测失败。',
+      }
+      : null,
+  }
+}
+
+export function normalizeBackendUpdateStatus(value: unknown): BackendUpdateStatus | null {
+  const record = readBackendUpdateRecord(value)
+  // The identity envelope is mandatory: without it this is an unrecognised
+  // response, not an "unknown backend" that could be filled in from the page.
+  if (!record || !readBackendUpdateRecord(record.backend)) return null
+  const backend = normalizeBackendUpdateIdentity(record.backend)
+  return {
+    backend,
+    applicability: normalizeBackendUpdateApplicability(record.applicability),
+    result: normalizeBackendUpdateResult(record.result, backend.instanceId),
+    trustedOriginConfigured: record.trustedOriginConfigured === true,
+  }
+}
+
+async function readBackendUpdateJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+function readBackendUpdateErrorMessage(payload: unknown, status: number): { code: string; message: string } {
+  const record = readBackendUpdateRecord(payload)
+  const error = readBackendUpdateRecord(record?.error)
+  const message = readBackendUpdateText(error?.message)
+  if (message) return { code: readBackendUpdateText(error?.code) || 'http-status', message }
+  if (status === 404) return { code: 'unavailable', message: BACKEND_UPDATE_UNAVAILABLE_MESSAGE }
+  return { code: 'http-status', message: `更新接口返回 HTTP ${String(status)}。` }
+}
+
+function readBackendUpdateRequestFailure(error: unknown, signal?: AbortSignal): { code: string; message: string } {
+  if (signal?.aborted) return { code: 'aborted', message: '更新检测已取消，未采用本次结果。' }
+  const detail = error instanceof Error ? error.message.trim() : ''
+  return {
+    code: 'network',
+    message: detail
+      ? `无法连接此后端获取更新信息：${detail}`
+      : '无法连接此后端获取更新信息。',
+  }
+}
+
+function normalizeBackendUpdateOutcome(
+  response: Response,
+  payload: unknown,
+): BackendUpdateStatusOutcome {
+  if (!response.ok) return { ok: false, ...readBackendUpdateErrorMessage(payload, response.status) }
+  const status = normalizeBackendUpdateStatus(payload)
+  if (!status) {
+    return { ok: false, code: 'invalid-response', message: BACKEND_UPDATE_INVALID_RESPONSE_MESSAGE }
+  }
+  return { ok: true, status }
+}
+
+/** Read-only status: frozen identity + applicability + last detection result. No metadata request. */
+export async function getBackendUpdateStatus(options: BackendUpdateRequestOptions = {}): Promise<BackendUpdateStatusOutcome> {
+  try {
+    const response = await fetchWithTimeout(BACKEND_UPDATE_STATUS_PATH, { signal: options.signal }, {
+      timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
+      label: 'Backend update status request',
+    })
+    return normalizeBackendUpdateOutcome(response, await readBackendUpdateJson(response))
+  } catch (error) {
+    return { ok: false, ...readBackendUpdateRequestFailure(error, options.signal) }
+  }
+}
+
+/** Explicit user-triggered detection: same-origin POST with intent header and empty JSON body. */
+export async function checkBackendUpdate(options: BackendUpdateRequestOptions = {}): Promise<BackendUpdateStatusOutcome> {
+  try {
+    const response = await fetchWithTimeout(BACKEND_UPDATE_CHECK_PATH, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        [BACKEND_UPDATE_INTENT_HEADER]: BACKEND_UPDATE_INTENT_VALUE,
+      },
+      body: '{}',
+      signal: options.signal,
+    }, {
+      timeoutMs: BACKEND_UPDATE_CHECK_FETCH_TIMEOUT_MS,
+      label: 'Backend update check request',
+    })
+    return normalizeBackendUpdateOutcome(response, await readBackendUpdateJson(response))
+  } catch (error) {
+    return { ok: false, ...readBackendUpdateRequestFailure(error, options.signal) }
   }
 }
 

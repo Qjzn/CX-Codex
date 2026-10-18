@@ -21,7 +21,7 @@ type FallbackItem = {
   type: 'userMessage' | 'agentMessage' | 'fileChange'
   id: string
   clientId?: string
-  phase?: 'commentary' | 'final_answer'
+  phase?: 'commentary' | 'partial_answer' | 'final_answer'
   startedAt?: string
   completedAt?: string
   status?: 'completed' | 'failed'
@@ -41,7 +41,7 @@ type RecoveredMessage = {
   id: string
   clientId?: string
   turnId?: string
-  phase?: 'commentary' | 'final_answer'
+  phase?: 'commentary' | 'partial_answer' | 'final_answer'
   atIso?: string
   source: 'response_item' | 'event_msg'
   images?: string[]
@@ -207,7 +207,9 @@ function cloneFallbackTurns(value: unknown): FallbackTurn[] {
           type: 'agentMessage',
           id,
           text,
-          ...(phase === 'commentary' || phase === 'final_answer' ? { phase } : {}),
+          ...(phase === 'commentary' || phase === 'partial_answer' || phase === 'final_answer'
+            ? { phase }
+            : {}),
           ...(readTrimmedString(item.startedAt) ? { startedAt: readTrimmedString(item.startedAt) } : {}),
           ...(item.recoverySource === 'response_item' || item.recoverySource === 'event_msg'
             ? { recoverySource: item.recoverySource }
@@ -320,7 +322,9 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   const role = payload.role === 'user' || payload.role === 'assistant' ? payload.role : null
   if (!role) return null
   const rawPhase = role === 'assistant' ? readTrimmedString(payload.phase) : ''
-  const phase = rawPhase === 'commentary' || rawPhase === 'final_answer' ? rawPhase : undefined
+  const phase = rawPhase === 'commentary' || rawPhase === 'partial_answer' || rawPhase === 'final_answer'
+    ? rawPhase
+    : undefined
   const atIso = readTrimmedString(entry.timestamp)
   const rawText = readTextContent(payload.content)
   const recoveredUserContent = role === 'user' ? readRecoveredUserContent(rawText) : null
@@ -366,7 +370,9 @@ function readEventMessage(entry: Record<string, unknown>, entryOffset: number, c
         : null
   if (!role) return null
   const rawPhase = role === 'assistant' ? readTrimmedString(payload?.phase) : ''
-  const phase = rawPhase === 'commentary' || rawPhase === 'final_answer' ? rawPhase : undefined
+  const phase = rawPhase === 'commentary' || rawPhase === 'partial_answer' || rawPhase === 'final_answer'
+    ? rawPhase
+    : undefined
   const rawText = readTrimmedString(payload?.message)
   const recoveredUserContent = role === 'user' ? readRecoveredUserContent(rawText) : null
   const localImages = role === 'user' && Array.isArray(payload?.local_images)
@@ -536,7 +542,9 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): bo
         type: 'agentMessage',
         id: itemId,
         text,
-        ...(message.phase === 'commentary' || message.phase === 'final_answer' ? { phase: message.phase } : {}),
+        ...(message.phase === 'commentary' || message.phase === 'partial_answer' || message.phase === 'final_answer'
+          ? { phase: message.phase }
+          : {}),
         ...(message.atIso ? { startedAt: message.atIso } : {}),
         recoverySource: message.source,
       })

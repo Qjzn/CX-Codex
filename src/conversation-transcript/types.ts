@@ -1,3 +1,5 @@
+import type { PermissionsApprovalView } from '../permissionsRequestApproval.js'
+
 export type ConversationExecutionState =
   | 'submitting'
   | 'queued'
@@ -96,7 +98,7 @@ export type ConversationUserBlock = {
 export type ConversationAssistantBlock = {
   kind: 'assistant'
   id: string
-  phase: 'commentary' | 'final'
+  phase: 'commentary' | 'partial' | 'final'
   text: string
   atMs: number | null
   completedAtMs: number | null
@@ -188,7 +190,7 @@ export type ConversationInteractionBlock = {
   id: string
   requestId: number | string
   responseId: number | null
-  interactionType: 'approval' | 'user-input' | 'mcp-approval' | 'mcp-input' | 'unsupported-tool' | 'generic'
+  interactionType: 'approval' | 'user-input' | 'mcp-approval' | 'mcp-input' | 'unsupported-tool' | 'permissions-approval' | 'generic'
   status: 'pending' | 'resolved' | 'void'
   label: string
   title: string
@@ -201,6 +203,8 @@ export type ConversationInteractionBlock = {
   requestedAtMs: number | null
   resolvedAtMs: number | null
   itemId: string
+  /** Only set for the dedicated permissions approval; carries the complete display rows. */
+  permissionsApproval?: PermissionsApprovalView
 }
 
 export type ConversationInteractionQuestion = {
@@ -209,6 +213,8 @@ export type ConversationInteractionQuestion = {
   question: string
   isOther: boolean
   options: string[]
+  /** Plain-text descriptions aligned with options; labels remain the response values. */
+  optionDescriptions?: string[]
 }
 
 export type ConversationNoticeBlock = {

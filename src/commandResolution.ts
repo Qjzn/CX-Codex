@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { delimiter, extname, isAbsolute, join, resolve } from 'node:path'
+import { getSpawnInvocation } from './utils/commandInvocation.js'
 
 export type CommandInvocation = {
   command: string
@@ -253,4 +255,176 @@ export function resolveSkillInstallerScriptPath(codexHome?: string): string | nu
   }
 
   return null
+}
+
+export type CodexLaunchIdentityKind = 'native' | 'launcher' | 'unknown'
+
+export type CodexLaunchIdentity = {
+  generation: number
+  launchPath: string
+  versionRaw: string | null
+  sha256: string | null
+  identityKind: CodexLaunchIdentityKind
+  reason?: string
+}
+
+export type CodexLaunchIdentityCore = Omit<CodexLaunchIdentity, 'generation'>
+
+export type CodexVersionProbeResult = {
+  status: number | null
+  stdout: string
+  error: boolean
+}
+
+export type CodexVersionProbe = (launchPath: string) => CodexVersionProbeResult
+
+export type CodexLaunchCaptureOptions = {
+  platform?: NodeJS.Platform
+  pathValue?: string
+  cwd?: string
+  probeVersion?: CodexVersionProbe
+  hashFile?: (launchPath: string) => string | null
+}
+
+export const CODEX_LAUNCH_IDENTITY_PROBE_TIMEOUT_MS = 5_000
+
+const LAUNCHER_SCRIPT_EXTENSIONS = new Set(['.cmd', '.bat', '.ps1', '.js', '.mjs', '.cjs', '.sh'])
+
+function defaultCodexVersionProbe(launchPath: string): CodexVersionProbeResult {
+  // Same Windows shim semantics and bounded timeout the real launch uses, so a `.cmd`/`.bat`
+  // target is probed through cmd.exe exactly as it is spawned.
+  const invocation = getSpawnInvocation(launchPath, ['--version'])
+  const result = spawnSync(invocation.command, invocation.args, {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: CODEX_LAUNCH_IDENTITY_PROBE_TIMEOUT_MS,
+    windowsHide: true,
+    encoding: 'utf8',
+  })
+  return {
+    status: typeof result.status === 'number' ? result.status : null,
+    stdout: typeof result.stdout === 'string' ? result.stdout : '',
+    error: Boolean(result.error) || result.signal !== null,
+  }
+}
+
+export function readCodexLaunchFileSha256(launchPath: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(launchPath)).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+export function getCodexLaunchIdentityKind(launchPath: string): CodexLaunchIdentityKind {
+  const extension = extname(launchPath).toLowerCase()
+  return LAUNCHER_SCRIPT_EXTENSIONS.has(extension) ? 'launcher' : 'native'
+}
+
+/**
+ * Freezes the final resolved launch command into an absolute, annotated target and binds the
+ * version probe, the file hash and the later launch to that exact target. It never re-resolves
+ * and never invents a trustworthy identity: any probe/hash/unresolved failure degrades to
+ * `identityKind: 'unknown'` with a null version/SHA and a short reason.
+ */
+export function captureCodexLaunchIdentity(
+  command: string,
+  options: CodexLaunchCaptureOptions = {},
+): CodexLaunchIdentityCore {
+  const cwd = options.cwd ?? process.cwd()
+  const normalizedCommand = command.trim()
+  const fallbackLaunchPath = isAbsolute(normalizedCommand)
+    ? normalizedCommand
+    : resolve(cwd, normalizedCommand || 'codex')
+
+  if (!normalizedCommand) {
+    return {
+      launchPath: fallbackLaunchPath,
+      versionRaw: null,
+      sha256: null,
+      identityKind: 'unknown',
+      reason: 'empty-launch-command',
+    }
+  }
+
+  let launchPath = fallbackLaunchPath
+  if (!isPathLike(normalizedCommand)) {
+    const pathValue = options.pathValue ?? process.env.PATH
+    const absoluteCandidate = getAbsolutePathCommandCandidates(normalizedCommand, pathValue)
+      .find((entry) => existsSync(entry))
+    if (!absoluteCandidate) {
+      return {
+        launchPath: fallbackLaunchPath,
+        versionRaw: null,
+        sha256: null,
+        identityKind: 'unknown',
+        reason: 'unresolved-launch-path',
+      }
+    }
+    launchPath = absoluteCandidate
+  }
+
+  const hashFile = options.hashFile ?? readCodexLaunchFileSha256
+  const hashBeforeProbe = hashFile(launchPath)
+  const probe = (options.probeVersion ?? defaultCodexVersionProbe)(launchPath)
+  const hashAfterProbe = hashFile(launchPath)
+
+  if (hashBeforeProbe === null || hashAfterProbe === null) {
+    return { launchPath, versionRaw: null, sha256: null, identityKind: 'unknown', reason: 'hash-failed' }
+  }
+  if (hashBeforeProbe !== hashAfterProbe) {
+    return {
+      launchPath,
+      versionRaw: null,
+      sha256: null,
+      identityKind: 'unknown',
+      reason: 'identity-changed-during-version-probe',
+    }
+  }
+
+  const versionRaw = probe.error || probe.status !== 0 ? null : probe.stdout.trim() ? probe.stdout : null
+  if (versionRaw === null) {
+    return { launchPath, versionRaw: null, sha256: null, identityKind: 'unknown', reason: 'version-probe-failed' }
+  }
+
+  return {
+    launchPath,
+    versionRaw,
+    sha256: hashAfterProbe,
+    identityKind: getCodexLaunchIdentityKind(launchPath),
+  }
+}
+
+export function markCodexLaunchIdentityUnknown(
+  core: CodexLaunchIdentityCore,
+  reason: string,
+): CodexLaunchIdentityCore {
+  return {
+    launchPath: core.launchPath,
+    versionRaw: null,
+    sha256: null,
+    identityKind: 'unknown',
+    reason,
+  }
+}
+
+export function createCodexLaunchIdentity(core: CodexLaunchIdentityCore, generation: number): CodexLaunchIdentity {
+  return Object.freeze({
+    generation,
+    launchPath: core.launchPath,
+    versionRaw: core.versionRaw,
+    sha256: core.sha256,
+    identityKind: core.identityKind,
+    ...(core.reason ? { reason: core.reason } : {}),
+  })
+}
+
+export function copyCodexLaunchIdentity(identity: CodexLaunchIdentity): CodexLaunchIdentity {
+  return {
+    generation: identity.generation,
+    launchPath: identity.launchPath,
+    versionRaw: identity.versionRaw,
+    sha256: identity.sha256,
+    identityKind: identity.identityKind,
+    ...(identity.reason ? { reason: identity.reason } : {}),
+  }
 }

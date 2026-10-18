@@ -9,6 +9,8 @@ import {
   readCodexSessionLogIdentity,
 } from './codexSessionIdentity.js'
 
+const pendingSessionLogPaths = new Map<string, Promise<string>>()
+
 export async function validateCodexSessionLogPath(
   absolutePath: string,
   threadId: string,
@@ -27,6 +29,24 @@ export async function resolveCodexSessionLogPath(
 ): Promise<string> {
   const normalizedThreadId = normalizeCodexThreadId(threadId)
   if (!normalizedThreadId) return ''
+  const home = resolve(codexHomeDir)
+  const key = JSON.stringify([home, normalizedThreadId])
+  const existing = pendingSessionLogPaths.get(key)
+  if (existing) return await existing
+
+  const pending = discoverCodexSessionLogPath(normalizedThreadId, home)
+  pendingSessionLogPaths.set(key, pending)
+  try {
+    return await pending
+  } finally {
+    if (pendingSessionLogPaths.get(key) === pending) pendingSessionLogPaths.delete(key)
+  }
+}
+
+async function discoverCodexSessionLogPath(
+  normalizedThreadId: string,
+  codexHomeDir: string,
+): Promise<string> {
   const filenameHint = new RegExp(`(?:^|[^0-9a-f])${normalizedThreadId}(?=$|[^0-9a-f])`, 'iu')
   const candidates: Array<{ relativePath: string; modifiedAtMs: number }> = []
   const directories: string[] = [...CODEX_SESSION_ROOTS]

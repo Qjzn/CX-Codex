@@ -17,6 +17,10 @@ import {
   type LocalStateRoutesDependencies,
 } from './localStateRoutes.js'
 import {
+  handleAssistantRoutes,
+  type AssistantRoutesDependencies,
+} from './assistantRoutes.js'
+import {
   handleRpcProxyRoute,
   type RpcProxyRouteDependencies,
 } from './rpcProxyRoute.js'
@@ -24,6 +28,7 @@ import {
   handleRuntimeActionRoutes,
   type RuntimeActionRoutesDependencies,
 } from './runtimeActionRoutes.js'
+import { isPublicAssistantRequestAllowed } from './assistantPublicRequestPolicy.js'
 import { handleTranscriptionRoutes } from './transcriptionRoute.js'
 import {
   handleServerRequestRoutes,
@@ -78,8 +83,10 @@ type CodexBridgeRouteAppServer = {
 
 type RuntimeRouteStore = RuntimeStateRoutesDependencies['runtimeRequestStore']
   & DiagnosticsRoutesDependencies['runtimeStore']
+  & AssistantRoutesDependencies['runtimeStore']
   & {
     getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null
+    getRequest(requestId: string): RuntimeRequestRecord | null
   }
 
 type RuntimeStateStoreForRoutes = RpcProxyRouteDependencies['runtimeStateStore']
@@ -109,6 +116,14 @@ type NotificationReplayForRoutes = {
 }
 
 export type CodexBridgeRouteHandlersDependencies = {
+  assistant?: {
+    mainThreadId(): string
+    canDispatch(): boolean
+    canReturnResults?(): boolean
+    listTasks(): unknown[]
+    isWorkerThread(threadId: string): boolean
+    isPublicRpcAllowed(method: string, params: unknown): boolean
+  }
   appServer: CodexBridgeRouteAppServer
   methodCatalog: AppServerMethodCatalog
   readJsonBody: LocalStateRoutesDependencies['readJsonBody']
@@ -123,6 +138,7 @@ export type CodexBridgeRouteHandlersDependencies = {
   subscribeNotifications: NotificationSseRouteDependencies['subscribeNotifications']
   persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot
   startRuntimeTurn: RuntimeActionRoutesDependencies['startRuntimeTurn']
+  startAssistantConversation?: AssistantRoutesDependencies['startAssistantConversation']
   interruptRuntimeTurn: RuntimeActionRoutesDependencies['interruptRuntimeTurn']
   enqueueRuntimeTurn: RuntimeActionRoutesDependencies['enqueueRuntimeTurn']
   listRuntimeQueue: RuntimeActionRoutesDependencies['listRuntimeQueue']
@@ -167,8 +183,20 @@ export function createCodexBridgeRouteHandlers(
       readJsonBody,
       setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
     }),
+    () => handleAssistantRoutes(req, res, url, {
+      readJsonBody,
+      runtimeStore,
+      startAssistantConversation: dependencies.startAssistantConversation,
+      readMainThreadId: dependencies.assistant?.mainThreadId,
+      readTasks: dependencies.assistant?.listTasks,
+      supportsDispatch: dependencies.assistant?.canDispatch,
+      supportsResultReturn: dependencies.assistant?.canReturnResults,
+      // The ordinary starter inherits host tools and permissions. Only a
+      // verified, role-restricted assistant starter may be wired here.
+    }),
     () => handleRpcProxyRoute(req, res, url, {
       readJsonBody,
+      isPublicRpcAllowed: dependencies.assistant?.isPublicRpcAllowed,
       rpc: (method, params) => appServer.rpc(method, params),
       runtimeStateStore,
       persistRuntimeSnapshot: dependencies.persistRuntimeSnapshot,
@@ -184,6 +212,7 @@ export function createCodexBridgeRouteHandlers(
     }),
     () => handleRuntimeActionRoutes(req, res, url, {
       readJsonBody,
+      isPublicRequestAllowed: (payload) => isPublicAssistantRequestAllowed(payload, (id) => runtimeStore.getRequest(id), dependencies.assistant?.isWorkerThread),
       startRuntimeTurn: dependencies.startRuntimeTurn,
       interruptRuntimeTurn: dependencies.interruptRuntimeTurn,
       getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import type { AppServerHealth } from './appServerHealth.js'
+import { createAppServerHealthSnapshot, type AppServerHealth } from './appServerHealth.js'
 import { setJson } from './httpJsonResponse.js'
 import type { PendingServerRequest } from './pendingServerRequests.js'
 import type {
@@ -11,6 +11,7 @@ import {
   createServerRequestDiagnosticsSnapshot,
 } from './serverRequestDiagnostics.js'
 import { redactDiagnosticsValue } from './diagnosticsRedaction.js'
+import { compareSchemaAuditIdentity } from './appServerSchemaAuditSummary.js'
 
 const HEALTH_DIAGNOSTICS_TIMEOUT_MS = 1_500
 const FULL_DIAGNOSTICS_TIMEOUT_MS = 5_000
@@ -81,7 +82,14 @@ export async function handleDiagnosticsRoutes(
   }
 
   const timestamp = (dependencies.nowIso ?? (() => new Date().toISOString()))()
+  // Freeze the app-server status once, before the first await, so a single request compares against
+  // and reports the same generation even if the owner restarts the process while a reader is pending.
+  const appServerStatus = createAppServerHealthSnapshot(dependencies.getAppServerStatus())
   const schemaAudit = await dependencies.readSchemaAuditSummary()
+  const schemaAuditWithIdentity = {
+    ...(asRecord(schemaAudit) ?? {}),
+    identityMatch: compareSchemaAuditIdentity(schemaAudit, appServerStatus),
+  }
   const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(dependencies.listPendingServerRequests())
   const diagnosticsTimeoutMs = url.pathname === '/codex-api/health'
     ? HEALTH_DIAGNOSTICS_TIMEOUT_MS
@@ -106,12 +114,12 @@ export async function handleDiagnosticsRoutes(
     setJson(res, 200, {
       status: 'ok',
       data: redactDiagnosticsValue({
-        appServer: dependencies.getAppServerStatus(),
+        appServer: appServerStatus,
         notificationDiagnostics: dependencies.getNotificationDiagnostics(),
         statusDiagnostics: dependencies.getStatusDiagnostics(),
         serverRequestDiagnostics,
         hookDiagnostics,
-        schemaAudit,
+        schemaAudit: schemaAuditWithIdentity,
         windowsSandbox,
         transcription: dependencies.getTranscriptionDiagnostics(),
         ...(dependencies.getSessionFileSyncStatus
@@ -149,12 +157,12 @@ export async function handleDiagnosticsRoutes(
   setJson(res, 200, {
     status: 'ok',
     data: redactDiagnosticsValue({
-      appServer: dependencies.getAppServerStatus(),
+      appServer: appServerStatus,
       notificationDiagnostics: dependencies.getNotificationDiagnostics(),
       statusDiagnostics: dependencies.getStatusDiagnostics(),
       serverRequestDiagnostics,
       hookDiagnostics,
-      schemaAudit,
+      schemaAudit: schemaAuditWithIdentity,
       windowsSandbox,
       transcription: dependencies.getTranscriptionDiagnostics(),
       ...(dependencies.getSessionFileSyncStatus
@@ -170,4 +178,10 @@ export async function handleDiagnosticsRoutes(
     }),
   })
   return true
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
 }

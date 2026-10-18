@@ -400,9 +400,10 @@ function Assert-MessageActionHitTestingSource {
     Join-Path (Get-Location) "src\components\sidebar\SidebarThreadControls.vue"
   )
 
-  Assert-True ($source -match "\.message-actions\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;") "visually hidden projected-message actions must not intercept pointer input"
-  Assert-True ($source -match "\.user-message:hover\s+\.message-actions[\s\S]*?\.final-answer:focus-within\s+\.message-actions[\s\S]*?pointer-events:\s*auto;") "hovered or keyboard-focused projected messages must restore action ownership"
-  Assert-True ($source -match "@media\s*\(max-width:\s*767px\)[\s\S]*?\.message-actions\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*auto;") "touch viewports must keep projected-message actions visible and operable"
+  $messageActionsSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ConversationMessageActions.vue")
+  Assert-True ($source -match '<ConversationMessageActions' -and $messageActionsSource -notmatch 'opacity:\s*0;') "message actions must have one visible, operable presentation rather than hidden hit targets"
+  Assert-True ($messageActionsSource -match 'aria-haspopup="menu"' -and $messageActionsSource -match '<Teleport to="body">' -and $messageActionsSource -match 'focus-visible') "secondary message actions must use a named, unclipped keyboard-operable menu"
+  Assert-True ($messageActionsSource -match '@media \(pointer: coarse\), \(max-width: 767px\)' -and $messageActionsSource -match '\.message-action\s*\{\s*width: 44px; height: 44px;') "touch viewports must keep visible message actions at 44px"
   Assert-True ($source -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.message-action,[\s\S]*?\.quiet-button,[\s\S]*?\.process-toggle,[\s\S]*?\.activity-details\s*>\s*summary,[\s\S]*?\.file-summary\s*>\s*summary,[\s\S]*?\.file-row\s*>\s*summary[\s\S]*?min-height:\s*44px;") "coarse-pointer conversation actions and disclosure controls must retain a 44px target beyond phone-width layouts"
   Assert-True ($composerSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.thread-composer-input,[\s\S]*?\.thread-composer-runtime-trigger[\s\S]*?min-height:\s*44px;[\s\S]*?\.thread-composer-expand,[\s\S]*?\.thread-composer-stop[\s\S]*?min-width:\s*44px;[\s\S]*?min-height:\s*44px;") "coarse-pointer composer input and standalone controls must retain 44px targets"
   Assert-True ($goalSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.thread-goal-action,[\s\S]*?\.thread-goal-confirm\s+button[\s\S]*?min-height:\s*44px;") "coarse-pointer goal controls must retain a 44px target"
@@ -517,10 +518,12 @@ function Assert-SemanticConversationMarkdownSource {
   $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\components\content\ConversationRegressionFixture.vue"
   )
+  $richTextSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ConversationRichText.vue")
+  $rendererSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\conversationRichText.ts")
 
-  Assert-True ($conversationSource -match "import\s+MarkdownIt\s+from\s+'markdown-it'" -and $conversationSource -match "new\s+MarkdownIt\(\{\s*html:\s*false") "projected conversation Markdown must use the installed parser with raw HTML disabled"
-  Assert-True ($conversationSource -match 'v-html="renderMarkdown\(entry\.block\.text\)"' -and $conversationSource -match 'v-html="renderMarkdown\(turn\.final\.text\)"') "public progress and explicit final replies must share the same semantic Markdown renderer"
-  Assert-True ($conversationSource -match '\.message-markdown\s+:deep\(h2\)' -and $conversationSource -match '\.message-markdown\s+:deep\(ul\)\s*\{\s*list-style-type:\s*disc;') "projected headings and bullet lists must keep readable block typography and visible markers"
+  Assert-True ($rendererSource -match "import\s+MarkdownIt\s+from\s+'markdown-it'" -and $rendererSource -match "new\s+MarkdownIt\(\{\s*html:\s*false" -and $richTextSource -match 'DOMPurify\.sanitize') "projected conversation Markdown must use the installed parser with raw HTML disabled and sanitize rendered blocks"
+  Assert-True ($conversationSource -match '<ConversationRichText[\s\S]*?:text="entry\.block\.text"' -and $conversationSource -match '<ConversationRichText[\s\S]*?:text="turn\.final\.text"' -and $conversationSource -notmatch 'v-html=') "public progress and explicit final replies must share the same semantic Markdown component"
+  Assert-True ($richTextSource -match ':deep\(h2\)' -and $richTextSource -match ':deep\(ul\)\s*\{\s*list-style-type:\s*disc;') "projected headings and bullet lists must keep readable block typography and visible markers"
   Assert-True ($conversationSource -match 'class="final-answer"' -and $conversationSource -notmatch 'class="message-card') "assistant replies must stay in the flat projected document surface rather than legacy nested cards"
   Assert-True ($fixtureSource -match "markdownSemantic" -and $fixtureSource -match "## 三、关键验证结果" -and $fixtureSource -match "- 运行时间：7200 秒") "the conversation fixture must retain a representative semantic Markdown report"
 }
@@ -824,6 +827,7 @@ function Assert-HiddenPageQuiescenceSource {
 
 function Assert-ReliableClipboardSource {
   $clipboardSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\utils\clipboard.ts")
+  $messageActionsSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ConversationMessageActions.vue")
   $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
   $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
@@ -838,8 +842,8 @@ function Assert-ReliableClipboardSource {
   Assert-True (([regex]::Matches($sidebarSource, "onCopyThreadLink\(openThreadMenuThread\.id\)")).Count -eq 1 -and $sidebarSource -match "'copy-thread-link':\s*\[threadId:\s*string\]") "the shared sidebar thread menu must expose the thread-link copy action"
   Assert-True ($appSource -match '@copy-thread-link="onCopyThreadLink"' -and $appSource -match 'function\s+onCopyThreadLink[\s\S]*?url\.hash\s*=\s*`/thread/\$\{encodeURIComponent\(threadId\)\}`[\s\S]*?copyTextToClipboard\(url\.toString\(\)\)[\s\S]*?已复制会话链接') "thread-link copying must preserve the current site and use the canonical encoded hash route with truthful success feedback"
   Assert-True ($appSource -match "复制失败，请手动复制浏览器地址") "thread-link copy failure must remain visible and actionable"
-  Assert-True ($conversationSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $conversationSource -match "await\s+copyTextToClipboard\(text\)[\s\S]*?message:\s*'已复制'") "projected message copying must use the shared path and report success"
-  Assert-True ($conversationSource -match "复制失败，请手动选择内容" -and $conversationSource -match "emit\('copyStatus'[\s\S]*?tone:\s*'danger'") "conversation copy failures must remain visible and actionable"
+  Assert-True ($messageActionsSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $messageActionsSource -match "await\s+copyTextToClipboard\(props.text\)[\s\S]*?copied.value = true" -and $messageActionsSource -match 'role="status"') "projected message copying must use the shared path and report local success"
+  Assert-True ($messageActionsSource -match "复制失败，请手动选择内容" -and $messageActionsSource -match "emit\('copyStatus'[\s\S]*?tone:\s*'danger'") "conversation copy failures must remain visible and actionable"
   Assert-True ($conversationFixtureSource -match '@copy-status="copyStatus\s*=\s*\$event"' -and $conversationFixtureSource -match 'class="conversation-regression-copy-status"') "the conversation fixture must expose visible clipboard failure feedback"
   Assert-True ($remoteAccessSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $remoteAccessSource -match "await\s+copyTextToClipboard\(url\)") "remote-access address copying must share the HTTP-safe fallback"
 }
@@ -7168,7 +7172,9 @@ JSON.stringify({
   $results | Format-Table -AutoSize
   Write-Step "all frontend checks passed"
 } finally {
-  try {
-    Invoke-AgentBrowser -Arguments @("--session", $session, "close", "--all") | Out-Null
-  } catch {}
+  if (-not $SourceOnly) {
+    try {
+      Invoke-AgentBrowser -Arguments @("--session", $session, "close") | Out-Null
+    } catch {}
+  }
 }

@@ -19,6 +19,7 @@ export type RuntimeActionRoutesDependencies = {
   restoreQueuedRuntimeTurn?: (requestId: string) => boolean
   retryQueuedRuntimeTurn?: (requestId: string) => boolean
   reorderQueuedRuntimeTurns?: (threadId: string, requestIds: string[]) => boolean | Promise<boolean>
+  isPublicRequestAllowed?: (payload: unknown) => boolean
 }
 
 export async function handleRuntimeActionRoutes(
@@ -29,6 +30,7 @@ export async function handleRuntimeActionRoutes(
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/queue' && dependencies.enqueueRuntimeTurn) {
     const payload = await dependencies.readJsonBody(req)
+    if (rejectManagedMutation(res, dependencies, payload)) return true
     const result = dependencies.enqueueRuntimeTurn(payload)
     setJson(res, 202, { data: result })
     return true
@@ -42,6 +44,7 @@ export async function handleRuntimeActionRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/queue/reorder' && dependencies.reorderQueuedRuntimeTurns) {
     const payload = await dependencies.readJsonBody(req)
+    if (rejectManagedMutation(res, dependencies, payload)) return true
     const row = payload && typeof payload === 'object' && !Array.isArray(payload)
       ? payload as Record<string, unknown>
       : {}
@@ -70,16 +73,19 @@ export async function handleRuntimeActionRoutes(
       return true
     }
     if (req.method === 'DELETE' && !isRetry && !isRestore && dependencies.cancelQueuedRuntimeTurn) {
+      if (rejectManagedMutation(res, dependencies, { requestId })) return true
       const removed = await dependencies.cancelQueuedRuntimeTurn(requestId)
       setJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'Queued message not found' })
       return true
     }
     if (req.method === 'POST' && isRetry && dependencies.retryQueuedRuntimeTurn) {
+      if (rejectManagedMutation(res, dependencies, { requestId })) return true
       const retried = dependencies.retryQueuedRuntimeTurn(requestId)
       setJson(res, retried ? 202 : 409, retried ? { ok: true } : { error: 'Queued message is not retryable' })
       return true
     }
     if (req.method === 'POST' && isRestore && dependencies.restoreQueuedRuntimeTurn) {
+      if (rejectManagedMutation(res, dependencies, { requestId })) return true
       const restored = dependencies.restoreQueuedRuntimeTurn(requestId)
       setJson(res, restored ? 202 : 409, restored ? { ok: true } : { error: 'Queued message is not restorable' })
       return true
@@ -88,6 +94,7 @@ export async function handleRuntimeActionRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/send') {
     const payload = await dependencies.readJsonBody(req)
+    if (rejectManagedMutation(res, dependencies, payload)) return true
     try {
       const result = await dependencies.startRuntimeTurn(payload)
       setJson(res, isRuntimeStartPending(result.status) ? 202 : 200, { data: result })
@@ -118,12 +125,25 @@ export async function handleRuntimeActionRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/interrupt') {
     const payload = await dependencies.readJsonBody(req)
+    if (rejectManagedMutation(res, dependencies, payload)) return true
     const result = await dependencies.interruptRuntimeTurn(payload)
     setJson(res, result.status === 'stop_uncertain' ? 202 : 200, { data: result })
     return true
   }
 
   return false
+}
+
+function rejectManagedMutation(
+  res: ServerResponse,
+  dependencies: RuntimeActionRoutesDependencies,
+  payload: unknown,
+): boolean {
+  if (!dependencies.isPublicRequestAllowed) return false
+  // Policy/storage failures must propagate; only an explicit refusal is a 403.
+  if (dependencies.isPublicRequestAllowed(payload)) return false
+  setJson(res, 403, { error: '助手托管请求须从专用入口操作' })
+  return true
 }
 
 function isRuntimeStartPending(status: string): boolean {

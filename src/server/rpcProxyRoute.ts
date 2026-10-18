@@ -60,6 +60,7 @@ export type RpcProxyRouteDependencies = {
   ) => Promise<unknown | null>
   augmentThreadListRpcResult: (params: unknown, result: unknown) => Promise<unknown>
   clearThreadSearchIndex: () => void
+  isPublicRpcAllowed?: (method: string, params: unknown) => boolean
 }
 
 export async function handleRpcProxyRoute(
@@ -77,6 +78,11 @@ export async function handleRpcProxyRoute(
 
   if (!body || typeof body.method !== 'string' || body.method.length === 0) {
     setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
+    return true
+  }
+
+  if (dependencies.isPublicRpcAllowed && !dependencies.isPublicRpcAllowed(body.method, body.params)) {
+    setJson(res, 403, { error: '助手托管线程仅允许读取执行记录' })
     return true
   }
 

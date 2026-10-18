@@ -961,7 +961,7 @@ async function readShellMetrics(client) {
     const subtitle = document.querySelector('.content-header-subtitle');
     const status = document.querySelector('.docs-status');
     const composer = document.querySelector('.thread-composer-shell');
-    const userMessage = document.querySelector('.user-message');
+    const userMessage = document.querySelector('.user-message-body');
     const actionGrid = document.querySelector('.docs-sidebar-actions');
     const actionButtons = Array.from(actionGrid?.querySelectorAll('button') || []);
     const primaryAction = actionGrid?.querySelector('.docs-sidebar-action-primary');

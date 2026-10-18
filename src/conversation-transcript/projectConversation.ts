@@ -16,8 +16,13 @@ import type {
   ConversationUserBlock,
 } from './types.js'
 import { isTerminalConversationExecutionState } from './types.js'
+import {
+  isPermissionsApprovalRequestMethod,
+  projectPermissionsApproval,
+} from '../permissionsRequestApproval.js'
 import { deduplicateFileMentions, presentUserMessageText } from './userMessagePresentation.js'
 import { findUserMessageIdentityMatch, readUserMessageClientId, userMessageDisplayId } from './userMessageIdentity.js'
+import { isInternalContextMessageText } from '../internalContextMessage.js'
 
 const MAX_TEXT_LENGTH = 40_000
 const MAX_OUTPUT_LENGTH = 24_000
@@ -737,6 +742,17 @@ function projectTurn(
     ? null
     : Math.max(0, (completedAtMs ?? input.nowMs) - startedAtMs - waitedMs)
 
+  // A partial answer is a derived block, so a terminal turn must show it settled
+  // even when the item carries no completion timing. Input items and logs are not
+  // rewritten and no completedAt is invented; running turns keep streaming.
+  if (isTerminalConversationExecutionState(stateValue)) {
+    for (const block of blocks) {
+      if (block.kind === 'assistant' && block.phase === 'partial' && block.streaming) {
+        block.streaming = false
+      }
+    }
+  }
+
   const finals = blocks.filter((block): block is ConversationAssistantBlock => (
     block.kind === 'assistant' && block.phase === 'final'
   ))
@@ -883,6 +899,15 @@ function projectUserItem(item: MutableItem): ConversationUserBlock | null {
     }
   }
   if (text.length === 0 && images.length === 0 && skills.length === 0 && mentions.length === 0) return null
+  // A native assistant report opens its turn with a reserved transport user item
+  // whose body is the internal report envelope. That item is protocol input, not
+  // user speech. Both a reserved assistant-report clientId and the internal-prefix
+  // classification are required, so an ordinary user quoting reserved XML or
+  // internal text stays visible, and a report-ID item without the internal prefix
+  // is kept. Only this opener block is dropped; the turn, its blocks and the final
+  // answer project unchanged.
+  if (readUserMessageClientId(item.raw).startsWith('assistant-report:')
+    && isInternalContextMessageText(text.join('\n'))) return null
   const presentation = presentUserMessageText(text.join('\n'))
   return {
     kind: 'user',
@@ -902,13 +927,20 @@ function projectUserItem(item: MutableItem): ConversationUserBlock | null {
   }
 }
 
+function readAssistantPhase(rawPhase: unknown): ConversationAssistantBlock['phase'] {
+  const phase = readString(rawPhase)
+  if (phase === 'final_answer') return 'final'
+  if (phase === 'partial_answer') return 'partial'
+  return 'commentary'
+}
+
 function projectAssistantItem(item: MutableItem): ConversationAssistantBlock | null {
   const text = boundText(readString(item.raw.text) || item.streamingText, MAX_TEXT_LENGTH)
   if (!text) return null
   return {
     kind: 'assistant',
     id: item.id,
-    phase: readString(item.raw.phase) === 'final_answer' ? 'final' : 'commentary',
+    phase: readAssistantPhase(item.raw.phase),
     text,
     atMs: item.startedAtMs,
     completedAtMs: item.completedAtMs,
@@ -1099,7 +1131,14 @@ function projectInteraction(interaction: MutableInteraction): ConversationIntera
   let interactionType: ConversationInteractionBlock['interactionType'] = 'generic'
   let label = '需要处理'
   let title = '任务等待你的处理'
-  if (method === 'item/commandExecution/requestApproval') {
+  // The dedicated permissions approval keeps its identity even when the request
+  // structure is unknown: it must never fall back to the generic interaction.
+  const isPermissionsApproval = isPermissionsApprovalRequestMethod(method)
+  if (isPermissionsApproval) {
+    interactionType = 'permissions-approval'
+    label = '确认权限范围'
+    title = '权限请求需要批准'
+  } else if (method === 'item/commandExecution/requestApproval') {
     interactionType = 'approval'
     label = '确认命令执行'
     title = '命令执行需要批准'
@@ -1137,6 +1176,11 @@ function projectInteraction(interaction: MutableInteraction): ConversationIntera
   const mcpPersistenceScopes = interactionType === 'mcp-approval'
     ? readMcpPersistenceScopes(metadata?.persist)
     : []
+  // Only the dedicated permissions approval carries the structured display model; other
+  // interactions keep the existing deep-equal contract without extra fields.
+  const permissionsApproval = isPermissionsApproval
+    ? projectPermissionsApproval(interaction.params)
+    : null
   return {
     kind: 'interaction',
     id: interaction.id,
@@ -1157,6 +1201,7 @@ function projectInteraction(interaction: MutableInteraction): ConversationIntera
     requestedAtMs: interaction.requestedAtMs,
     resolvedAtMs: interaction.resolvedAtMs,
     itemId: interaction.itemId,
+    ...(permissionsApproval ? { permissionsApproval } : {}),
   }
 }
 
@@ -1225,8 +1270,9 @@ function readInteractionQuestions(
     if (!id) return []
     const options = Array.isArray(question?.options)
       ? question.options.flatMap((rawOption) => {
-          const label = readString(asRecord(rawOption)?.label)
-          return label ? [label] : []
+          const option = asRecord(rawOption)
+          const label = readString(option?.label)
+          return label ? [{ label, description: readString(option?.description) }] : []
         })
       : []
     return [{
@@ -1234,7 +1280,8 @@ function readInteractionQuestions(
       header: readString(question?.header),
       question: readString(question?.question),
       isOther: question?.isOther === true,
-      options,
+      options: options.map((option) => option.label),
+      optionDescriptions: options.map((option) => option.description),
     }]
   })
 }

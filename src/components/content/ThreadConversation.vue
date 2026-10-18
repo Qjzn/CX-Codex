@@ -84,7 +84,8 @@
           :data-chat-feedback-client-message-id="user.clientMessageId || undefined"
           :data-chat-feedback-optimistic-message-id="user.deliveryState ? user.id : undefined"
         >
-          <div v-if="user.text" class="message-markdown message-markdown--user" v-html="renderMarkdown(user.text)" />
+          <div class="user-message-body">
+          <ConversationRichText v-if="user.text" class="message-markdown message-markdown--user" :text="user.text" @copy-status="emit('copyStatus', $event)" />
           <div v-if="user.images.length > 0" class="user-images">
             <UserAttachmentImage
               v-for="imageUrl in user.images"
@@ -97,20 +98,16 @@
               {{ mention.name || mention.path }}
             </span>
           </div>
-          <div class="message-actions message-actions--user">
+          </div>
+          <ConversationMessageActions :text="user.text" label="消息" align="end"
+            :favorite="canFavorite(user) ? isFavorite(user.id) : undefined"
+            :rollback="user === turn.opener && canRollback(turn)"
+            :confirming-rollback="confirmingRollbackTurnIndex === turn.index"
+            @favorite="toggleFavorite(user, turn)" @rollback="requestRollback(turn)"
+            @copy-status="emit('copyStatus', $event)">
             <span v-if="user.deliveryState" class="delivery-state" :data-state="user.deliveryState" role="status" aria-live="polite">
               {{ deliveryStateLabel(user.deliveryState, turn) }}
             </span>
-            <button v-if="user.text" type="button" class="message-action" @click="copyBlock(user.text)">复制</button>
-            <button
-              v-if="canFavorite(user)"
-              type="button"
-              class="message-action"
-              :aria-pressed="isFavorite(user.id)"
-              @click="toggleFavorite(user, turn)"
-            >
-              {{ isFavorite(user.id) ? '取消收藏' : '收藏' }}
-            </button>
             <button
               v-if="user.deliveryState === 'failed' && props.allowFailedMessageEdit === true"
               type="button"
@@ -127,16 +124,7 @@
             >
               重试
             </button>
-            <button
-              v-if="user === turn.opener && canRollback(turn)"
-              type="button"
-              class="message-action"
-              :class="{ 'is-confirming': confirmingRollbackTurnIndex === turn.index }"
-              @click="requestRollback(turn)"
-            >
-              {{ confirmingRollbackTurnIndex === turn.index ? '确认回退' : '回退到此轮' }}
-            </button>
-          </div>
+          </ConversationMessageActions>
         </article>
 
         <section class="assistant-turn" :aria-label="`Codex 第 ${String(turn.index + 1)} 轮`">
@@ -153,6 +141,7 @@
               <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" />
               <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
               <span
+                v-if="!isActiveTurn(turn)"
                 class="process-toggle-icon"
                 :class="{ 'is-expanded': isProcessExpanded(turn) }"
                 aria-hidden="true"
@@ -169,73 +158,68 @@
             <span class="turn-divider-line" aria-hidden="true" />
           </div>
 
-          <section v-if="hasProcessContent(turn)" class="turn-process">
+          <template v-for="segment in turnBodySegments(turn)" :key="segment.id">
+            <article
+              v-if="segment.kind === 'partial'"
+              class="partial-answer"
+              :class="{ 'is-streaming': segment.block.streaming }"
+              :data-message-id="segment.block.id"
+              aria-live="polite"
+            >
+              <ConversationRichText
+                class="message-markdown"
+                :data-chat-feedback-kind="segment.block.text ? 'assistant' : undefined"
+                :data-chat-feedback-thread-id="props.activeThreadId"
+                :data-chat-feedback-turn-id="turn.id"
+                :data-chat-feedback-item-id="segment.block.id"
+                :text="segment.block.text"
+                :streaming="segment.block.streaming"
+                @copy-status="emit('copyStatus', $event)"
+              />
+              <ConversationMessageActions :text="segment.block.text" :favorite="isFavorite(segment.block.id)"
+                @favorite="toggleFavorite(segment.block, turn)" @copy-status="emit('copyStatus', $event)" />
+            </article>
+
+            <section v-else class="turn-process">
             <Transition name="process-reveal">
               <div
-                v-if="isProcessExpanded(turn)"
+                v-if="isProcessExpanded(turn) && (segment.isFirst || segment.entries.length > 0)"
                 class="process-content"
                 :class="{
                   'has-history': processHistoryCount(turn) > 0,
                   'is-history-expanded': isProcessHistoryExpanded(turn),
                 }"
-                :data-visible-process-count="visibleProcessBlockCount(turn)"
+                :data-visible-process-count="segment.isFirst ? visibleProcessBlockCount(turn) : undefined"
               >
               <button
-                v-if="isProcessHistoryExpanded(turn) && hiddenOlderProcessCount(turn) > 0"
+                v-if="segment.isFirst && isProcessHistoryExpanded(turn) && hiddenOlderProcessCount(turn) > 0"
                 type="button"
                 class="process-history-action process-history-action--older"
                 @click="showMoreProcessHistory(turn)"
               >
                 再看更早过程（{{ String(Math.min(hiddenOlderProcessCount(turn), PROCESS_HISTORY_BATCH_SIZE)) }}）
               </button>
+                <template v-for="entry in segment.entries" :key="entry.id">
                 <article
-                  v-for="entry in visibleCommentaryEntries(turn)"
-                  :key="entry.id"
+                  v-if="entry.kind === 'commentary'"
                   class="commentary-block"
                   :data-message-id="entry.block.id"
                 >
                   <span class="process-rail-dot" aria-hidden="true" />
-                  <div
+                  <ConversationRichText
                     class="commentary-copy message-markdown"
                     :data-chat-feedback-kind="entry.block.text ? 'assistant' : undefined"
                     :data-chat-feedback-thread-id="props.activeThreadId"
                     :data-chat-feedback-turn-id="turn.id"
                     :data-chat-feedback-item-id="entry.block.id"
-                    v-html="renderMarkdown(entry.block.text)"
+                    :text="entry.block.text"
+                    :streaming="entry.block.streaming"
+                    @copy-status="emit('copyStatus', $event)"
                   />
-                  <button v-if="entry.block.text" type="button" class="inline-copy" @click="copyBlock(entry.block.text)">复制</button>
                 </article>
 
-              <div class="process-history-controls">
-                <button
-                  v-if="processHistoryCount(turn) > 0"
-                  type="button"
-                  class="process-history-action"
-                  :aria-expanded="isProcessHistoryExpanded(turn)"
-                  @click="toggleProcessHistory(turn)"
-                >
-                  {{ isProcessHistoryExpanded(turn) ? '收起历史过程' : `查看历史过程（${String(processHistoryCount(turn))}）` }}
-                </button>
-                <button
-                  v-if="processActivities(turn).length > 0"
-                  type="button"
-                  class="process-history-action process-details-toggle"
-                  :aria-expanded="expandedOperationTurnIds.has(turn.renderKey)"
-                  @click="toggleOperationDetails(turn)"
-                >
-                  {{ expandedOperationTurnIds.has(turn.renderKey) ? '收起操作详情' : `查看操作详情（${String(processActivities(turn).length)}）` }}
-                </button>
-                <button
-                  v-if="expandedOperationTurnIds.has(turn.renderKey) && processActivities(turn).length > visibleOperationCount(turn)"
-                  type="button"
-                  class="process-history-action"
-                  @click="showMoreOperations(turn)"
-                >再看更早操作</button>
-              </div>
-
                 <section
-                  v-for="entry in visibleOperationEntries(turn)"
-                  :key="entry.id"
+                  v-else
                   class="activity-group"
                   :data-activity-group-id="entry.group.id"
                   :aria-label="entry.group.label"
@@ -290,8 +274,39 @@
                     </div>
                   </article>
                 </section>
+                </template>
 
-              <div v-if="turn.interactions.some((interaction) => interaction.status !== 'pending')" class="resolved-interactions">
+              <div v-if="segment.isFirst" class="process-history-controls">
+                <button
+                  v-if="processHistoryCount(turn) > 0"
+                  type="button"
+                  class="process-history-action"
+                  :aria-expanded="isProcessHistoryExpanded(turn)"
+                  @click="toggleProcessHistory(turn)"
+                >
+                  {{ isProcessHistoryExpanded(turn) ? '收起历史过程' : `查看历史过程（${String(processHistoryCount(turn))}）` }}
+                </button>
+                <button
+                  v-if="processActivities(turn).length > 0"
+                  type="button"
+                  class="process-history-action process-details-toggle"
+                  :aria-expanded="expandedOperationTurnIds.has(turn.renderKey)"
+                  @click="toggleOperationDetails(turn)"
+                >
+                  {{ expandedOperationTurnIds.has(turn.renderKey) ? '收起操作详情' : `查看操作详情（${String(processActivities(turn).length)}）` }}
+                </button>
+                <button
+                  v-if="expandedOperationTurnIds.has(turn.renderKey) && processActivities(turn).length > visibleOperationCount(turn)"
+                  type="button"
+                  class="process-history-action"
+                  @click="showMoreOperations(turn)"
+                >再看更早操作</button>
+                <ConversationMessageActions v-if="turn.commentary.length" class="process-copy-action"
+                  :text="turn.commentary.map((block) => block.text).join('\n\n')" label="公开进展"
+                  @copy-status="emit('copyStatus', $event)" />
+              </div>
+
+              <div v-if="segment.isFirst && turn.interactions.some((interaction) => interaction.status !== 'pending')" class="resolved-interactions">
                 <span
                   v-for="interaction in turn.interactions.filter((entry) => entry.status !== 'pending')"
                   :key="interaction.id"
@@ -302,7 +317,8 @@
               </div>
               </div>
             </Transition>
-          </section>
+            </section>
+          </template>
 
           <details
             v-for="plan in proposedPlans(turn)"
@@ -316,7 +332,7 @@
               <span>{{ isPlanImplemented(plan.id, turn.id) ? '已提交执行' : plan.status === 'completed' ? canImplementPlan(plan, turn) ? '待确认' : '历史方案' : activityStatusLabel(plan.status) }}</span>
             </summary>
             <div class="plan-proposal-body">
-              <div class="message-markdown" v-html="renderMarkdown(plan.text)" />
+              <ConversationRichText class="message-markdown" :text="plan.text" :streaming="plan.status === 'in-progress'" @copy-status="emit('copyStatus', $event)" />
               <button
                 v-if="canImplementPlan(plan, turn) || isPlanImplemented(plan.id, turn.id) || props.implementingPlanId === plan.id"
                 type="button"
@@ -354,6 +370,7 @@
               :key="interaction.id"
               class="request-card"
               :data-interaction-type="interaction.interactionType"
+              :data-permissions-request-id="permissionsRequestId(interaction)"
             >
               <div class="request-card-heading">
                 <span class="request-dot" aria-hidden="true" />
@@ -371,21 +388,79 @@
               </dl>
 
               <template v-if="interaction.interactionType === 'user-input'">
-                <label v-for="question in interaction.questions" :key="question.id" class="request-field">
-                  <span>{{ question.header || question.question || '请选择' }}</span>
+                <fieldset v-for="question in interaction.questions" :key="question.id" class="request-field request-question-field">
+                  <legend>{{ question.header || question.question || '请选择' }}</legend>
+                  <p v-if="question.header && question.question && question.question !== question.header" class="request-question-text">{{ question.question }}</p>
                   <select
                     v-if="question.options.length > 0"
+                    :aria-label="question.question || question.header || '请选择'"
                     :value="requestAnswers[answerKey(interaction.id, question.id)] ?? ''"
                     @change="onRequestAnswerChange(interaction.id, question.id, $event)"
                   >
                     <option value="" disabled>请选择</option>
                     <option v-for="option in question.options" :key="option" :value="option">{{ option }}</option>
                   </select>
-                  <input v-if="question.isOther || question.options.length === 0" v-model="requestOtherAnswers[answerKey(interaction.id, question.id)]" type="text" placeholder="补充说明" />
-                </label>
+                  <dl v-if="question.optionDescriptions?.some(Boolean)" class="request-option-descriptions" aria-label="选项说明">
+                    <template v-for="(option, optionIndex) in question.options" :key="`${question.id}:${String(optionIndex)}`">
+                      <div v-if="question.optionDescriptions?.[optionIndex]" class="request-option-description">
+                        <dt>{{ option }}</dt>
+                        <dd>{{ question.optionDescriptions[optionIndex] }}</dd>
+                      </div>
+                    </template>
+                  </dl>
+                  <input v-if="question.isOther || question.options.length === 0" v-model="requestOtherAnswers[answerKey(interaction.id, question.id)]" type="text" placeholder="补充说明" aria-label="补充说明" />
+                </fieldset>
                 <div class="request-actions">
                   <button type="button" class="quiet-button quiet-button--primary" data-request-action="submit-user-input" :disabled="isInteractionResponding(interaction) || !canSubmitToolInput(interaction)" @click="submitToolInput(interaction)">提交并继续</button>
                   <button type="button" class="quiet-button" :disabled="isInteractionResponding(interaction)" @click="rejectInteraction(interaction)">取消</button>
+                </div>
+              </template>
+
+              <template v-else-if="interaction.interactionType === 'permissions-approval'">
+                <p class="request-permission-id">请求编号 {{ interaction.responseId }}</p>
+                <dl
+                  v-if="permissionsApprovalRows(interaction).length > 0"
+                  class="request-context request-context--permission"
+                >
+                  <div
+                    v-for="(row, rowIndex) in permissionsApprovalRows(interaction)"
+                    :key="`${row.label}:${String(rowIndex)}`"
+                    class="request-context-row"
+                  >
+                    <dt>{{ row.label }}</dt>
+                    <dd data-permission-row>{{ row.value }}</dd>
+                  </div>
+                </dl>
+                <p
+                  v-if="permissionsApprovalUnavailableReason(interaction)"
+                  class="request-permission-unavailable"
+                  data-permissions-unavailable-reason
+                >
+                  {{ permissionsApprovalUnavailableReason(interaction) }}
+                </p>
+                <p
+                  v-if="permissionsResponseError(interaction)"
+                  class="request-permission-error"
+                  data-permissions-response-error
+                  role="alert"
+                >
+                  {{ permissionsResponseError(interaction) }}
+                </p>
+                <div class="request-actions">
+                  <button
+                    type="button"
+                    class="quiet-button quiet-button--primary"
+                    data-permissions-action="allow-turn"
+                    :disabled="isInteractionResponding(interaction) || !permissionsApprovalCanApprove(interaction)"
+                    @click="respondPermissionsApproval(interaction, 'allow-turn')"
+                  >仅本轮允许</button>
+                  <button
+                    type="button"
+                    class="quiet-button quiet-button--danger"
+                    data-permissions-action="deny"
+                    :disabled="isInteractionResponding(interaction)"
+                    @click="respondPermissionsApproval(interaction, 'deny')"
+                  >拒绝</button>
                 </div>
               </template>
 
@@ -445,25 +520,18 @@
             :data-message-id="turn.final.id"
             aria-live="polite"
           >
-            <div
+            <ConversationRichText
               class="message-markdown message-markdown--final"
               :data-chat-feedback-kind="turn.final.text ? 'assistant' : undefined"
               :data-chat-feedback-thread-id="props.activeThreadId"
               :data-chat-feedback-turn-id="turn.id"
               :data-chat-feedback-item-id="turn.final.id"
-              v-html="renderMarkdown(turn.final.text)"
+              :text="turn.final.text"
+              :streaming="turn.final.streaming"
+              @copy-status="emit('copyStatus', $event)"
             />
-            <div class="message-actions">
-              <button type="button" class="message-action" @click="copyBlock(turn.final.text)">复制</button>
-              <button
-                type="button"
-                class="message-action"
-                :aria-pressed="isFavorite(turn.final.id)"
-                @click="toggleFavorite(turn.final, turn)"
-              >
-                {{ isFavorite(turn.final.id) ? '取消收藏' : '收藏' }}
-              </button>
-            </div>
+            <ConversationMessageActions :text="turn.final.text" :favorite="isFavorite(turn.final.id)"
+              @favorite="toggleFavorite(turn.final, turn)" @copy-status="emit('copyStatus', $event)" />
           </article>
 
           <div
@@ -512,14 +580,15 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
-import DOMPurify from 'dompurify'
-import MarkdownIt from 'markdown-it'
+import ConversationRichText from './ConversationRichText.vue'
+import ConversationMessageActions from './ConversationMessageActions.vue'
 import LoadingInline from './LoadingInline.vue'
 import UserAttachmentImage from './UserAttachmentImage.vue'
 import TurnExecutionClock from './TurnExecutionClock.vue'
+import { buildPermissionsApprovalResult } from '../../permissionsRequestApproval'
+import type { PermissionsApprovalAction, PermissionsApprovalRow } from '../../permissionsRequestApproval'
 import { useChatFeedbackDomMetrics } from '../../composables/useChatFeedbackDomMetrics'
 import { useConversationReading } from '../../composables/useConversationReading'
-import { copyTextToClipboard } from '../../utils/clipboard'
 import { derivePlanImplementationState, planImplementationKey } from '../../conversation-transcript'
 import type {
   ConversationActivity,
@@ -554,13 +623,20 @@ const props = defineProps<{
   showConnectionSettingsAction?: boolean
   favoriteMessageIds?: string[]
   allowFailedMessageEdit?: boolean
+  readOnlyExecution?: boolean
   implementingPlanId?: string
   implementedPlanIds?: string[]
 }>()
 
 const emit = defineEmits<{
   updateScrollState: [payload: { threadId: string; state: ThreadScrollState }]
-  respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
+  respondServerRequest: [payload: {
+    id: number
+    result?: unknown
+    error?: { code?: number; message: string }
+    /** Local UI-only failure receipt for this exact numeric ID; never part of the HTTP body. */
+    onResponseError?: (message: string) => void
+  }]
   rollback: [payload: { turnIndex: number; prependText?: string }]
   toggleFavorite: [intent: ConversationFavoriteIntent]
   loadOlderHistory: []
@@ -574,19 +650,12 @@ const emit = defineEmits<{
   implementPlan: [intent: ConversationPlanImplementationIntent]
 }>()
 
-const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true })
 const PROCESS_HISTORY_BATCH_SIZE = 17
 const VIRTUALIZE_MIN_TURNS = 24
 const MAX_MOUNTED_TURNS = 10
 const ESTIMATED_TURN_HEIGHT_PX = 280
 const TURN_GAP_PX = 34
 const VIRTUAL_TURN_OVERSCAN_PX = 560
-const defaultLinkOpen = markdown.renderer.rules.link_open ?? ((tokens, index, options, _env, renderer) => renderer.renderToken(tokens, index, options))
-markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
-  tokens[index]?.attrSet('target', '_blank')
-  tokens[index]?.attrSet('rel', 'noopener noreferrer')
-  return defaultLinkOpen(tokens, index, options, env, renderer)
-}
 
 const conversationListRef = ref<HTMLElement | null>(null)
 useChatFeedbackDomMetrics({ root: conversationListRef, threadId: () => props.activeThreadId })
@@ -603,6 +672,7 @@ const requestAnswers = ref<Record<string, string>>({})
 const requestOtherAnswers = ref<Record<string, string>>({})
 const mcpAnswers = ref<Record<string, string>>({})
 const respondingRequestIds = ref<Set<number>>(new Set())
+const requestResponseErrors = ref<Record<string, string>>({})
 const isAwayFromBottom = ref(false)
 const conversationViewportHeight = ref(0)
 const conversationScrollTop = ref(0)
@@ -719,13 +789,6 @@ const virtualBottomSpacerHeight = computed(() => {
   return Math.max(turnHeightMetrics.value.totalHeight - renderedEnd, 0)
 })
 
-function renderMarkdown(text: string): string {
-  return DOMPurify.sanitize(markdown.render(text), {
-    USE_PROFILES: { html: true },
-    ADD_ATTR: ['target', 'rel'],
-  })
-}
-
 function isActiveTurn(turn: ConversationTurn): boolean {
   return turn.state === 'submitting'
     || turn.state === 'queued'
@@ -836,27 +899,92 @@ type VisibleProcessEntry =
   | { kind: 'commentary'; id: string; block: ConversationAssistantBlock }
   | { kind: 'activity-group'; id: string; group: ConversationActivityGroup; activities: ConversationActivity[] }
 
+type TurnProcessSegment = {
+  kind: 'process'
+  id: string
+  isFirst: boolean
+  blockIds: Set<string>
+  entries: VisibleProcessEntry[]
+}
+
+/**
+ * Ordered turn body. Process chrome is cut at partial boundaries so a partial
+ * answer keeps its projected slot between the surrounding process spans
+ * (`partial → tool → partial → final`), instead of being merged into one blob.
+ */
+type TurnBodySegment =
+  | { kind: 'partial'; id: string; block: ConversationAssistantBlock }
+  | TurnProcessSegment
+
 function visibleProcessEntries(turn: ConversationTurn): VisibleProcessEntry[] {
   return reading.frozen.value.get(turn.renderKey) ?? liveProcessEntries(turn)
 }
 
-function visibleCommentaryEntries(turn: ConversationTurn) {
-  return visibleProcessEntries(turn).filter((entry) => entry.kind === 'commentary')
-}
+function turnBodySegments(turn: ConversationTurn): TurnBodySegment[] {
+  const processActivityIds = new Set(processActivities(turn).map((activity) => activity.id))
+  const segments: TurnBodySegment[] = []
+  const processSegments: TurnProcessSegment[] = []
+  let current: TurnProcessSegment | null = null
 
-function visibleOperationEntries(turn: ConversationTurn) {
-  return visibleProcessEntries(turn).filter((entry) => entry.kind === 'activity-group')
+  for (const block of turn.blocks) {
+    if (block.kind === 'assistant' && block.phase === 'partial') {
+      current = null
+      segments.push({ kind: 'partial', id: block.id, block })
+      continue
+    }
+    const isProcessBlock = (block.kind === 'assistant' && block.phase === 'commentary')
+      || (block.kind === 'activity' && processActivityIds.has(block.id))
+    if (!isProcessBlock) continue
+    if (!current) {
+      // A segment key is the first raw block id of the span, never an index,
+      // so re-rendering cannot rebuild an already painted body node.
+      current = { kind: 'process', id: block.id, isFirst: false, blockIds: new Set<string>(), entries: [] }
+      segments.push(current)
+      processSegments.push(current)
+    }
+    current.blockIds.add(block.id)
+  }
+
+  // Resolved interactions alone can leave a turn with process chrome but no
+  // process block; an explicit tail segment then hosts the turn-scoped controls.
+  if (processSegments.length === 0 && hasProcessContent(turn)) {
+    const host: TurnProcessSegment = {
+      kind: 'process',
+      id: `process-host:${turn.id}`,
+      isFirst: true,
+      blockIds: new Set<string>(),
+      entries: [],
+    }
+    segments.push(host)
+    processSegments.push(host)
+  }
+
+  // Frozen entries hold stale group objects whose ids move as tools append, so
+  // match them by raw span ids (commentary block id / activity ids) instead of
+  // the current group id.
+  for (const entry of visibleProcessEntries(turn)) {
+    const entryBlockIds = entry.kind === 'commentary'
+      ? [entry.block.id]
+      : entry.activities.map((activity) => activity.id)
+    const owner = processSegments.find((segment) => entryBlockIds.some((id) => segment.blockIds.has(id)))
+    const target = owner ?? processSegments.at(-1)
+    if (target) target.entries.push(entry)
+  }
+
+  processSegments.forEach((segment, index) => {
+    segment.isFirst = index === 0
+  })
+  return segments
 }
 
 function liveProcessEntries(turn: ConversationTurn): VisibleProcessEntry[] {
-  const visibleBlocks: (ConversationAssistantBlock | ConversationActivity)[] = [
-    ...turn.commentary.slice(-(visibleProcessHistoryCount(turn) + 2)),
-    ...(expandedOperationTurnIds.value.has(turn.renderKey) ? processActivities(turn).slice(-visibleOperationCount(turn)) : []),
-  ]
+  const visibleCommentaryIds = new Set(
+    turn.commentary.slice(-(visibleProcessHistoryCount(turn) + 2)).map((block) => block.id),
+  )
   const visibleActivityIds = new Set(
-    visibleBlocks
-      .filter((block): block is ConversationActivity => block.kind === 'activity')
-      .map((activity) => activity.id),
+    expandedOperationTurnIds.value.has(turn.renderKey)
+      ? processActivities(turn).slice(-visibleOperationCount(turn)).map((activity) => activity.id)
+      : ([] as string[]),
   )
   const activitiesById = new Map(turn.activities.map((activity) => [activity.id, activity]))
   const groupsByActivityId = new Map<string, ConversationActivityGroup>()
@@ -864,11 +992,15 @@ function liveProcessEntries(turn: ConversationTurn): VisibleProcessEntry[] {
     for (const activityId of group.activityIds) groupsByActivityId.set(activityId, group)
   }
 
+  // Visible ids are selected first, then the projected block order drives the
+  // entries, so tools keep their slot between two partial answers.
   const entries: VisibleProcessEntry[] = []
   const renderedGroupIds = new Set<string>()
-  for (const block of visibleBlocks) {
-    if (block.kind === 'assistant' && block.phase === 'commentary') {
-      entries.push({ kind: 'commentary', id: block.id, block })
+  for (const block of turn.blocks) {
+    if (block.kind === 'assistant') {
+      if (block.phase === 'commentary' && visibleCommentaryIds.has(block.id)) {
+        entries.push({ kind: 'commentary', id: block.id, block })
+      }
       continue
     }
     if (block.kind !== 'activity' || !visibleActivityIds.has(block.id)) continue
@@ -976,7 +1108,7 @@ function deliveryStateLabel(state: ConversationUserBlock['deliveryState'], turn:
 }
 
 function canRollback(turn: ConversationTurn): boolean {
-  return !isActiveTurn(turn) && props.isTurnInProgress !== true && props.isRollingBack !== true && turn.index >= 0
+  return !props.readOnlyExecution && !isActiveTurn(turn) && props.isTurnInProgress !== true && props.isRollingBack !== true && turn.index >= 0
 }
 
 function requestRollback(turn: ConversationTurn): void {
@@ -1017,15 +1149,6 @@ function toggleFavorite(block: ConversationUserBlock | ConversationAssistantBloc
   emit('toggleFavorite', favoriteIntent(block, turn))
 }
 
-async function copyBlock(text: string): Promise<void> {
-  try {
-    await copyTextToClipboard(text)
-    emit('copyStatus', { message: '已复制', tone: 'success' })
-  } catch {
-    emit('copyStatus', { message: '复制失败，请手动选择内容', tone: 'danger' })
-  }
-}
-
 function planImplementationIntent(
   activity: ConversationPlanActivity,
   turn: ConversationTurn,
@@ -1046,7 +1169,7 @@ function proposedPlans(turn: ConversationTurn): ConversationPlanActivity[] {
 }
 
 function canImplementPlan(activity: ConversationPlanActivity, turn: ConversationTurn): boolean {
-  return planImplementationState.value.actionablePlanKey === planImplementationKey(turn.id, activity.id)
+  return !props.readOnlyExecution && planImplementationState.value.actionablePlanKey === planImplementationKey(turn.id, activity.id)
 }
 
 function isPlanImplemented(activityId: string, turnId: string): boolean {
@@ -1158,6 +1281,68 @@ function rejectInteraction(interaction: ConversationInteractionBlock): void {
 
 function isInteractionResponding(interaction: ConversationInteractionBlock): boolean {
   return interaction.responseId === null || respondingRequestIds.value.has(interaction.responseId)
+}
+
+// Transient per-card failure receipts for the dedicated permissions approval. This is UI state only:
+// it never becomes a second pending store and never touches the projected request list.
+function permissionsRequestId(interaction: ConversationInteractionBlock): string | undefined {
+  if (interaction.interactionType !== 'permissions-approval') return undefined
+  return interaction.responseId === null ? undefined : String(interaction.responseId)
+}
+
+function permissionsApprovalRows(interaction: ConversationInteractionBlock): PermissionsApprovalRow[] {
+  return interaction.permissionsApproval?.rows ?? []
+}
+
+function permissionsApprovalCanApprove(interaction: ConversationInteractionBlock): boolean {
+  return interaction.permissionsApproval?.canApprove === true
+}
+
+function permissionsApprovalUnavailableReason(interaction: ConversationInteractionBlock): string {
+  return interaction.permissionsApproval?.unavailableReason ?? ''
+}
+
+function permissionsResponseError(interaction: ConversationInteractionBlock): string {
+  const requestId = permissionsRequestId(interaction)
+  return requestId ? requestResponseErrors.value[requestId] ?? '' : ''
+}
+
+function clearPermissionsResponseError(requestId: number): void {
+  const key = String(requestId)
+  if (!(key in requestResponseErrors.value)) return
+  const next = { ...requestResponseErrors.value }
+  delete next[key]
+  requestResponseErrors.value = next
+}
+
+function onPermissionsResponseError(requestId: number, message: string): void {
+  // Receipt for exactly this numeric ID: keep the pending card, record one accessible error and
+  // release only this card's submit lock so the same card can be retried.
+  requestResponseErrors.value = { ...requestResponseErrors.value, [String(requestId)]: message }
+  if (!respondingRequestIds.value.has(requestId)) return
+  const next = new Set(respondingRequestIds.value)
+  next.delete(requestId)
+  respondingRequestIds.value = next
+}
+
+function respondPermissionsApproval(interaction: ConversationInteractionBlock, action: PermissionsApprovalAction): void {
+  const view = interaction.permissionsApproval
+  const responseId = interaction.responseId
+  if (!view || responseId === null) return
+  let result: unknown
+  try {
+    // Build/validate before taking this card's submit lock: a local rejection must not lock it.
+    result = buildPermissionsApprovalResult(view, action)
+  } catch {
+    return
+  }
+  clearPermissionsResponseError(responseId)
+  if (!beginRequestResponse(responseId)) return
+  emit('respondServerRequest', {
+    id: responseId,
+    result,
+    onResponseError: (message: string) => onPermissionsResponseError(responseId, message),
+  })
 }
 
 function syncConversationViewport(element: HTMLElement): void {
@@ -1387,6 +1572,9 @@ function projectionContentSignature(projection: ConversationProjection): string 
   if (!lastTurn) return `${projection.threadId}:0`
   const lastCommentary = lastTurn.commentary.at(-1)
   const lastActivity = lastTurn.activities.at(-1)
+  const lastPartial = lastTurn.blocks
+    .filter((block): block is ConversationAssistantBlock => block.kind === 'assistant' && block.phase === 'partial')
+    .at(-1)
   const activityOutputLength = lastActivity && 'output' in lastActivity ? lastActivity.output.length : 0
   return [
     projection.threadId,
@@ -1396,6 +1584,9 @@ function projectionContentSignature(projection: ConversationProjection): string 
     lastTurn.blocks.length,
     lastCommentary?.text.length ?? 0,
     lastTurn.final?.text.length ?? 0,
+    lastPartial?.id ?? '',
+    lastPartial?.text.length ?? 0,
+    lastPartial?.streaming === true ? 1 : 0,
     activityOutputLength,
     ...lastTurn.interactions.flatMap((interaction) => [interaction.id, interaction.status]),
   ].join(':')
@@ -1470,6 +1661,7 @@ watch(
     reading.reset()
     confirmingRollbackTurnIndex.value = null
     respondingRequestIds.value = new Set()
+    requestResponseErrors.value = {}
     await restoreScrollState()
   },
 )
@@ -1497,6 +1689,12 @@ watch(
       .filter((interaction) => interaction.status === 'pending' && interaction.responseId !== null)
       .map((interaction) => interaction.responseId as number))
     respondingRequestIds.value = new Set([...respondingRequestIds.value].filter((id) => pendingIds.has(id)))
+    // A receipt belongs to its card: once the request leaves pending, drop only that receipt.
+    const staleErrorKeys = Object.keys(requestResponseErrors.value).filter((key) => !pendingIds.has(Number(key)))
+    if (staleErrorKeys.length === 0) return
+    const nextErrors = { ...requestResponseErrors.value }
+    for (const key of staleErrorKeys) delete nextErrors[key]
+    requestResponseErrors.value = nextErrors
   },
 )
 
@@ -1640,14 +1838,18 @@ onBeforeUnmount(() => {
 
 .user-message {
   justify-self: end;
+  min-width: 0;
   max-width: min(80%, 640px);
+}
+
+.user-message-body {
   padding: 9px 14px;
   border: 1px solid transparent;
   border-radius: 16px;
   background: var(--ui-bg-surface-muted);
 }
 
-.user-message.is-failed {
+.user-message.is-failed .user-message-body {
   border-color: color-mix(in srgb, var(--ui-danger) 42%, var(--ui-border-subtle));
 }
 
@@ -1683,67 +1885,14 @@ onBeforeUnmount(() => {
 }
 
 .message-markdown--final {
-  font-size: calc(var(--font-size-reading) + 0.25px);
+  color: var(--ui-text-primary);
 }
 
-.message-markdown :deep(p) {
-  margin: 0 0 0.82em;
-}
-
-.message-markdown :deep(p:last-child),
-.message-markdown :deep(ul:last-child),
-.message-markdown :deep(ol:last-child),
-.message-markdown :deep(pre:last-child) {
-  margin-bottom: 0;
-}
-
-.message-markdown :deep(h1),
-.message-markdown :deep(h2),
-.message-markdown :deep(h3),
-.message-markdown :deep(h4),
-.message-markdown :deep(h5),
-.message-markdown :deep(h6) {
-  margin: 1.2em 0 0.55em;
-  line-height: 1.28;
-  font-weight: 600;
-}
-
-.message-markdown :deep(h1) { font-size: 1.35em; }
-.message-markdown :deep(h2) { font-size: 1.2em; }
-.message-markdown :deep(h3) { font-size: 1.08em; }
-.message-markdown :deep(h4),
-.message-markdown :deep(h5),
-.message-markdown :deep(h6) { font-size: 1em; }
-.message-markdown :deep(:is(h1, h2, h3, h4, h5, h6):first-child) { margin-top: 0; }
-
-.message-markdown :deep(ul),
-.message-markdown :deep(ol) {
-  margin: 0.6em 0 0.85em;
-  padding-left: 1.5em;
-}
-
-.message-markdown :deep(ul) { list-style-type: disc; }
-.message-markdown :deep(ol) { list-style-type: decimal; }
-.message-markdown :deep(ul ul) { list-style-type: circle; }
-.message-markdown :deep(ul ul ul) { list-style-type: square; }
-.message-markdown :deep(li + li) { margin-top: 0.3em; }
-.message-markdown :deep(li > :is(ul, ol)) { margin-block: 0.35em; }
-
-.message-markdown :deep(a),
 .request-link {
   color: var(--ui-accent);
   text-underline-offset: 3px;
 }
 
-.message-markdown :deep(code) {
-  padding: 0.12em 0.38em;
-  border: 1px solid var(--ui-border-subtle);
-  border-radius: 6px;
-  background: var(--ui-bg-surface-muted);
-  font-size: 0.9em;
-}
-
-.message-markdown :deep(pre),
 .activity-details pre,
 .file-row pre {
   box-sizing: border-box;
@@ -1760,37 +1909,7 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-.message-markdown :deep(pre code) {
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.message-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.user-message:hover .message-actions,
-.user-message:focus-within .message-actions,
-.final-answer:hover .message-actions,
-.final-answer:focus-within .message-actions,
-.message-actions:has(.delivery-state) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.message-actions--user {
-  justify-content: flex-end;
-}
-
-.message-action,
-.inline-copy {
+.message-action {
   min-height: 28px;
   padding: 3px 8px;
   border: 0;
@@ -1801,8 +1920,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.message-action:hover,
-.inline-copy:hover {
+.message-action:hover {
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
 }
@@ -2010,23 +2128,12 @@ onBeforeUnmount(() => {
 }
 
 .commentary-copy {
-  padding-right: 44px;
-  font-size: 13.5px;
+  font-size: var(--font-size-reading);
 }
 
-.inline-copy {
-  position: absolute;
-  top: 5px;
-  right: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.commentary-block:hover .inline-copy,
-.commentary-block:focus-within .inline-copy {
-  opacity: 1;
-  pointer-events: auto;
+.process-copy-action {
+  margin-top: 0;
+  margin-left: auto;
 }
 
 .activity-main {
@@ -2337,12 +2444,83 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono-ui);
 }
 
+.request-context--permission {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.request-permission-id {
+  margin: 10px 0 0 19px;
+  color: var(--ui-text-tertiary);
+  font-family: var(--font-mono-ui);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.request-permission-unavailable {
+  margin: 10px 0 0 19px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 30%, var(--ui-border-subtle));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
+  color: var(--ui-text-primary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.request-permission-error {
+  margin: 10px 0 0 19px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 36%, var(--ui-border-subtle));
+  border-radius: 9px;
+  color: var(--ui-danger);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .request-field {
   display: grid;
   gap: 5px;
   margin-top: 12px;
   color: var(--ui-text-secondary);
   font-size: 12px;
+}
+
+.request-question-field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.request-question-field legend {
+  padding: 0;
+  color: var(--ui-text-primary);
+  font-weight: 600;
+}
+
+.request-question-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.request-option-descriptions {
+  display: grid;
+  gap: 8px;
+  margin: 3px 0 4px;
+}
+
+.request-option-description dt {
+  color: var(--ui-text-primary);
+  font-weight: 500;
+}
+
+.request-option-description dd {
+  margin: 1px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .request-field input,
@@ -2441,18 +2619,6 @@ onBeforeUnmount(() => {
   color: var(--ui-text-primary);
 }
 
-.final-answer.is-streaming::after {
-  display: inline-block;
-  width: 6px;
-  height: 1em;
-  margin-left: 3px;
-  border-radius: 2px;
-  background: var(--ui-accent);
-  vertical-align: -2px;
-  animation: transcript-caret 1s steps(1) infinite;
-  content: '';
-}
-
 .final-status,
 .turn-notice,
 .transcript-alert {
@@ -2541,11 +2707,6 @@ onBeforeUnmount(() => {
   100% { outline: 3px solid transparent; outline-offset: 10px; }
 }
 
-@keyframes transcript-caret {
-  0%, 48% { opacity: 1; }
-  49%, 100% { opacity: 0; }
-}
-
 @keyframes transcript-live-pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
@@ -2577,21 +2738,21 @@ onBeforeUnmount(() => {
 
   .user-message {
     max-width: 88%;
+  }
+
+  .user-message-body {
     padding: 10px 12px;
   }
 
-  .message-actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
   .message-action,
-  .inline-copy,
   .quiet-button,
   .history-button,
   .process-toggle,
   .process-history-action,
   .activity-details > summary,
+  .request-field select,
+  .request-field input,
+  .request-field textarea,
   .file-summary > summary,
   .file-row > summary {
     min-height: 44px;
@@ -2654,12 +2815,14 @@ onBeforeUnmount(() => {
 
 @media (pointer: coarse) {
   .message-action,
-  .inline-copy,
   .quiet-button,
   .history-button,
   .process-toggle,
   .process-history-action,
   .activity-details > summary,
+  .request-field select,
+  .request-field input,
+  .request-field textarea,
   .file-summary > summary,
   .file-row > summary {
     min-height: 44px;
@@ -2679,10 +2842,6 @@ onBeforeUnmount(() => {
     transition-duration: 1ms;
   }
 
-  .final-answer.is-streaming::after {
-    animation: none;
-  }
-
   [data-message-id].is-highlighted {
     animation: none;
     outline: 2px solid var(--ui-focus);
@@ -2700,7 +2859,7 @@ onBeforeUnmount(() => {
   --ui-accent: #5eead4;
 }
 
-.dark .user-message,
+.dark .user-message-body,
 .dark .quiet-button,
 .dark .request-field input,
 .dark .request-field select,

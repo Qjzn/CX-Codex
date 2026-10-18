@@ -1,6 +1,7 @@
 import { computed, ref, shallowRef, watch } from 'vue'
 import { runWithBoundedRecovery } from './boundedAsyncRecovery'
 import { readRuntimeActivityStartedAtMs } from './activityTimer'
+import { isThreadVisibleInOrdinaryList, readThreadVisibilityFields } from '../shared/threadVisibility.js'
 import {
   beginChatFeedbackMetric,
   chatFeedbackNow,
@@ -49,7 +50,6 @@ import {
   getThreadGroups,
   getWorkspaceRootsState,
   setCodexSpeedMode,
-  setDefaultModel,
   setThreadGoal,
   setWorkspaceRootsState,
   startComposerPluginOauthLogin,
@@ -97,6 +97,7 @@ import type {
 } from '../types/codex'
 import { normalizeThreadGoal } from './threadGoal'
 import { CodexApiError, isAbortLikeError } from '../api/codexErrors'
+import { isPermissionsApprovalRequestMethod } from '../permissionsRequestApproval'
 import { normalizePathForUi, toProjectName } from '../pathUtils.js'
 import {
   getCxSessionFileChangeSyncPolicy,
@@ -294,7 +295,7 @@ const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
 const QUEUED_MESSAGES_STORAGE_KEY = 'codex-web-local.queued-messages.v1'
 const NOTIFICATION_SEQ_STORAGE_KEY = 'codex-web-local.notification-seq.v1'
 const NOTIFICATION_CURSOR_STORAGE_KEY = 'codex-web-local.notification-cursor.v2'
-const THREAD_GROUP_CACHE_VERSION = 1
+const THREAD_GROUP_CACHE_VERSION = 2
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const THREAD_GROUP_CACHE_MAX_GROUPS = 18
 const THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP = 30
@@ -354,7 +355,6 @@ const COMPOSER_PLUGIN_INVALIDATING_NOTIFICATION_METHODS = new Set([
   'mcpServer/oauthLogin/completed',
   'mcpServer/startupStatus/updated',
 ])
-const MODEL_FALLBACK_ID = 'gpt-5.2-codex'
 const AUTO_COMMIT_MESSAGE_FALLBACK = 'Auto-commit from Codex rollback chat turn'
 const PENDING_NEW_THREAD_ID = '__new-thread__'
 const RUNTIME_SEND_RETRY_DELAYS_MS = [700, 2000, 5000, 10000]
@@ -719,6 +719,10 @@ function normalizeCachedThread(value: unknown, fallbackProjectName: string): UiT
     projectName,
     cwd: normalizePathForUi(readCachedString(row.cwd)),
     sourceKind: readCachedString(row.sourceKind) || undefined,
+    ...(row.assistantManaged === true ? { assistantManaged: true } : {}),
+    // Round-trip the finite classification so a cached row can be re-decided, and so the cached
+    // row cannot be rehydrated as visible once its raw source is gone.
+    ...readThreadVisibilityFields(row),
     hasWorktree: row.hasWorktree === true,
     createdAtIso: readCachedString(row.createdAtIso),
     updatedAtIso: readCachedString(row.updatedAtIso),
@@ -737,6 +741,9 @@ function normalizeCachedThreadGroup(value: unknown): UiProjectGroup | null {
   const threads = row.threads
     .map((thread) => normalizeCachedThread(thread, projectName))
     .filter((thread): thread is UiThread => thread !== null)
+    // Read AND write both pass through here, so a decidable internal row can neither rehydrate on
+    // first screen nor be written back into the bounded list cache.
+    .filter((thread) => isThreadVisibleInOrdinaryList(thread))
     .slice(0, THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP)
 
   if (threads.length === 0) return null
@@ -794,7 +801,13 @@ function saveCachedThreadGroups(groups: UiProjectGroup[]): void {
           .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS),
       ),
     }
-    if (payload.groups.length === 0) return
+    if (payload.groups.length === 0) {
+      // Every cached row was hidden or otherwise dropped: remove this cache key so a stale list can
+      // never be re-read on the next boot. Only the list-cache key is touched; message caches,
+      // outbox, auth, hidden ids and pins keep their own storage untouched.
+      window.localStorage.removeItem(THREAD_GROUP_CACHE_STORAGE_KEY)
+      return
+    }
     window.localStorage.setItem(THREAD_GROUP_CACHE_STORAGE_KEY, JSON.stringify(payload))
   } catch {
     // Cache-first boot is an optimization; quota or privacy failures must not affect sync.
@@ -1033,15 +1046,6 @@ function reorderStringArray(items: string[], fromIndex: number, toIndex: number)
   return next
 }
 
-function isUnsupportedChatGptModelError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  const message = error.message.toLowerCase()
-  return (
-    message.includes('not supported when using codex with a chatgpt account') ||
-    message.includes('model is not supported')
-  )
-}
-
 function isRetryableRuntimeSendError(error: unknown): boolean {
   if (error instanceof CodexApiError && error.method === 'runtime/send') {
     return error.code === 'invalid_response'
@@ -1177,7 +1181,11 @@ function mergeIncomingWithLocalInProgressThreads(
 ): UiProjectGroup[] {
   const incomingThreadIds = new Set(flattenThreads(incoming).map((thread) => thread.id))
   const localInProgressThreads = flattenThreads(previous).filter(
-    (thread) => inProgressById[thread.id] === true && !incomingThreadIds.has(thread.id),
+    // Same ordinary-list predicate: a locally active internal work thread must never be re-added
+    // to the sidebar just because a refresh omitted it.
+    (thread) => inProgressById[thread.id] === true
+      && !incomingThreadIds.has(thread.id)
+      && isThreadVisibleInOrdinaryList(thread),
   )
 
   if (localInProgressThreads.length === 0) {
@@ -1340,7 +1348,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     speedMode: SpeedMode
     collaborationMode: CollaborationMode
     turnOptions?: ComposerTurnOptions
-    fallbackRetried: boolean
     createdAtMs: number
   }
   type FailedUserMessageRequest = {
@@ -1396,6 +1403,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const threadReadActiveStateByThreadId = ref<Record<string, ThreadReadActiveState>>({})
   const ignoredStaleActiveTurnByThreadId = ref<Record<string, string>>({})
   const pendingServerRequestsByThreadId = ref<Record<string, UiServerRequest[]>>({})
+  // Monotonic revision of the pending-server-request map. Every writer of the map bumps it, so a
+  // snapshot read can prove whether a pending mutation landed after it was read.
+  let pendingServerRequestsRevision = 0
+  // Set when an authoritative bridge read could not be committed under a stable revision (the map
+  // changed mid-flight or the GET failed). Only a revision-matching full-map commit clears it, so
+  // background sync keeps converging instead of stalling on an incomplete map.
+  let pendingServerRequestsSyncDirty = false
   const pendingTurnRequestByThreadId = ref<Record<string, PendingTurnRequest>>({})
   const conversationThreadReadsByThreadId = shallowRef<Record<string, unknown[]>>({})
   const conversationNotificationsByThreadId = shallowRef<Record<string, ConversationNotificationInput[]>>({})
@@ -1474,7 +1488,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const cachedThreadMessageSignatureByThreadId = new Map<string, string>()
   const latestRuntimeEventSeqByThreadId = new Map<string, number>()
   const lastExecutionSignalPublishedAtByThreadId = new Map<string, number>()
-  const fallbackRetryInFlightThreadIds = new Set<string>()
   const nonFreshThreadDetailRetryTimersByThreadId = new Map<string, number>()
   const nonFreshThreadDetailRetryAttemptByThreadId = new Map<string, number>()
   let cachedThreadListRefreshInFlight: Promise<void> | null = null
@@ -1587,6 +1600,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       isThreadExecutionActive(thread.id)
       || (pendingServerRequestsByThreadId.value[thread.id] ?? []).length > 0
     ))
+    .sort((first, second) => second.updatedAtIso.localeCompare(first.updatedAtIso))
+    .slice(0, 8)
     .map((thread) => {
       const pendingRequest = (pendingServerRequestsByThreadId.value[thread.id] ?? [])[0]
       const runtimeSummary = runtimeStatusSummaryByThreadId.value[thread.id]
@@ -1621,8 +1636,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         updatedAtIso: thread.updatedAtIso,
       }
     })
-    .sort((first, second) => second.updatedAtIso.localeCompare(first.updatedAtIso))
-    .slice(0, 8)
   })
   const selectedThreadScrollState = computed<ThreadScrollState | null>(
     () => scrollStateByThreadId.value[selectedThreadId.value] ?? null,
@@ -1649,6 +1662,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       case 'item/tool/call':
         return '工具不可用'
       default:
+        if (isPermissionsApprovalRequestMethod(request.method)) return '等待权限确认'
         if (isMcpPermissionPrompt(request)) return '等待授权'
         return isMcpElicitationRequestMethod(request.method) ? '等待输入' : '等待处理'
     }
@@ -1956,32 +1970,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     isWorktreeGitAutomationEnabled.value = enabled
   }
 
-  async function applyFallbackModelSelection(): Promise<void> {
-    selectedModelId.value = MODEL_FALLBACK_ID
-    saveSelectedModelId(selectedModelId.value)
-    if (!availableModelIds.value.includes(MODEL_FALLBACK_ID)) {
-      availableModelIds.value = [...availableModelIds.value, MODEL_FALLBACK_ID]
-      availableModels.value = [
-        ...availableModels.value,
-        {
-          id: MODEL_FALLBACK_ID,
-          model: MODEL_FALLBACK_ID,
-          displayName: MODEL_FALLBACK_ID,
-          description: '兼容回退模型',
-          hidden: false,
-          isDefault: false,
-          defaultReasoningEffort: 'medium',
-          supportedReasoningEfforts: REASONING_EFFORT_OPTIONS.map((value) => ({ value, description: '' })),
-        },
-      ]
-    }
-    try {
-      await setDefaultModel(MODEL_FALLBACK_ID)
-    } catch {
-      // Keep local selection even when persisting default model fails.
-    }
-  }
-
   function setPendingTurnRequest(threadId: string, request: PendingTurnRequest): void {
     settledRuntimeMessageRefreshKeyByThreadId.delete(threadId)
     settledRuntimeRpcRefreshKeyByThreadId.delete(threadId)
@@ -2030,71 +2018,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       throw unknownError
     }
     pendingThreadsRefresh = true
-  }
-
-  async function retryPendingTurnWithFallback(threadId: string): Promise<void> {
-    if (fallbackRetryInFlightThreadIds.has(threadId)) return
-    const pending = pendingTurnRequestByThreadId.value[threadId]
-    if (!pending || pending.fallbackRetried) return
-
-    fallbackRetryInFlightThreadIds.add(threadId)
-    setPendingTurnRequest(threadId, {
-      ...pending,
-      fallbackRetried: true,
-    })
-
-    try {
-      await applyFallbackModelSelection()
-      // Remove the failed user turn before replaying on fallback model to avoid duplicated user messages.
-      try {
-        const rollbackResult = await rollbackThread(threadId, 1)
-        replaceConversationThreadRead(threadId, rollbackResult.threadRead)
-        conversationNotificationsByThreadId.value = omitKey(conversationNotificationsByThreadId.value, threadId)
-        setCachedThreadMessagesForThread(threadId, rollbackResult.acknowledgedUserMessages)
-      } catch {
-        // If rollback fails, continue with retry rather than dropping the turn.
-      }
-      setTurnErrorForThread(threadId, null)
-      error.value = ''
-      setThreadInProgress(threadId, true)
-      markThreadLiveExecutionSignal(threadId)
-
-      await ensureThreadResumed(threadId)
-
-      const retryResult = await startRuntimeThreadTurn({
-        threadId,
-        text: pending.text,
-        imageUrls: pending.imageUrls,
-        model: MODEL_FALLBACK_ID,
-        effort: pending.effort || undefined,
-        speedMode: pending.speedMode,
-        skills: pending.skills.length > 0 ? pending.skills : undefined,
-        fileAttachments: pending.fileAttachments,
-        collaborationMode: pending.collaborationMode,
-        turnOptions: pending.turnOptions,
-        clientMessageId: createClientMessageId(),
-      })
-      if (retryResult.turnId) {
-        activeTurnIdByThreadId.value = {
-          ...activeTurnIdByThreadId.value,
-          [threadId]: retryResult.turnId,
-        }
-      }
-
-      markThreadResumed(threadId)
-
-      scheduleRateLimitRefresh()
-      pendingThreadMessageRefresh.add(threadId)
-      pendingThreadsRefresh = true
-      scheduleEventSync(700)
-    } catch (unknownError) {
-      const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-      setTurnErrorForThread(threadId, errorMessage)
-      error.value = errorMessage
-      setThreadInProgress(threadId, false)
-    } finally {
-      fallbackRetryInFlightThreadIds.delete(threadId)
-    }
   }
 
   function setSelectedReasoningEffort(effort: ReasoningEffort | ''): void {
@@ -2411,13 +2334,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     for (const threadId of latestRuntimeEventSeqByThreadId.keys()) {
       if (!activeThreadIds.has(threadId)) latestRuntimeEventSeqByThreadId.delete(threadId)
     }
-    const nextPending: Record<string, UiServerRequest[]> = {}
-    for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
-      if (threadId === GLOBAL_SERVER_REQUEST_SCOPE || activeThreadIds.has(threadId)) {
-        nextPending[threadId] = requests
-      }
-    }
-    pendingServerRequestsByThreadId.value = nextPending
+    // Pending server requests are deliberately not pruned here. A paginated/sidebar/hidden list is
+    // not authority that a server request resolved; only a resolved response, an authoritative full
+    // pending GET, automatic tool pruning or backend terminal cleanup may clear them, so an
+    // unresolved hidden-thread request stays in memory until one of those owns the resolution.
   }
 
   function replaceQueuedMessagesState(nextState: Record<string, QueuedMessage[]>): void {
@@ -3272,7 +3192,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   function applyRuntimeSnapshotState(
     threadId: string,
     snapshot: ThreadRuntimeSnapshot,
-    options: { runtimeOnly?: boolean } = {},
+    options: { runtimeOnly?: boolean; pendingRevision?: number } = {},
   ): boolean {
     if (!threadId) return false
     // A structured thread/read window is a projection input, not a Runtime
@@ -3288,6 +3208,19 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     settleForegroundRecoveryMetric(threadId)
     finishForegroundRecoveryFeedback(threadId)
     if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
+    // A snapshot's pending list is only authoritative while no pending mutation landed after the
+    // caller captured its revision. Callers that reapply an inherited snapshot (detail refresh,
+    // final message apply) pass no token, so a stale snapshot can never resurrect or erase a
+    // newer pending state. This is the single place snapshot pending is synchronized.
+    if (
+      typeof options.pendingRevision === 'number' &&
+      options.pendingRevision === pendingServerRequestsRevision
+    ) {
+      const normalizedSnapshotPendingRequests = (snapshot.pendingServerRequests ?? [])
+        .map((row) => normalizeServerRequest(row))
+        .filter((request): request is UiServerRequest => request !== null)
+      setPendingServerRequestsForThread(threadId, normalizedSnapshotPendingRequests)
+    }
     rememberLatestRuntimeEventSequence(threadId, snapshot.lastEventSeq)
     rememberRuntimeSnapshotSummary(threadId, snapshot, options.runtimeOnly)
     const authoritativeTurnStartedAtMs = parseIsoTimestamp(snapshot.lastStartedAtIso ?? '')
@@ -3329,7 +3262,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     if (isRuntimeExecutionSettledState(snapshot.executionState)) {
-      const hasPendingServerRequests = (snapshot.pendingServerRequests ?? []).length > 0
+      // Read the live pending map, not the snapshot: a snapshot older than the newest pending
+      // mutation must not settle the thread, clear its turn request, or drain queued messages.
+      const hasPendingServerRequests = (pendingServerRequestsByThreadId.value[threadId] ?? []).length > 0
       const hasUnconfirmedOutboxEntry = snapshot.executionState === 'failed'
         && hasUnconfirmedMessageOutboxEntryForThread(threadId)
       const settledAtMs = readAuthoritativeSettledAtMs(snapshot)
@@ -3358,7 +3293,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         clearPendingTurnRequest(threadId)
       }
       if (!hasPendingServerRequests && !preserveLocalTurnFeedback) {
-        setPendingServerRequestsForThread(threadId, [])
         clearSettledRuntimeResidue(threadId, snapshot.executionState)
         void processQueuedMessages(threadId)
         return true
@@ -3568,19 +3502,34 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   async function refreshRuntimeStatusSnapshot(threadId: string, signal?: AbortSignal): Promise<ThreadRuntimeSnapshot | null> {
     if (!threadId) return null
     try {
+      // The pending map may only be synchronized from a snapshot whose mutation revision is still
+      // current; a pending mutation that lands after this capture wins and the list is skipped.
+      let pendingRevision = pendingServerRequestsRevision
       let snapshot = await getThreadRuntimeStatusSnapshot(threadId, { signal })
       if (
         snapshot.executionState === 'start_uncertain' ||
         snapshot.executionState === 'stopping' ||
         snapshot.executionState === 'stop_uncertain'
       ) {
+        pendingRevision = pendingServerRequestsRevision
         snapshot = await reconcileThreadRuntime(threadId, { signal })
       }
-      if (!applyRuntimeSnapshotState(threadId, snapshot, { runtimeOnly: true })) return null
-      const normalizedPendingRequests = snapshot.pendingServerRequests
-        .map((row) => normalizeServerRequest(row))
-        .filter((request): request is UiServerRequest => request !== null)
-      setPendingServerRequestsForThread(threadId, normalizedPendingRequests)
+      if (signal?.aborted) return null
+      // The revision is global: another thread's pending mutation bumps it, so a change during the
+      // awaited reads never proves this thread already has newer pending facts. Record it before
+      // the apply — the apply's own valid sync increments the revision and must not be read back as
+      // staleness.
+      const pendingWasStale = pendingRevision !== pendingServerRequestsRevision
+      const applied = applyRuntimeSnapshotState(threadId, snapshot, { runtimeOnly: true, pendingRevision })
+      // Execution ordering and pending truth are separate decisions. A snapshot rejected by the
+      // ordering guard never synced its pending list, and a newer ordinary event can reject it
+      // without changing the pending revision — so convergence needs one bounded authoritative
+      // reread whenever the revision was stale or the snapshot was not applied.
+      if (pendingWasStale || !applied) {
+        await loadPendingServerRequestsFromBridge(signal)
+        if (signal?.aborted) return null
+      }
+      if (!applied) return null
       setThreadTokenUsage(threadId, snapshot.tokenUsage)
       return snapshot
     } catch (error) {
@@ -4713,13 +4662,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  function restoreWaitingNewThreadOutboxEntry(entry: MessageOutboxEntry): void {
+  function restoreWaitingNewThreadOutboxEntry(entry: MessageOutboxEntry, deliveryState: 'waiting' | 'confirming' = 'waiting'): void {
     const current = pendingNewThreadPreview.value
     const optimisticMessageId = current?.clientMessageId === entry.clientMessageId
       ? current.message.id
       : `${OPTIMISTIC_USER_MESSAGE_PREFIX}new-thread:${entry.clientMessageId}`
     outboxClientIdByOptimisticMessageId.set(optimisticMessageId, entry.clientMessageId)
-    updateMessageOutboxEntry(entry.clientMessageId, { state: 'waiting' })
+    updateMessageOutboxEntry(entry.clientMessageId, { state: deliveryState })
     pendingNewThreadPreview.value = {
       clientMessageId: entry.clientMessageId,
       cwd: entry.cwd,
@@ -4734,7 +4683,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
               path: file.path || file.fsPath || file.label,
             }))
           : undefined,
-        deliveryState: 'waiting',
+        deliveryState,
       },
       submittedAtMs: entry.createdAtMs,
     }
@@ -5255,7 +5204,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             if (!resumedEntry) continue
             entry = resumedEntry
             const resumedThreadId = resumed.threadId.trim()
-            if (resumed.status !== 'failed' && resumedThreadId) {
+            if (resumed.status === 'pending_start' && !resumedThreadId) {
+              // Accepted is not failed: thread creation may still be in flight.
+              // Keep its durable identity until an authoritative thread is known.
+              restoreWaitingNewThreadOutboxEntry(entry, 'confirming')
+            } else if (resumed.status !== 'failed' && resumedThreadId) {
               if (isRuntimeRequestAwaitingDeliveryConfirmation(resumed.status)) {
                 restoreConfirmingMessageOutboxEntry(
                   messageOutboxByClientId.get(entry.clientMessageId) ?? entry,
@@ -5710,6 +5663,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   function setPendingServerRequestsForThread(threadId: string, requests: UiServerRequest[]): void {
     const normalizedThreadId = threadId.trim() || GLOBAL_SERVER_REQUEST_SCOPE
     const sorted = [...requests].sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso))
+    // Exactly one bump per authoritative setter call, placed before the empty/absent early return:
+    // an empty confirmation for a thread with no local pending key is still a pending mutation, so
+    // an older in-flight bootstrap response cannot commit afterwards and revive the request.
+    pendingServerRequestsRevision += 1
     if (sorted.length === 0) {
       if (!pendingServerRequestsByThreadId.value[normalizedThreadId]) return
       pendingServerRequestsByThreadId.value = omitKey(pendingServerRequestsByThreadId.value, normalizedThreadId)
@@ -5734,6 +5691,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       nextRows.push(request)
     }
 
+    pendingServerRequestsRevision += 1
     pendingServerRequestsByThreadId.value = {
       ...pendingServerRequestsByThreadId.value,
       [threadId]: nextRows.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso)),
@@ -5749,6 +5707,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         next[threadId] = filtered
       }
     }
+    pendingServerRequestsRevision += 1
     pendingServerRequestsByThreadId.value = next
     applyThreadFlags()
   }
@@ -5769,6 +5728,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     if (changed) {
+      pendingServerRequestsRevision += 1
       pendingServerRequestsByThreadId.value = next
       applyThreadFlags()
     }
@@ -6022,12 +5982,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const completedTurn = readTurnCompletedInfo(notification)
     const turnErrorMessage = readTurnErrorMessage(notification)
-    const completedThreadId = completedTurn?.threadId ?? extractThreadIdFromNotification(notification)
-    const shouldRetryWithFallback =
-      Boolean(completedThreadId) &&
-      Boolean(turnErrorMessage) &&
-      selectedModelId.value !== MODEL_FALLBACK_ID &&
-      isUnsupportedChatGptModelError(new Error(turnErrorMessage))
     if (completedTurn) {
       const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
       const startedTurnState = pendingTurnStartsById.get(completedTurn.turnId)
@@ -6041,12 +5995,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
       setThreadInProgress(completedTurn.threadId, false)
       markThreadUnreadByEvent(completedTurn.threadId)
-      if (!shouldRetryWithFallback) {
-        clearPendingTurnRequest(completedTurn.threadId)
-        void processQueuedMessages(completedTurn.threadId)
-        if (!turnErrorMessage) scheduleThreadGoalContinuation(completedTurn.threadId)
-      }
-      if (!turnErrorMessage && !shouldRetryWithFallback) {
+      clearPendingTurnRequest(completedTurn.threadId)
+      void processQueuedMessages(completedTurn.threadId)
+      if (!turnErrorMessage) scheduleThreadGoalContinuation(completedTurn.threadId)
+      if (!turnErrorMessage) {
         const commitMessage = pendingTurnRequest?.text?.trim() || AUTO_COMMIT_MESSAGE_FALLBACK
         void autoCommitCompletedWorktreeTurn(completedTurn.threadId, commitMessage).catch(() => {
           // Keep chat flow resilient when auto-commit fails.
@@ -6072,9 +6024,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         )
       }
       error.value = turnErrorMessage
-      if (failedThreadId && shouldRetryWithFallback) {
-        void retryPendingTurnWithFallback(failedThreadId)
-      }
     } else if (completedTurn) {
       setTurnErrorForThread(completedTurn.threadId, null)
     }
@@ -6115,13 +6064,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           )
         }
         error.value = notificationErrorMessage
-        if (selectedModelId.value !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorMessage))) {
-          if (errorThreadId) {
-            void retryPendingTurnWithFallback(errorThreadId)
-          } else {
-            void applyFallbackModelSelection()
-          }
-        }
       }
     }
 
@@ -6172,10 +6114,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         }
         setThreadInProgress(completedThreadId, false)
         markThreadUnreadByEvent(completedThreadId)
-        if (!shouldRetryWithFallback) {
-          clearPendingTurnRequest(completedThreadId)
-          void processQueuedMessages(completedThreadId)
-        }
+        clearPendingTurnRequest(completedThreadId)
+        void processQueuedMessages(completedThreadId)
       }
     }
 
@@ -6744,6 +6684,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       // Opening or refreshing a conversation is a spectator operation. The
       // state endpoint already owns cache/session-log recovery, so a read-side
       // failure must never resume the thread and claim its App Server writer.
+      // Captured before the read: an inherited snapshot may only sync pending while this
+      // revision is still current.
+      const pendingRevisionBeforeInitialSnapshot = pendingServerRequestsRevision
       let snapshot: ThreadRuntimeSnapshot = await getThreadRuntimeSnapshot(threadId, {
         signal: options.signal,
         cachedSnapshotMaxAgeMs: options.cachedSnapshotMaxAgeMs,
@@ -6757,7 +6700,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (options.signal?.aborted) return
       setThreadFirstScreenSource(threadId, snapshot.messageState === 'cached' ? 'local-cache' : 'network')
       const initialRuntimeSnapshot = snapshot
-      const initialRuntimeSnapshotApplied = applyRuntimeSnapshotState(threadId, snapshot)
+      // A pending mutation that landed while this snapshot was in flight makes its pending list
+      // untrustworthy. Recorded before the apply (whose own token-guarded sync bumps the revision)
+      // so one bounded authoritative bridge read can converge it before the final apply.
+      const initialSnapshotPendingWasStale =
+        pendingServerRequestsRevision !== pendingRevisionBeforeInitialSnapshot
+      const initialRuntimeSnapshotApplied = applyRuntimeSnapshotState(threadId, snapshot, {
+        pendingRevision: pendingRevisionBeforeInitialSnapshot,
+      })
+      const pendingRevisionAfterInitialApply = pendingServerRequestsRevision
       const previousCachedMessages = cachedThreadMessagesByThreadId.value[threadId] ?? []
       const settledRefreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
       markFreshSettledSnapshotMessagesSynced(threadId, snapshot, previousCachedMessages)
@@ -6792,6 +6743,20 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         sessionLogAuthoritativeRefreshGenerationByThreadId.delete(threadId)
       }
 
+      // The initial read or the awaited detail refresh may have overlapped pending mutations, in
+      // which case neither snapshot's pending list can be committed. A rejected (not applied)
+      // initial execution snapshot is the same class of uncertainty: its pending list was skipped by
+      // the ordering guard rather than merged. One bounded bridge read supplies the authoritative
+      // whole map before the final, token-less snapshot apply.
+      if (
+        initialSnapshotPendingWasStale ||
+        !initialRuntimeSnapshotApplied ||
+        pendingServerRequestsRevision !== pendingRevisionAfterInitialApply
+      ) {
+        await loadPendingServerRequestsFromBridge(options.signal)
+        if (options.signal?.aborted) return
+      }
+
       const refreshedRuntimeSnapshotApplied = snapshot === initialRuntimeSnapshot
         ? false
         : applyRuntimeSnapshotState(threadId, snapshot)
@@ -6809,14 +6774,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (!snapshot.tokenUsage && !threadTokenUsageByThreadId.value[threadId]) {
         scheduleThreadTokenUsageRefresh(threadId)
       }
-      const normalizedPendingRequests = runtimeSnapshotApplied
-        ? snapshot.pendingServerRequests
-          .map((row) => normalizeServerRequest(row))
-          .filter((request): request is UiServerRequest => request !== null)
-        : pendingServerRequestsByThreadId.value[threadId] ?? []
-      if (runtimeSnapshotApplied) {
-        setPendingServerRequestsForThread(threadId, normalizedPendingRequests)
-      }
+      // Never re-commit a snapshot's inherited pending list here: the initial apply already synced
+      // it under a revision token (or deliberately skipped it), and any later pending mutation is
+      // authoritative for the map.
+      const normalizedPendingRequests = pendingServerRequestsByThreadId.value[threadId] ?? []
       const shouldPreserveSettledRpcMessages = shouldPreserveMessagesAfterSettledRpcRefresh(
         threadId,
         snapshot,
@@ -7154,14 +7115,22 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       pendingSessionLogMessageRefresh.delete(threadId)
 
       try {
+        const pendingRevisionBeforeReconcile = pendingServerRequestsRevision
         const reconciledSnapshot = await reconcileThreadRuntime(threadId)
-        applyRuntimeSnapshotState(threadId, reconciledSnapshot, { runtimeOnly: true })
+        applyRuntimeSnapshotState(threadId, reconciledSnapshot, {
+          runtimeOnly: true,
+          pendingRevision: pendingRevisionBeforeReconcile,
+        })
         await loadMessages(threadId, { silent: true, refreshSnapshot: true })
       } catch (unknownError) {
         if (!isAbortLikeError(unknownError)) throw unknownError
         await new Promise((resolve) => window.setTimeout(resolve, 50))
+        const pendingRevisionBeforeReconcile = pendingServerRequestsRevision
         const reconciledSnapshot = await reconcileThreadRuntime(threadId)
-        applyRuntimeSnapshotState(threadId, reconciledSnapshot, { runtimeOnly: true })
+        applyRuntimeSnapshotState(threadId, reconciledSnapshot, {
+          runtimeOnly: true,
+          pendingRevision: pendingRevisionBeforeReconcile,
+        })
         await loadMessages(threadId, { silent: true, refreshSnapshot: true })
       }
 
@@ -7757,7 +7726,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         speedMode,
         collaborationMode,
         turnOptions: cloneTurnOptions(turnOptions),
-        fallbackRetried: false,
         createdAtMs: Date.now(),
       })
       if (turnId) {
@@ -7871,58 +7839,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
         })
       } catch (unknownError) {
-        if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
-          await applyFallbackModelSelection()
-          removeMessageOutboxEntry(clientMessageId)
-          clientMessageId = createClientMessageId()
-          rebindChatFeedbackMetric({ optimisticMessageId, clientMessageId })
-          if (pendingNewThreadPreview.value?.message.id === optimisticMessageId) {
-            pendingNewThreadPreview.value = {
-              ...pendingNewThreadPreview.value,
-              clientMessageId,
-            }
-          }
-          putMessageOutboxEntry(createMessageOutboxEntry({
-            clientMessageId,
-            threadId,
-            cwd: targetCwd,
-            text: nextText,
-            imageUrls,
-            skills,
-            fileAttachments,
-            modelId: MODEL_FALLBACK_ID,
-            reasoningEffort,
-            speedMode,
-            collaborationMode,
-            turnOptions,
-          }))
-          notifyPendingRequestCreated(internalOptions.onPendingRequestCreated, clientMessageId)
-          attachOutboxEntryToOptimisticMessage(clientMessageId, threadId, optimisticMessageId)
-          runtimeResult = await startRuntimeTurnWithBoundedRecovery({
-            threadId: threadId || undefined,
-            cwd: targetCwd || undefined,
-            text: nextText,
-            imageUrls,
-            model: MODEL_FALLBACK_ID,
-            effort: reasoningEffort || undefined,
-            speedMode,
-            skills: skills.length > 0 ? skills : undefined,
-            fileAttachments,
-            collaborationMode,
-            turnOptions,
-            clientMessageId,
-          }, {
-            threadId,
-            optimisticMessageId,
-            onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
-          })
-        } else {
-          if (await recoverRuntimeRequestByClientMessage()) {
-            isSendingMessage.value = false
-            return threadId
-          }
-          throw unknownError
+        if (await recoverRuntimeRequestByClientMessage()) {
+          isSendingMessage.value = false
+          return threadId
         }
+        throw unknownError
       }
       const resultThreadId = runtimeResult?.threadId ?? ''
       if (!resultThreadId) {
@@ -8077,7 +7998,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       speedMode,
       collaborationMode,
       turnOptions: cloneTurnOptions(turnOptions),
-      fallbackRetried: false,
       createdAtMs: Date.now(),
     })
 
@@ -8085,86 +8005,28 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       let startedTurnId = ''
       let runtimeRequestId = ''
       let runtimeStartStatus: 'queued' | 'running' | 'confirming' | '' = ''
-      try {
-        const runtimeResult = await startRuntimeTurnWithBoundedRecovery({
-          threadId,
-          text: nextText,
-          imageUrls,
-          model: modelId || undefined,
-          effort: reasoningEffort || undefined,
-          speedMode,
-          skills: skills.length > 0 ? skills : undefined,
-          fileAttachments,
-          collaborationMode,
-          turnOptions,
-          clientMessageId: activeClientMessageId,
-        }, {
-          threadId,
-          optimisticMessageId,
-          onRequestDispatched: runtimeOverrides.onRequestDispatched,
-        })
-        startedTurnId = runtimeResult.turnId
-        runtimeRequestId = runtimeResult.requestId
-        runtimeStartStatus = runtimeResult.status === 'queued'
-          ? 'queued'
-          : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
-      } catch (unknownError) {
-        if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
-          await applyFallbackModelSelection()
-          removeMessageOutboxEntry(activeClientMessageId)
-          activeClientMessageId = createClientMessageId()
-          putMessageOutboxEntry(createMessageOutboxEntry({
-            clientMessageId: activeClientMessageId,
-            threadId,
-            text: normalizedText,
-            imageUrls,
-            skills: normalizedSkills,
-            fileAttachments: normalizedFileAttachments,
-            modelId: MODEL_FALLBACK_ID,
-            reasoningEffort,
-            speedMode,
-            collaborationMode,
-            turnOptions,
-          }))
-          attachOutboxEntryToOptimisticMessage(activeClientMessageId, threadId, optimisticMessageId)
-          setPendingTurnRequest(threadId, {
-            text: normalizedText,
-            imageUrls: [...imageUrls],
-            skills: normalizedSkills,
-            fileAttachments: normalizedFileAttachments,
-            effort: reasoningEffort,
-            speedMode,
-            collaborationMode,
-            turnOptions: cloneTurnOptions(turnOptions),
-            fallbackRetried: true,
-            createdAtMs: Date.now(),
-          })
-          const runtimeFallbackResult = await startRuntimeTurnWithBoundedRecovery({
-            threadId,
-            text: nextText,
-            imageUrls,
-            model: MODEL_FALLBACK_ID,
-            effort: reasoningEffort || undefined,
-            speedMode,
-            skills: skills.length > 0 ? skills : undefined,
-            fileAttachments,
-            collaborationMode,
-            turnOptions,
-            clientMessageId: activeClientMessageId,
-          }, {
-            threadId,
-            optimisticMessageId,
-            onRequestDispatched: runtimeOverrides.onRequestDispatched,
-          })
-          startedTurnId = runtimeFallbackResult.turnId
-          runtimeRequestId = runtimeFallbackResult.requestId
-          runtimeStartStatus = runtimeFallbackResult.status === 'queued'
-            ? 'queued'
-            : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeFallbackResult.status) ? 'confirming' : 'running'
-        } else {
-          throw unknownError
-        }
-      }
+      const runtimeResult = await startRuntimeTurnWithBoundedRecovery({
+        threadId,
+        text: nextText,
+        imageUrls,
+        model: modelId || undefined,
+        effort: reasoningEffort || undefined,
+        speedMode,
+        skills: skills.length > 0 ? skills : undefined,
+        fileAttachments,
+        collaborationMode,
+        turnOptions,
+        clientMessageId: activeClientMessageId,
+      }, {
+        threadId,
+        optimisticMessageId,
+        onRequestDispatched: runtimeOverrides.onRequestDispatched,
+      })
+      startedTurnId = runtimeResult.turnId
+      runtimeRequestId = runtimeResult.requestId
+      runtimeStartStatus = runtimeResult.status === 'queued'
+        ? 'queued'
+        : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
 
       if (runtimeStartStatus === 'queued') {
         await adoptRuntimeQueuedRequest(threadId, runtimeRequestId)
@@ -8690,6 +8552,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (
         includeThreadList ||
         (forceMessageRefresh && !refreshedMessageThreadId) ||
+        pendingServerRequestsSyncDirty ||
         Object.keys(pendingServerRequestsByThreadId.value).length > 0
       ) {
         await loadPendingServerRequestsFromBridge()
@@ -8762,7 +8625,12 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         )
       const shouldRefreshThreads = shouldRefreshThreadListForBackground(now)
 
-      if (!shouldRefreshRuntime && !shouldRefreshThreads && !shouldRefreshMessages) {
+      if (
+        !shouldRefreshRuntime &&
+        !shouldRefreshThreads &&
+        !shouldRefreshMessages &&
+        !pendingServerRequestsSyncDirty
+      ) {
         return
       }
 
@@ -9224,25 +9092,42 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   }
 
   async function loadPendingServerRequestsFromBridge(signal?: AbortSignal): Promise<void> {
-    try {
-      const rows = await getPendingServerRequests({ signal })
+    // At most two attempts in one call: one authoritative GET plus a single retry when a pending
+    // mutation landed while the response was in flight. Only a response whose captured revision is
+    // still current may replace the whole map, bump the revision and clear the dirty flag.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       if (signal?.aborted) return
-      const nextPending: Record<string, UiServerRequest[]> = {}
-      for (const row of rows) {
-        const request = normalizeServerRequest(row)
-        if (request) {
-          const threadId = request.threadId || GLOBAL_SERVER_REQUEST_SCOPE
-          const current = nextPending[threadId] ?? []
-          nextPending[threadId] = [...current, request]
+      const pendingRevisionBeforeRead = pendingServerRequestsRevision
+      try {
+        const rows = await getPendingServerRequests({ signal })
+        if (signal?.aborted) return
+        if (pendingServerRequestsRevision !== pendingRevisionBeforeRead) {
+          // The map changed mid-flight; replacing it now would overwrite that mutation.
+          pendingServerRequestsSyncDirty = true
+          continue
         }
+        const bridgePendingRequests: Record<string, UiServerRequest[]> = {}
+        for (const row of rows) {
+          const request = normalizeServerRequest(row)
+          if (request) {
+            const threadId = request.threadId || GLOBAL_SERVER_REQUEST_SCOPE
+            const current = bridgePendingRequests[threadId] ?? []
+            bridgePendingRequests[threadId] = [...current, request]
+          }
+        }
+        pendingServerRequestsRevision += 1
+        pendingServerRequestsByThreadId.value = bridgePendingRequests
+        pendingServerRequestsSyncDirty = false
+        applyThreadFlags()
+        return
+      } catch {
+        if (signal?.aborted) return
+        // The backend auto-resolves unsupported tool calls; stale local copies should not keep
+        // the conversation in an artificial waiting state if pending request sync misses once.
+        pruneAutoResolvedPendingServerRequests()
+        pendingServerRequestsSyncDirty = true
+        return
       }
-      pendingServerRequestsByThreadId.value = nextPending
-      applyThreadFlags()
-    } catch {
-      if (signal?.aborted) return
-      // The backend auto-resolves unsupported tool calls; stale local copies should not keep
-      // the conversation in an artificial waiting state if pending request sync misses once.
-      pruneAutoResolvedPendingServerRequests()
     }
   }
 
@@ -9339,7 +9224,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function respondToPendingServerRequest(reply: UiServerRequestReply): Promise<void> {
+  async function respondToPendingServerRequest(
+    // Local UI-only failure receipt: the same shape as the wire reply, plus one optional callback
+    // that only the UI surface uses. It is never serialized into the HTTP body.
+    reply: UiServerRequestReply & { onResponseError?: (message: string) => void },
+  ): Promise<void> {
     try {
       await replyToServerRequest(reply.id, {
         result: reply.result,
@@ -9347,7 +9236,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       })
       removePendingServerRequestById(reply.id)
     } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to reply to server request'
+      const message = unknownError instanceof Error ? unknownError.message : 'Failed to reply to server request'
+      error.value = message
+      // Keep the pending request and report this attempt's failure to the surface that owns it.
+      reply.onResponseError?.(message)
     }
   }
 

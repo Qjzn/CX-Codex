@@ -5,7 +5,7 @@
   <section v-if="isMobileShellConfigBooting" class="mobile-shell-setup-page" aria-label="读取连接配置">
     <div class="mobile-shell-setup-card">
       <div class="mobile-shell-setup-brand">
-        <img src="/branding/cx-codex-app-icon.png" alt="" class="mobile-shell-setup-logo" />
+        <img src="/branding/cx-codex-ui-icon-192.png" alt="" class="mobile-shell-setup-logo" />
         <div class="mobile-shell-setup-copy">
           <p class="mobile-shell-setup-kicker">CX-Codex</p>
           <h1 class="mobile-shell-setup-title">正在启动</h1>
@@ -19,7 +19,7 @@
   <section v-else-if="requiresMobileShellServerSetup" class="mobile-shell-setup-page" aria-label="配置连接地址">
     <div class="mobile-shell-setup-card">
       <div class="mobile-shell-setup-brand">
-        <img src="/branding/cx-codex-app-icon.png" alt="" class="mobile-shell-setup-logo" />
+        <img src="/branding/cx-codex-ui-icon-192.png" alt="" class="mobile-shell-setup-logo" />
         <div class="mobile-shell-setup-copy">
           <p class="mobile-shell-setup-kicker">CX-Codex</p>
           <h1 class="mobile-shell-setup-title">输入连接地址</h1>
@@ -116,6 +116,31 @@
               >
                 <IconTablerGitFork class="sidebar-action-icon" />
                 <span class="sidebar-action-label">GitHub</span>
+              </button>
+            </div>
+
+            <div class="sidebar-action-grid sidebar-action-grid--nav" aria-label="侧栏页面导航">
+              <button
+                class="sidebar-action-tile sidebar-action-tile--nav"
+                :class="{ 'is-active': isTaskBoardRoute }"
+                type="button"
+                :aria-current="isTaskBoardRoute ? 'page' : undefined"
+                aria-label="任务看板"
+                title="查看当前已加载会话的任务看板"
+                @click="onOpenSidebarTool('task-board')"
+              >
+                <span class="sidebar-action-label">看板</span>
+              </button>
+              <button
+                class="sidebar-action-tile sidebar-action-tile--nav"
+                :class="{ 'is-active': isAssistantRoute }"
+                type="button"
+                :aria-current="isAssistantRoute ? 'page' : undefined"
+                aria-label="私人助手"
+                title="打开私人助手"
+                @click="onOpenSidebarTool('assistant')"
+              >
+                <span class="sidebar-action-label">助手</span>
               </button>
             </div>
 
@@ -231,44 +256,34 @@
               </section>
               <section class="sidebar-settings-section" aria-label="权限控制">
                 <p class="sidebar-settings-section-title">权限控制</p>
-                <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.allowAllPermissions" @click="toggleAllowAllPermissionRequests">
-                  <span class="sidebar-settings-label">完全放行权限请求</span>
+                <button
+                  class="sidebar-settings-row sidebar-settings-row--switch"
+                  type="button"
+                  role="switch"
+                  :aria-checked="webBridgeSettings.permissions.allowAllPermissionRequests ? 'true' : 'false'"
+                  aria-describedby="permission-switch-help"
+                  :title="SETTINGS_HELP.allowAllPermissions"
+                  :disabled="isWebBridgeSettingsSaving"
+                  @click="toggleAllowAllPermissionRequests"
+                >
+                  <span class="sidebar-settings-label">自动批准权限请求</span>
                   <span class="sidebar-settings-toggle" :class="{ 'is-on': webBridgeSettings.permissions.allowAllPermissionRequests }" />
                 </button>
-                <button
-                  class="sidebar-settings-row"
-                  type="button"
-                  :title="SETTINGS_HELP.commandExecutionPermission"
-                  :disabled="webBridgeSettings.permissions.allowAllPermissionRequests"
-                  @click="cyclePermissionDecision('commandExecution')"
+                <p
+                  id="permission-switch-help"
+                  class="sidebar-settings-hint sidebar-settings-permission-hint"
                 >
-                  <span class="sidebar-settings-label">命令执行权限</span>
-                  <span class="sidebar-settings-value">{{ permissionDecisionLabel(webBridgeSettings.permissions.commandExecution) }}</span>
-                </button>
-                <button
-                  class="sidebar-settings-row"
-                  type="button"
-                  :title="SETTINGS_HELP.fileChangePermission"
-                  :disabled="webBridgeSettings.permissions.allowAllPermissionRequests"
-                  @click="cyclePermissionDecision('fileChange')"
-                >
-                  <span class="sidebar-settings-label">文件变更权限</span>
-                  <span class="sidebar-settings-value">{{ permissionDecisionLabel(webBridgeSettings.permissions.fileChange) }}</span>
-                </button>
-                <button
-                  class="sidebar-settings-row"
-                  type="button"
-                  :title="SETTINGS_HELP.mcpToolPermission"
-                  :disabled="webBridgeSettings.permissions.allowAllPermissionRequests"
-                  @click="cyclePermissionDecision('mcpTools')"
-                >
-                  <span class="sidebar-settings-label">MCP 工具权限</span>
-                  <span class="sidebar-settings-value">{{ permissionDecisionLabel(webBridgeSettings.permissions.mcpTools) }}</span>
-                </button>
-                <p class="sidebar-settings-hint">
-                  {{ webBridgeSettings.permissions.allowAllPermissionRequests ? '当前会自动批准权限类请求。' : '可分别控制命令、文件和 MCP 工具权限。' }}
+                  {{ webBridgeSettings.permissions.allowAllPermissionRequests
+                    ? '自动批准命令、文件和 MCP 权限请求；独立权限范围申请仍需确认。'
+                    : '新的命令、文件和 MCP 权限请求需审批。' }}
+                  关闭不会撤销已有会话授权。
                 </p>
-                <p v-if="webBridgeSettingsStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
+                <p
+                  v-if="webBridgeSettingsStatus"
+                  class="sidebar-settings-hint sidebar-settings-hint-status"
+                  role="status"
+                  aria-live="polite"
+                >
                   {{ webBridgeSettingsStatus }}
                 </p>
               </section>
@@ -431,9 +446,9 @@
                 <div class="sidebar-settings-brand-card">
                   <img class="sidebar-settings-brand-logo" :src="MOBILE_SHELL_BRANDING_LOGO_URL" alt="CX-Codex 标识" />
                   <div class="sidebar-settings-brand-copy">
-                    <span class="sidebar-settings-brand-kicker">Android Shell</span>
+                    <span class="sidebar-settings-brand-kicker">{{ aboutBrandKicker }}</span>
                     <strong class="sidebar-settings-brand-title">{{ MOBILE_SHELL_BRAND_NAME }}</strong>
-                    <span class="sidebar-settings-brand-subtitle">面向手机远程访问 Codex 的原生入口</span>
+                    <span class="sidebar-settings-brand-subtitle">{{ aboutBrandSubtitle }}</span>
                   </div>
                 </div>
                 <div class="sidebar-settings-about-main">
@@ -445,7 +460,7 @@
                     @click="onOpenAppVersionDetails"
                   >
                     <div class="sidebar-settings-about-copy">
-                      <span class="sidebar-settings-about-label">当前版本</span>
+                      <span class="sidebar-settings-about-label">{{ aboutVersionSeriesLabel }}</span>
                       <strong class="sidebar-settings-about-version">{{ aboutAppVersionLabel }}</strong>
                       <span class="sidebar-settings-about-action">
                         <span
@@ -467,6 +482,52 @@
                 <p v-if="mobileShellUpdateStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
                   {{ mobileShellUpdateStatus }}
                 </p>
+                <div v-if="isMobileShellAvailable" class="sidebar-settings-backend-row">
+                  <span class="sidebar-settings-about-label">网页构建版本</span>
+                  <strong class="sidebar-settings-about-version sidebar-settings-backend-value">{{ displayAppVersion }}</strong>
+                  <span class="sidebar-settings-about-label sidebar-settings-backend-source">来源：本页构建，与后端和安装包无关</span>
+                </div>
+                <div class="sidebar-settings-backend-update" aria-label="连接的后端与只读更新检测">
+                  <div class="sidebar-settings-backend-row">
+                    <span class="sidebar-settings-about-label">连接的后端</span>
+                    <strong class="sidebar-settings-about-version sidebar-settings-backend-value">{{ backendUpdateVersionLabel }}</strong>
+                    <span class="sidebar-settings-about-label sidebar-settings-backend-source">{{ backendUpdateSourceLabel }}</span>
+                  </div>
+                  <p
+                    id="backend-update-reason"
+                    class="sidebar-settings-hint sidebar-settings-hint-status sidebar-settings-backend-reason"
+                  >
+                    {{ backendUpdateApplicabilityLabel }}
+                  </p>
+                  <button
+                    class="sidebar-settings-backend-check-button"
+                    type="button"
+                    :disabled="isBackendUpdateCheckBusy"
+                    :aria-busy="isBackendUpdateCheckBusy ? 'true' : 'false'"
+                    aria-describedby="backend-update-reason"
+                    title="只读取官方稳定发行元数据，不下载、不安装、不重启"
+                    @click="onCheckBackendUpdate"
+                  >
+                    <span v-if="isBackendUpdateCheckBusy" class="sidebar-settings-about-spinner" aria-hidden="true" />
+                    <span>{{ backendUpdateCheckButtonLabel }}</span>
+                  </button>
+                  <p
+                    v-if="backendUpdateStatusMessage"
+                    class="sidebar-settings-hint sidebar-settings-hint-status sidebar-settings-backend-result"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {{ backendUpdateStatusMessage }}
+                  </p>
+                  <p
+                    v-if="backendUpdateErrorMessage"
+                    class="sidebar-settings-hint sidebar-settings-hint-status sidebar-settings-backend-error"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {{ backendUpdateErrorMessage }}
+                  </p>
+                </div>
                 <div class="sidebar-settings-about-meta">
                   <span>工作区</span>
                   <span>{{ displayWorktreeName }}</span>
@@ -630,6 +691,16 @@
               @ask-project="onAskTrendingProject"
             />
           </template>
+          <template v-else-if="isTaskBoardRoute">
+            <ThreadTaskBoard :groups="projectGroups" @open-thread="onSelectThread" />
+          </template>
+          <template v-else-if="isAssistantRoute">
+            <AssistantPage
+              @open-board="onOpenSidebarTool('task-board')"
+              @open-thread="onSelectThread"
+              @open-worker-thread="onOpenAssistantWorker"
+            />
+          </template>
           <template v-else-if="isHomeRoute">
             <div class="content-grid">
               <div
@@ -737,7 +808,8 @@
                   :is-thread-switching="isThreadContentSwitching"
                   :compact-runtime-chrome="true"
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
-                  :allow-failed-message-edit="true"
+                  :allow-failed-message-edit="!isAssistantWorkerThread"
+                  :read-only-execution="isAssistantWorkerThread"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
                   :implementing-plan-id="implementingPlanId"
@@ -756,7 +828,12 @@
                   @rollback="onRollback" />
               </div>
 
-              <div class="composer-with-queue">
+              <div v-if="isRouteThreadResolutionPending" class="composer-with-queue" role="status">正在核对会话…</div>
+              <div v-else-if="isAssistantWorkerThread" class="composer-with-queue" role="status">
+                <p>这是助手派发的只读执行记录。请回到助手主对话查看或停止任务。</p>
+                <button type="button" @click="onOpenSidebarTool('assistant')">返回助手</button>
+              </div>
+              <div v-else class="composer-with-queue">
                 <div
                   v-if="quotaReminder"
                   class="quota-reminder"
@@ -1047,7 +1124,9 @@ import { useMobile } from './composables/useMobile'
 import { resolveSendWithEnterPreference } from './composables/composerEnterBehavior'
 import { useLazyModalEnvironment } from './composables/useLazyModalEnvironment'
 import {
+  checkBackendUpdate,
   createWorktree,
+  getBackendUpdateStatus,
   getDesktopAppStatus,
   getThreadDetail,
   getGithubProjectsForScope,
@@ -1059,6 +1138,13 @@ import {
   refreshDesktopApp,
   startRuntimeThreadTurn,
   updateWebBridgeSettings,
+} from './api/codexGateway'
+import type {
+  BackendUpdateApplicability,
+  BackendUpdateBuildKind,
+  BackendUpdateCheckResult,
+  BackendUpdateIdentity,
+  BackendUpdateStatus,
 } from './api/codexGateway'
 import type {
   CollaborationMode,
@@ -1086,7 +1172,6 @@ import type {
   DesktopAppStatus,
   GithubTipsScope,
   GithubTrendingProject,
-  PermissionDecision,
   WebBridgeSettings,
 } from './api/codexGateway'
 import { getPathLeafName, getPathParent } from './pathUtils.js'
@@ -1156,21 +1241,31 @@ const GithubTrendingHub = defineAsyncComponent({
   loadingComponent: PageLoadingSkeleton,
   delay: 0,
 })
+const ThreadTaskBoard = defineAsyncComponent({
+  loader: () => import('./components/content/ThreadTaskBoard.vue'),
+  loadingComponent: PageLoadingSkeleton,
+  delay: 0,
+})
+const AssistantPage = defineAsyncComponent({
+  loader: () => import('./components/content/AssistantPage.vue'),
+  loadingComponent: PageLoadingSkeleton,
+  delay: 0,
+})
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
-const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
+const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-ui-icon-192.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
 const THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS = 6500
 const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   permissions: {
     allowAllPermissionRequests: false,
-    commandExecution: 'allowForSession',
-    fileChange: 'allowForSession',
+    commandExecution: 'ask',
+    fileChange: 'ask',
     mcpTools: 'ask',
   },
 }
@@ -1181,10 +1276,7 @@ const SETTINGS_HELP = {
   dictationAutoSend: '转写后自动发送输入框内容；默认关闭，建议确认后手动发送。',
   rollbackCommits: '开启后每条消息都会生成回滚提交，回滚时会重置到该消息之前的提交。',
   dictationLanguage: '选择转写语言，或保持自动识别。',
-  allowAllPermissions: '开启后自动批准命令执行、文件变更和 MCP 工具权限请求。',
-  commandExecutionPermission: '控制 Codex 请求运行命令时是否自动允许。',
-  fileChangePermission: '控制 Codex 请求写入文件时是否自动允许。',
-  mcpToolPermission: '控制 MCP 服务请求运行工具时是否自动允许，例如浏览器自动化工具。',
+  allowAllPermissions: '开启后自动批准新的命令、文件和 MCP 工具权限请求；独立权限范围申请仍需在本轮明确确认。关闭只影响新的权限请求，不会撤销 Codex 已记住的会话授权，也不代表放开沙盒、网络或权限档案。',
 } as const
 const WHISPER_LANGUAGES: Record<string, string> = {
   en: 'english',
@@ -1598,6 +1690,53 @@ const isMobileShellBackgroundSettingsOpening = ref(false)
 const isMobileShellTaskPetUpdating = ref(false)
 const mobileShellTaskPetMessage = ref('')
 const isMobileShellUpdatePromptVisible = ref(false)
+// Connected backend identity and read-only update detection (U1a2).
+const backendUpdateIdentity = ref<BackendUpdateIdentity | null>(null)
+const backendUpdateApplicability = ref<BackendUpdateApplicability | null>(null)
+const backendUpdateResult = ref<BackendUpdateCheckResult | null>(null)
+const backendUpdateIdentityUnavailable = ref('')
+const backendUpdateCheckBusy = ref(false)
+const backendUpdateCheckError = ref('')
+// Each settings close/reopen or newer read bumps this generation, so a late or
+// mismatched response can never overwrite a newer backend identity.
+let backendUpdateRequestGeneration = 0
+let backendUpdateInFlightController: AbortController | null = null
+const BACKEND_UPDATE_BUILD_KIND_LABELS: Record<BackendUpdateBuildKind, string> = {
+  // A local compile is a build, not an official release: the source line states
+  // 来源未核验 separately.
+  'compiled-cli': '编译构建',
+  'candidate-entry': '候选入口',
+  unknown: '构建来源未知',
+}
+
+function readBackendUpdateOutcomeMessage(outcome: { code: string; message: string }): string {
+  if (outcome.code === 'unavailable' || outcome.code === 'invalid-response') return '此后端暂不提供版本信息。'
+  if (outcome.code === 'aborted') return '检测已取消。'
+  return outcome.message.trim()
+}
+
+function readBackendUpdateSentence(message: string): string {
+  const text = message.trim()
+  if (!text) return '原因未知。'
+  return /[。！？!?]$/u.test(text) ? text : `${text}。`
+}
+
+/**
+ * A failed read keeps the last credible identity — never re-verified by the
+ * failed request — drops the previous comparison and announces, visibly and in
+ * plain words, what failed and that it can be retried.
+ */
+function setBackendUpdateReadFailure(message: string): void {
+  backendUpdateResult.value = null
+  const detail = readBackendUpdateSentence(message)
+  if (backendUpdateIdentity.value) {
+    backendUpdateIdentityUnavailable.value = ''
+    backendUpdateCheckError.value = `更新信息读取失败：${detail}显示的是上次成功读取的版本，可稍后重试。`
+    return
+  }
+  backendUpdateIdentityUnavailable.value = detail
+  backendUpdateCheckError.value = '尚未读取到运行中的后端信息，可稍后重试。'
+}
 let mobileShellStatusTimer: ReturnType<typeof setTimeout> | null = null
 let mobileShellUpdateStatusTimer: ReturnType<typeof setTimeout> | null = null
 let mobileShellTaskPetSyncTimer: ReturnType<typeof setTimeout> | null = null
@@ -1729,6 +1868,8 @@ const isHomeRoute = computed(() => route.name === 'home')
 const isThreadRoute = computed(() => route.name === 'thread')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
+const isTaskBoardRoute = computed(() => route.name === 'task-board')
+const isAssistantRoute = computed(() => route.name === 'assistant')
 const isStandaloneRoute = computed(() => {
   const isNamedFixture = route.name === 'regression-conversation-blocks'
     || route.name === 'regression-sidebar-rows'
@@ -1739,7 +1880,7 @@ const isStandaloneRoute = computed(() => {
   return window.location.hash.startsWith('#/__regression/')
 })
 const isNonThreadRoute = computed(() => (
-  isHomeRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value
+  isHomeRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isTaskBoardRoute.value || isAssistantRoute.value
 ))
 const displayAppVersion = computed(() => {
   const version = String(appVersion).trim()
@@ -1841,6 +1982,82 @@ const aboutAppVersionLabel = computed(() => (
     ? mobileShellInstalledVersionLabel.value
     : displayAppVersion.value
 ))
+// Branding is honest about where the page actually runs: the Android kicker only
+// appears when a real native bridge is present, the browser is named as web.
+const aboutBrandKicker = computed(() => (isMobileShellAvailable.value ? 'Android Shell' : 'CX-Codex Web'))
+const aboutBrandSubtitle = computed(() => (
+  isMobileShellAvailable.value
+    ? '面向手机远程访问 Codex 的原生入口'
+    : '浏览器访问本机 Codex 的网页入口'
+))
+const aboutVersionSeriesLabel = computed(() => (
+  isMobileShellAvailable.value ? '此设备 Android APK' : '网页构建版本'
+))
+const isBackendUpdateCheckBusy = computed(() => backendUpdateCheckBusy.value)
+function isPlaceholderBackendToken(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return normalized === '' || normalized === 'unknown' || normalized === '未知'
+}
+
+const backendUpdateVersionLabel = computed(() => {
+  const identity = backendUpdateIdentity.value
+  if (!identity) {
+    return backendUpdateIdentityUnavailable.value ? '此后端暂不提供版本信息' : '后端信息尚未读取'
+  }
+  if (isPlaceholderBackendToken(identity.version)) return '未知'
+  const parts = [identity.version.startsWith('v') ? identity.version : `v${identity.version}`]
+  if (!isPlaceholderBackendToken(identity.buildId)) parts.push(`构建 ${identity.buildId.slice(0, 12)}`)
+  if (identity.buildKind !== 'unknown') parts.push(BACKEND_UPDATE_BUILD_KIND_LABELS[identity.buildKind])
+  return parts.join(' · ')
+})
+const backendUpdateSourceLabel = computed(() => {
+  const identity = backendUpdateIdentity.value
+  if (!identity) return '来源：运行中的后端'
+  const instance = isPlaceholderBackendToken(identity.instanceId)
+    ? ''
+    : `实例 ${identity.instanceId.slice(-8)} · `
+  return `来源：运行中的后端 · ${instance}来源未核验`
+})
+const backendUpdateApplicabilityLabel = computed(() => {
+  const applicability = backendUpdateApplicability.value
+  if (!applicability) return '更新检测只读取版本信息，不提供下载、安装或重启。'
+  return applicability.automaticUpdateSupported
+    ? `后端声明支持自动更新，但本页不提供下载或安装。${applicability.reason}`
+    : applicability.reason
+})
+const backendUpdateCheckButtonLabel = computed(() => (
+  backendUpdateCheckBusy.value ? '检测中…' : '检测后端更新'
+))
+const backendUpdateStatusMessage = computed(() => {
+  const result = backendUpdateResult.value
+  if (!result || result.status === 'error') return ''
+  const local = result.current?.version || backendUpdateIdentity.value?.version || '未知'
+  const latest = result.latest?.tag
+    ? `v${result.latest.tag.replace(/^v/i, '')}`
+    : '未知'
+  const source = result.releaseSource === 'official-release-metadata'
+    ? '来源：官方发行元数据（未核验）'
+    : '来源：未知'
+  const checkedAt = formatBackendUpdateCheckedAt(result.checkedAtIso)
+  if (result.status === 'newer') {
+    return `发现较新发行 ${latest}（本地 ${local}）；${source}${checkedAt}。仅比较版本号，不代表可以自动安装。`
+  }
+  if (result.status === 'equal') {
+    return `版本号与 ${latest} 相同（本地 ${local}）；${source}${checkedAt}。版本相同不代表已安装或已核验。`
+  }
+  if (result.status === 'ahead') {
+    return `本地版本 ${local} 领先于 ${latest}；${source}${checkedAt}。`
+  }
+  return `无法比较版本（本地 ${local}，发行 ${latest}）；${source}${checkedAt}。`
+})
+const backendUpdateErrorMessage = computed(() => {
+  if (backendUpdateCheckError.value) return backendUpdateCheckError.value
+  const result = backendUpdateResult.value
+  if (result?.status === 'error') {
+    return `更新检测失败：${result.error?.message || '原因未知'} 可稍后重试。`
+  }
+  return ''
+})
 const mobileShellLatestVersionLabel = computed(() => {
   const tagName = mobileShellLatestRelease.value?.tagName.trim() || ''
   if (!tagName) return isMobileShellUpdateLoading.value ? '检查中' : '未检测到'
@@ -1960,6 +2177,8 @@ const routeThreadFallbackTitle = computed(() => {
 const contentTitle = computed(() => {
   if (isSkillsRoute.value) return '技能'
   if (isGithubTrendingRoute.value) return 'GitHub 热门'
+  if (isTaskBoardRoute.value) return '任务看板'
+  if (isAssistantRoute.value) return '私人助手'
   if (isHomeRoute.value) return '新会话'
   if (isRouteOnlyEmptyThread.value) return '空会话'
   return selectedThread.value?.title ?? (routeThreadFallbackTitle.value || '选择会话')
@@ -1995,6 +2214,8 @@ const headerSubtitle = computed(() => {
   if (isCompactTouchContent.value) return ''
   if (isSkillsRoute.value) return '管理已安装技能和当前运行能力。'
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
+  if (isTaskBoardRoute.value) return '按待处理、执行中、需关注、已完成查看当前已加载会话的任务状态；点击卡片回到原会话。'
+  if (isAssistantRoute.value) return '管理助手身份和工作区；主对话和任务派发尚未接入'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
   if (isRouteOnlyEmptyThread.value) return '这个会话还没有消息，你可以直接发送第一条消息，或将它移除。'
   const cwd = selectedThread.value?.cwd?.trim() ?? ''
@@ -2264,6 +2485,12 @@ const displayFavorites = computed<FavoriteRecord[]>(() => (
     }
   })
 ))
+const assistantWorkerThreadIds = ref(new Set<string>())
+const isAssistantWorkerThread = computed(() => selectedThread.value?.assistantManaged === true || assistantWorkerThreadIds.value.has(selectedThreadId.value))
+async function onOpenAssistantWorker(threadId: string) {
+  assistantWorkerThreadIds.value = new Set([...assistantWorkerThreadIds.value, threadId])
+  await onSelectThread(threadId)
+}
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThreadExecutionActive.value)
 const isSelectedThreadInterruptible = computed(() => !isHomeRoute.value && selectedThreadCanStop.value)
 const selectedThreadGoalExecutionHint = computed(() => {
@@ -2695,10 +2922,20 @@ watch(isSettingsOpen, (open) => {
     void refreshMobileShellNotificationPermission()
     void refreshMobileShellTaskPetStatus(true)
     void refreshMobileShellUpdateState()
+    // Read-only status only: opening settings never triggers the metadata check.
+    void refreshBackendUpdateStatus()
     window.addEventListener('pointerdown', onWindowPointerDownForSettings, { capture: true })
     return
   }
   window.removeEventListener('pointerdown', onWindowPointerDownForSettings, { capture: true })
+  // Closing invalidates any pending read/check, aborts it and releases the busy
+  // lock; the displayed identity/result stay as they are and the next open
+  // re-reads the authoritative status.
+  backendUpdateRequestGeneration += 1
+  backendUpdateInFlightController?.abort()
+  backendUpdateInFlightController = null
+  backendUpdateCheckBusy.value = false
+  backendUpdateCheckError.value = ''
 })
 
 watch(isFavoritesModalVisible, (visible) => {
@@ -2819,7 +3056,14 @@ async function refreshWebBridgeSettings(): Promise<void> {
   }
 }
 
+// Busy lock for the single permission switch: it blocks duplicate toggles while a save is in
+// flight and drives the disabled state of the switch row.
+const isWebBridgeSettingsSaving = ref(false)
+
 async function saveWebBridgeSettings(nextSettings: WebBridgeSettings): Promise<void> {
+  if (isWebBridgeSettingsSaving.value) return
+  const previousSettings = webBridgeSettings.value
+  isWebBridgeSettingsSaving.value = true
   webBridgeSettings.value = nextSettings
   setWebBridgeSettingsStatus('正在保存权限设置...')
   try {
@@ -2827,8 +3071,16 @@ async function saveWebBridgeSettings(nextSettings: WebBridgeSettings): Promise<v
     setWebBridgeSettingsStatus('权限设置已保存')
   } catch (error) {
     const message = error instanceof Error ? error.message : '保存权限设置失败'
+    // Roll back to the last credible state before reading the authoritative server value.
+    webBridgeSettings.value = previousSettings
     setWebBridgeSettingsStatus(message)
-    void refreshWebBridgeSettings()
+    try {
+      webBridgeSettings.value = await getWebBridgeSettings()
+    } catch {
+      // Keep the rolled-back credible state; the save error above stays visible.
+    }
+  } finally {
+    isWebBridgeSettingsSaving.value = false
   }
 }
 
@@ -3194,6 +3446,92 @@ async function openMobileShellServerUrl(): Promise<void> {
   }
 }
 
+function formatBackendUpdateCheckedAt(iso: string): string {
+  if (!iso) return ''
+  const parsed = new Date(iso)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return `，检测时间 ${parsed.toLocaleString()}`
+}
+
+function applyBackendUpdateStatus(status: BackendUpdateStatus): void {
+  backendUpdateIdentity.value = status.backend
+  backendUpdateApplicability.value = status.applicability
+  backendUpdateResult.value = status.result
+  backendUpdateIdentityUnavailable.value = ''
+  // A successful read supersedes any earlier read/check failure message.
+  backendUpdateCheckError.value = ''
+}
+
+function beginBackendUpdateRequest(): { generation: number; controller: AbortController } {
+  backendUpdateRequestGeneration += 1
+  backendUpdateInFlightController?.abort()
+  const controller = new AbortController()
+  backendUpdateInFlightController = controller
+  return { generation: backendUpdateRequestGeneration, controller }
+}
+
+function endBackendUpdateRequest(controller: AbortController): void {
+  if (backendUpdateInFlightController === controller) backendUpdateInFlightController = null
+}
+
+/**
+ * Read-only status read (GET only): it never triggers the metadata check and it
+ * is the authority that wins over any older in-flight read or check.
+ */
+async function refreshBackendUpdateStatus(): Promise<void> {
+  const { generation, controller } = beginBackendUpdateRequest()
+  try {
+    const outcome = await getBackendUpdateStatus({ signal: controller.signal })
+    if (generation !== backendUpdateRequestGeneration) return
+    if (!outcome.ok) {
+      setBackendUpdateReadFailure(readBackendUpdateOutcomeMessage(outcome))
+      return
+    }
+    applyBackendUpdateStatus(outcome.status)
+  } catch (error) {
+    if (generation !== backendUpdateRequestGeneration) return
+    setBackendUpdateReadFailure(error instanceof Error ? error.message : '读取后端信息失败')
+  } finally {
+    endBackendUpdateRequest(controller)
+  }
+}
+
+async function onCheckBackendUpdate(): Promise<void> {
+  if (backendUpdateCheckBusy.value) return
+  const requestInstanceId = backendUpdateIdentity.value?.instanceId ?? ''
+  const { generation, controller } = beginBackendUpdateRequest()
+  backendUpdateCheckBusy.value = true
+  backendUpdateCheckError.value = ''
+  // The previous comparison belongs to the previous check, not to this one.
+  backendUpdateResult.value = null
+  try {
+    const outcome = await checkBackendUpdate({ signal: controller.signal })
+    if (generation !== backendUpdateRequestGeneration) return
+    if (!outcome.ok) {
+      backendUpdateCheckError.value = `${readBackendUpdateOutcomeMessage(outcome)}可稍后重试。`
+      return
+    }
+    const responseInstanceId = outcome.status.backend.instanceId
+    if (requestInstanceId && responseInstanceId && responseInstanceId !== requestInstanceId) {
+      // A late/mismatched answer must never be shown as the requested backend.
+      backendUpdateCheckError.value = '后端实例已变化，本次结果已丢弃，可稍后重试。'
+      void nextTick(() => {
+        void refreshBackendUpdateStatus()
+      })
+      return
+    }
+    applyBackendUpdateStatus(outcome.status)
+  } catch (error) {
+    if (generation !== backendUpdateRequestGeneration) return
+    const message = error instanceof Error ? error.message.trim() : '更新检测失败'
+    backendUpdateCheckError.value = `${message}，可稍后重试。`
+  } finally {
+    // A stale (superseded) check must not release a newer check's busy lock.
+    if (generation === backendUpdateRequestGeneration) backendUpdateCheckBusy.value = false
+    endBackendUpdateRequest(controller)
+  }
+}
+
 function onOpenAppVersionDetails(): void {
   if (!isMobileShellAvailable.value) {
     void openLatestMobileShellReleasePage()
@@ -3338,7 +3676,7 @@ function toggleSidebarSearch(): void {
   }
 }
 
-function onOpenSidebarTool(routeName: 'skills' | 'github-trending'): void {
+function onOpenSidebarTool(routeName: 'skills' | 'github-trending' | 'task-board' | 'assistant'): void {
   closeMobileSidebarAfterNavigation()
   void router.push({ name: routeName })
 }
@@ -4013,28 +4351,14 @@ async function onRefreshSidebarThreads(): Promise<void> {
   }
 }
 
-function permissionDecisionLabel(value: PermissionDecision): string {
-  return value === 'allowForSession' ? '自动允许' : '每次询问'
-}
-
-function togglePermissionDecision(value: PermissionDecision): PermissionDecision {
-  return value === 'allowForSession' ? 'ask' : 'allowForSession'
-}
-
+// The single permission switch. The legacy per-type fields are still spread into the payload for
+// wire compatibility, but there is no per-type control any more.
 function toggleAllowAllPermissionRequests(): void {
+  if (isWebBridgeSettingsSaving.value) return
   void saveWebBridgeSettings({
     permissions: {
       ...webBridgeSettings.value.permissions,
       allowAllPermissionRequests: !webBridgeSettings.value.permissions.allowAllPermissionRequests,
-    },
-  })
-}
-
-function cyclePermissionDecision(key: 'commandExecution' | 'fileChange' | 'mcpTools'): void {
-  void saveWebBridgeSettings({
-    permissions: {
-      ...webBridgeSettings.value.permissions,
-      [key]: togglePermissionDecision(webBridgeSettings.value.permissions[key]),
     },
   })
 }
@@ -4737,7 +5061,7 @@ watch(
 )
 
 watch(
-  [mobileShellTaskPetItems, recentTaskPetThreads],
+  () => isMobileShellAvailable.value ? [mobileShellTaskPetItems.value, recentTaskPetThreads.value] : [],
   () => {
     if (!isMobileShellAvailable.value) return
     if (mobileShellTaskPetSyncTimer) clearTimeout(mobileShellTaskPetSyncTimer)
@@ -5191,6 +5515,16 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .sidebar-action-grid {
   @apply grid grid-cols-3 gap-1;
+}
+
+.sidebar-action-grid--nav {
+  @apply grid gap-1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0.25rem;
+}
+
+.sidebar-action-grid--nav .sidebar-action-tile {
+  min-height: 44px;
 }
 
 .sidebar-action-tile {
@@ -6033,6 +6367,10 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   color: var(--ui-text-secondary);
 }
 
+.sidebar-settings-row--switch {
+  min-height: 44px;
+}
+
 .sidebar-settings-row:hover,
 .sidebar-settings-row:focus-visible {
   background: var(--ui-bg-row-hover);
@@ -6083,7 +6421,13 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   @apply px-1 py-1;
 }
 
-.sidebar-settings-hint:not(.sidebar-settings-hint-status):not(.sidebar-settings-hint-compact) {
+/* The permission help is the one always-visible plain hint in this panel; it keeps the standard
+   hint padding/type and is deliberately excluded from the hide rule below. */
+.sidebar-settings-permission-hint {
+  @apply px-3 py-1;
+}
+
+.sidebar-settings-hint:not(.sidebar-settings-hint-status):not(.sidebar-settings-hint-compact):not(.sidebar-settings-permission-hint) {
   display: none;
 }
 
@@ -6369,6 +6713,60 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .sidebar-settings-about-meta span:last-child {
   @apply min-w-0 truncate text-right;
+}
+
+/* Connected backend identity / read-only update detection (U1a2). */
+.sidebar-settings-backend-update {
+  @apply flex flex-col gap-1.5;
+  border-top: 1px solid var(--ui-border-subtle);
+  padding-top: 0.375rem;
+}
+
+.sidebar-settings-backend-row {
+  @apply flex min-w-0 flex-col gap-0.5;
+}
+
+.sidebar-settings-backend-value {
+  overflow-wrap: anywhere;
+}
+
+.sidebar-settings-backend-source {
+  overflow-wrap: anywhere;
+}
+
+.sidebar-settings-backend-reason {
+  color: var(--ui-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-settings-backend-result {
+  overflow-wrap: anywhere;
+}
+
+.sidebar-settings-backend-error {
+  color: var(--ui-danger);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-settings-backend-check-button {
+  @apply inline-flex w-full items-center justify-center gap-1.5 border px-2.5 py-2 text-xs font-semibold transition-colors duration-100 cursor-pointer;
+  min-height: 44px;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+  text-align: center;
+  white-space: normal;
+}
+
+.sidebar-settings-backend-check-button:hover,
+.sidebar-settings-backend-check-button:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+}
+
+.sidebar-settings-backend-check-button:disabled {
+  @apply cursor-not-allowed opacity-65;
 }
 
 @media (max-width: 1023px) {
