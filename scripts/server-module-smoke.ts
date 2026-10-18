@@ -9109,7 +9109,8 @@ async function smokeCodexLaunchIdentityCapture(): Promise<void> {
     const nativePath = join(tempDir, 'codex-b4b1-native.exe')
     const relativePath = join(tempDir, 'codex-b4b1-relative.exe')
     const pathOnlyName = 'codexb4b1pathonly'
-    const pathOnlyPath = join(tempDir, `${pathOnlyName}.exe`)
+    // PATH 解析在 POSIX 上不带 .exe 后缀；固定 .exe 会让 Linux CI 找不到文件
+    const pathOnlyPath = join(tempDir, `${pathOnlyName}${process.platform === 'win32' ? '.exe' : ''}`)
     const launcherPath = join(tempDir, 'codex-b4b1-launcher.cmd')
     const nativeBytes = 'b4b1-native-bytes\n'
     const relativeBytes = 'b4b1-relative-bytes\n'
