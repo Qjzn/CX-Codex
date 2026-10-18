@@ -234,5 +234,7 @@ onBeforeUnmount(() => {
 @media (pointer: coarse), (max-width: 767px) {
   .rich-text-block :deep(.rich-text-code-toolbar) { min-height: 44px; }
   .rich-text-block :deep(.rich-text-code-copy) { min-width: 56px; min-height: 44px; }
+  /* 手机上 pre 固定宽度会横向滚动，长行只露一半，看着像渲染坏了；改成软换行并保留缩进。 */
+  .rich-text-block :deep(.rich-text-code pre) { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
 </style>
