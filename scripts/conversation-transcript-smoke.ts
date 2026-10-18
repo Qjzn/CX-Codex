@@ -266,6 +266,99 @@ assert.deepEqual(snapshotProjection.turns[0]?.fileChanges, [{
   itemIds: ['files-1'],
 }])
 
+// B2A RED (partial_answer projection): partial_answer must project as its own
+// assistant phase 'partial', keeping its body/order/running state, and must
+// never be folded into commentary or promoted to the turn final.
+const b2aPartialStreamPrefix = [
+  { method: 'turn/started', params: { threadId: 'B2A-partial-stream-thread', turn: { id: 'B2A-PARTIAL-STREAM-TURN', status: 'inProgress', startedAt: at(0) } }, atIso: at(0), seq: 1 },
+  { method: 'item/started', params: { threadId: 'B2A-partial-stream-thread', turnId: 'B2A-PARTIAL-STREAM-TURN', item: { type: 'agentMessage', id: 'B2A-PARTIAL-STREAM-1', phase: 'partial_answer', text: '' } }, atIso: at(500), seq: 2 },
+  { method: 'item/agentMessage/delta', params: { threadId: 'B2A-partial-stream-thread', turnId: 'B2A-PARTIAL-STREAM-TURN', itemId: 'B2A-PARTIAL-STREAM-1', delta: '阶段性结论：先改投影。' }, atIso: at(1_000), seq: 3 },
+  { method: 'item/completed', params: { threadId: 'B2A-partial-stream-thread', turnId: 'B2A-PARTIAL-STREAM-TURN', item: { type: 'agentMessage', id: 'B2A-PARTIAL-STREAM-1', phase: 'partial_answer', text: '阶段性结论：先改投影。' } }, atIso: at(1_500), seq: 4 },
+]
+
+const b2aPartialStreamProjection = projectConversation({
+  nowMs: Date.parse(at(2_000)),
+  runtime: {
+    executionState: 'running',
+    activeTurnId: 'B2A-PARTIAL-STREAM-TURN',
+    lastStartedAtIso: at(0),
+    messageState: 'fresh',
+  },
+  threadRead: { thread: { id: 'B2A-partial-stream-thread', turns: [] } },
+  notifications: b2aPartialStreamPrefix,
+})
+const b2aPartialStreamTurn = b2aPartialStreamProjection.turns[0]
+const b2aPartialStreamFound = b2aPartialStreamTurn?.blocks.find((block) => block.kind === 'assistant' && block.id === 'B2A-PARTIAL-STREAM-1')
+const b2aPartialStreamBlock = b2aPartialStreamFound?.kind === 'assistant' ? b2aPartialStreamFound : null
+assert.equal(b2aPartialStreamBlock?.phase, 'partial',
+  'B2A: a partial_answer agentMessage must keep its own assistant phase=partial instead of being projected as commentary')
+assert.equal(b2aPartialStreamBlock?.text, '阶段性结论：先改投影。',
+  'B2A: the partial answer body must survive projection under the same item id')
+assert.equal(b2aPartialStreamBlock?.streaming, false,
+  'B2A: a completed partial_answer item must not keep streaming state')
+assert.equal(b2aPartialStreamTurn?.commentary.length, 0,
+  'B2A: a partial_answer message must never be projected into commentary')
+assert.equal(b2aPartialStreamTurn?.final, null,
+  'B2A: a partial_answer message must never be projected as the turn final')
+assert.equal(b2aPartialStreamTurn?.state, 'running',
+  'B2A: a turn holding only a partial answer must stay running')
+assert.equal(b2aPartialStreamTurn?.finalStatus, 'pending',
+  'B2A: a running turn with only a partial answer must not claim a final status')
+
+const b2aPartialOrderThreadId = 'B2A-partial-order-thread'
+const b2aPartialOrderTurnId = 'B2A-PARTIAL-ORDER-TURN'
+const b2aPartialOrderProjection = projectConversation({
+  nowMs: Date.parse(at(5_000)),
+  runtime: {
+    executionState: 'completed',
+    lastStartedAtIso: at(0),
+    lastCompletedAtIso: at(4_500),
+    messageState: 'fresh',
+  },
+  threadRead: { thread: { id: b2aPartialOrderThreadId, turns: [] } },
+  notifications: [
+    { method: 'turn/started', params: { threadId: b2aPartialOrderThreadId, turn: { id: b2aPartialOrderTurnId, status: 'inProgress', startedAt: at(0) } }, atIso: at(0), seq: 1 },
+    { method: 'item/started', params: { threadId: b2aPartialOrderThreadId, turnId: b2aPartialOrderTurnId, item: { type: 'agentMessage', id: 'B2A-PARTIAL-ORDER-PARTIAL-1', phase: 'partial_answer', text: '' } }, atIso: at(500), seq: 2 },
+    { method: 'item/agentMessage/delta', params: { threadId: b2aPartialOrderThreadId, turnId: b2aPartialOrderTurnId, itemId: 'B2A-PARTIAL-ORDER-PARTIAL-1', delta: '阶段性结论：先改投影。' }, atIso: at(1_000), seq: 3 },
+    { method: 'item/completed', params: { threadId: b2aPartialOrderThreadId, turnId: b2aPartialOrderTurnId, item: { type: 'agentMessage', id: 'B2A-PARTIAL-ORDER-PARTIAL-1', phase: 'partial_answer', text: '阶段性结论：先改投影。' } }, atIso: at(1_500), seq: 4 },
+    { method: 'item/started', params: { threadId: 'B2A-partial-order-thread', turnId: b2aPartialOrderTurnId, item: { type: 'commandExecution', id: 'B2A-PARTIAL-ORDER-TOOL-1', command: 'npm.cmd test', cwd: 'E:\\repo', status: 'inProgress', aggregatedOutput: '', exitCode: null, durationMs: null } }, atIso: at(2_000), seq: 5 },
+    { method: 'item/completed', params: { threadId: 'B2A-partial-order-thread', turnId: b2aPartialOrderTurnId, item: { type: 'commandExecution', id: 'B2A-PARTIAL-ORDER-TOOL-1', command: 'npm.cmd test', cwd: 'E:\\repo', status: 'completed', aggregatedOutput: 'ok\n', exitCode: 0, durationMs: 1_000 } }, atIso: at(3_000), seq: 6 },
+    { method: 'item/completed', params: { threadId: 'B2A-partial-order-thread', turnId: b2aPartialOrderTurnId, item: { type: 'agentMessage', id: 'B2A-PARTIAL-ORDER-FINAL-1', phase: 'final_answer', text: '本轮实现完成。' } }, atIso: at(4_000), seq: 7 },
+    { method: 'turn/completed', params: { threadId: 'B2A-partial-order-thread', turn: { id: b2aPartialOrderTurnId, status: 'completed', startedAt: at(0), completedAt: at(4_500) } }, atIso: at(4_500), seq: 8 },
+  ],
+})
+assert.equal(b2aPartialOrderProjection.turns.length, 1,
+  'B2A: a partial answer followed by a tool call and a final answer must project as exactly one turn')
+const b2aPartialOrderTurn = b2aPartialOrderProjection.turns.find((turn) => turn.id === b2aPartialOrderTurnId)
+assert.equal(b2aPartialOrderTurn?.id, b2aPartialOrderTurnId,
+  'B2A: the ordered partial/tool/final turn must be selected by its own turn id')
+const b2aPartialOrderIds = (b2aPartialOrderTurn?.blocks ?? []).map((block) => block.id)
+const b2aPartialOrderAssistantIds = (b2aPartialOrderTurn?.blocks ?? [])
+  .filter((block) => block.kind === 'assistant')
+  .map((block) => block.id)
+const b2aPartialOrderFound = b2aPartialOrderTurn?.blocks.find((block) => block.kind === 'assistant' && block.id === 'B2A-PARTIAL-ORDER-PARTIAL-1')
+const b2aPartialOrderBlock = b2aPartialOrderFound?.kind === 'assistant' ? b2aPartialOrderFound : null
+assert.deepEqual(b2aPartialOrderAssistantIds, ['B2A-PARTIAL-ORDER-PARTIAL-1', 'B2A-PARTIAL-ORDER-FINAL-1'],
+  'B2A: a partial answer and an explicit final_answer must remain two ordered assistant blocks')
+assert.equal(b2aPartialOrderBlock?.phase, 'partial',
+  'B2A: a partial answer followed by a tool call and a final_answer must still keep phase=partial')
+assert.equal(b2aPartialOrderBlock?.text, '阶段性结论：先改投影。',
+  'B2A: the partial answer body must stay on the partial block in a completed turn')
+assert.equal(b2aPartialOrderTurn?.commentary.length, 0,
+  'B2A: a partial answer must not be reclassified as commentary once a final_answer exists')
+assert.equal(b2aPartialOrderTurn?.final?.id, 'B2A-PARTIAL-ORDER-FINAL-1',
+  'B2A: the unique final must be the explicit final_answer message, not the partial answer')
+assert.equal(b2aPartialOrderTurn?.finalStatus, 'available',
+  'B2A: a completed turn with an explicit final_answer must report an available final')
+assert.equal(b2aPartialOrderTurn?.activities.find((activity) => activity.id === 'B2A-PARTIAL-ORDER-TOOL-1')?.status, 'completed',
+  'B2A: the tool activity between a partial answer and the final must settle as completed')
+assert.ok(
+  b2aPartialOrderIds.indexOf('B2A-PARTIAL-ORDER-PARTIAL-1') >= 0
+    && b2aPartialOrderIds.indexOf('B2A-PARTIAL-ORDER-TOOL-1') > b2aPartialOrderIds.indexOf('B2A-PARTIAL-ORDER-PARTIAL-1')
+    && b2aPartialOrderIds.indexOf('B2A-PARTIAL-ORDER-FINAL-1') > b2aPartialOrderIds.indexOf('B2A-PARTIAL-ORDER-TOOL-1'),
+  'B2A: projected block order must stay partial answer, then tool activity, then final answer',
+)
+
 const completedSnapshotStructuralProjection = projectConversation({
   nowMs: Date.parse(at(10_000)),
   runtime: { executionState: 'completed', messageState: 'fresh' },
@@ -483,7 +576,11 @@ const pendingProjection = projectConversation({
           header: '改造范围',
           question: '请选择范围',
           isOther: true,
-          options: [{ label: '当前会话' }, { label: '全部会话' }],
+          options: [
+            { label: '当前会话', description: '只验证当前任务，影响范围小。' },
+            { description: '没有标签的无效选项不得错配到下一项。' },
+            { label: '全部会话', description: '同时检查已有任务，需要更多时间。' },
+          ],
         }],
       },
     },
@@ -554,7 +651,423 @@ assert.deepEqual(pendingInteractions[1]?.questions, [{
   question: '请选择范围',
   isOther: true,
   options: ['当前会话', '全部会话'],
+  optionDescriptions: ['只验证当前任务，影响范围小。', '同时检查已有任务，需要更多时间。'],
 }])
+assert.equal(pendingInteractions[1]?.requestId, 9, 'question presentation must preserve the request identity')
+assert.equal(pendingInteractions[1]?.responseId, 9, 'question presentation must preserve the response identity')
+
+const b3aPermissionsProjection = projectConversation({
+  nowMs: Date.parse(at(10_000)),
+  runtime: {
+    executionState: 'running',
+    activeTurnId: 'turn-b3a-permissions-fixture',
+    lastStartedAtIso: at(0),
+    messageState: 'fresh',
+  },
+  threadRead: {
+    thread: {
+      id: 'thread-b3a-permissions-fixture',
+      turns: [{
+        id: 'turn-b3a-permissions-fixture',
+        status: 'inProgress',
+        items: [],
+      }],
+    },
+  },
+  pendingRequests: [{
+    id: 7301,
+    method: 'item/permissions/requestApproval',
+    receivedAtIso: at(2_000),
+    params: {
+      threadId: 'thread-b3a-permissions-fixture',
+      turnId: 'turn-b3a-permissions-fixture',
+      itemId: 'item-b3a-permissions-fixture',
+      startedAtMs: Date.parse(at(2_000)),
+      cwd: 'E:\\b3a-example',
+      reason: 'B3A synthetic read permission request',
+      permissions: {
+        network: null,
+        fileSystem: {
+          read: ['E:\\b3a-example\\input.txt'],
+          write: null,
+        },
+      },
+    },
+  }],
+})
+assert.equal(b3aPermissionsProjection.turns.length, 1,
+  'B3A: the synthetic permissions request must remain on one turn')
+const b3aPermissionsTurn = b3aPermissionsProjection.turns[0]
+assert.equal(b3aPermissionsTurn?.id, 'turn-b3a-permissions-fixture')
+assert.equal(b3aPermissionsTurn?.state, 'waiting',
+  'B3A: a pending permissions request must keep the turn waiting')
+assert.equal(b3aPermissionsTurn?.finalStatus, 'pending')
+assert.equal(b3aPermissionsTurn?.final, null)
+assert.equal(b3aPermissionsTurn?.interactions.length, 1)
+const b3aPermissionsInteraction = b3aPermissionsTurn?.interactions[0]
+assert.equal(b3aPermissionsInteraction?.status, 'pending')
+assert.equal(b3aPermissionsInteraction?.requestId, 7301)
+assert.equal(b3aPermissionsInteraction?.responseId, 7301)
+assert.equal(b3aPermissionsInteraction?.itemId, 'item-b3a-permissions-fixture')
+assert.equal(b3aPermissionsInteraction?.interactionType, 'permissions-approval',
+  'B3A: a pending permissions request must use permissions-approval instead of generic')
+assert.equal(b3aPermissionsInteraction?.allowForSession, false,
+  'B3A: dedicated permissions approval must not inherit the legacy session action')
+
+// B3B: the dedicated permissions approval projection. Fixtures are synthetic; paths stay
+// verbatim (relative, other-platform, windows text) and are never resolved locally.
+const projectB3bPermissionsInteraction = (options: {
+  threadId: string
+  turnId: string
+  requestId: number
+  params: unknown
+}) => {
+  const projection = projectConversation({
+    nowMs: Date.parse(at(10_000)),
+    runtime: {
+      executionState: 'running',
+      activeTurnId: options.turnId,
+      lastStartedAtIso: at(0),
+      messageState: 'fresh',
+    },
+    threadRead: {
+      thread: {
+        id: options.threadId,
+        turns: [{ id: options.turnId, status: 'inProgress', items: [] }],
+      },
+    },
+    pendingRequests: [{
+      id: options.requestId,
+      method: 'item/permissions/requestApproval',
+      receivedAtIso: at(2_000),
+      params: options.params,
+    }],
+  })
+  assert.equal(projection.turns.length, 1, 'B3B: the request must stay on its own turn')
+  const turn = projection.turns[0]
+  const interaction = turn?.interactions[0]
+  assert.equal(turn?.state, 'waiting', 'B3B: a pending permissions request must keep the turn waiting')
+  assert.equal(turn?.finalStatus, 'pending')
+  assert.equal(turn?.final, null)
+  assert.equal(interaction?.status, 'pending')
+  assert.equal(interaction?.interactionType, 'permissions-approval',
+    'B3B: a pending permissions request must use permissions-approval instead of generic')
+  assert.equal(interaction?.allowForSession, false,
+    'B3B: dedicated permissions approval must not offer a session action')
+  assert.equal(interaction?.responseId, options.requestId)
+  return interaction!
+}
+
+const b3bScopeParams = {
+  threadId: 'thread-b3b-scope-fixture',
+  turnId: 'turn-b3b-scope-fixture',
+  itemId: 'item-b3b-scope-fixture',
+  environmentId: 'env-b3b-remote',
+  startedAtMs: Date.parse(at(2_000)),
+  cwd: 'relative/workspace',
+  reason: 'B3B synthetic complete scope request',
+  permissions: {
+    network: { enabled: true },
+    fileSystem: {
+      read: ['relative/input.txt', '/home/deploy/input.txt'],
+      write: ['E:\\b3b-example\\out.txt'],
+      globScanMaxDepth: 3,
+      entries: [
+        { path: { type: 'path', path: 'src/app.ts' }, access: 'read' },
+        { path: { type: 'glob_pattern', pattern: '**/*.ts' }, access: 'write' },
+        { path: { type: 'special', value: { kind: 'project_roots', subpath: 'src' } }, access: 'read' },
+        { path: { type: 'special', value: { kind: 'tmpdir' } }, access: 'deny' },
+      ],
+    },
+  },
+}
+const b3bScopeInteraction = projectB3bPermissionsInteraction({
+  threadId: 'thread-b3b-scope-fixture',
+  turnId: 'turn-b3b-scope-fixture',
+  requestId: 7302,
+  params: b3bScopeParams,
+})
+assert.equal(b3bScopeInteraction.itemId, 'item-b3b-scope-fixture')
+assert.equal(b3bScopeInteraction.detail, 'B3B synthetic complete scope request',
+  'B3B: the projection must preserve the original reason text')
+assert.deepEqual(b3bScopeInteraction.context, [])
+assert.deepEqual(b3bScopeInteraction.permissionsApproval, {
+  canApprove: true,
+  unavailableReason: '',
+  rows: [
+    { label: '环境', value: 'env-b3b-remote' },
+    { label: '工作目录', value: 'relative/workspace' },
+    { label: '原因', value: 'B3B synthetic complete scope request' },
+    { label: '网络访问', value: '允许' },
+    { label: '读取路径', value: 'relative/input.txt' },
+    { label: '读取路径', value: '/home/deploy/input.txt' },
+    { label: '写入路径', value: 'E:\\b3b-example\\out.txt' },
+    { label: '通配扫描深度', value: '3' },
+    { label: '范围项', value: 'path:src/app.ts · access:read' },
+    { label: '范围项', value: 'glob_pattern:**/*.ts · access:write' },
+    { label: '范围项', value: 'special:project_roots(subpath=src) · access:read' },
+    { label: '范围项', value: 'special:tmpdir · access:deny' },
+  ],
+  grant: {
+    network: { enabled: true },
+    fileSystem: {
+      read: ['relative/input.txt', '/home/deploy/input.txt'],
+      write: ['E:\\b3b-example\\out.txt'],
+      globScanMaxDepth: 3,
+      entries: [
+        { path: { type: 'path', path: 'src/app.ts' }, access: 'read' },
+        { path: { type: 'glob_pattern', pattern: '**/*.ts' }, access: 'write' },
+        { path: { type: 'special', value: { kind: 'project_roots', subpath: 'src' } }, access: 'read' },
+        { path: { type: 'special', value: { kind: 'tmpdir' } }, access: 'deny' },
+      ],
+    },
+  },
+}, 'B3B: the dedicated view must display every recognized scope and keep the grant verbatim')
+
+// 0.130.0 shape: no environmentId, null members and the legacy `none` restriction.
+const b3bLegacyParams = {
+  threadId: 'thread-b3b-legacy-fixture',
+  turnId: 'turn-b3b-legacy-fixture',
+  itemId: 'item-b3b-legacy-fixture',
+  startedAtMs: Date.parse(at(2_000)),
+  cwd: 'E:\\b3b-legacy',
+  reason: null,
+  permissions: {
+    network: null,
+    fileSystem: {
+      read: null,
+      write: ['E:\\b3b-legacy\\out.txt'],
+      entries: [
+        { path: { type: 'path', path: 'E:\\b3b-legacy\\nested' }, access: 'none' },
+      ],
+    },
+  },
+}
+const b3bLegacyInteraction = projectB3bPermissionsInteraction({
+  threadId: 'thread-b3b-legacy-fixture',
+  turnId: 'turn-b3b-legacy-fixture',
+  requestId: 7303,
+  params: b3bLegacyParams,
+})
+assert.deepEqual(b3bLegacyInteraction.permissionsApproval, {
+  canApprove: true,
+  unavailableReason: '',
+  rows: [
+    { label: '环境', value: '未提供' },
+    { label: '工作目录', value: 'E:\\b3b-legacy' },
+    { label: '原因', value: '未提供' },
+    { label: '网络访问', value: '未指定' },
+    { label: '写入路径', value: 'E:\\b3b-legacy\\out.txt' },
+    { label: '范围项', value: 'path:E:\\b3b-legacy\\nested · access:none' },
+  ],
+  grant: {
+    fileSystem: {
+      read: null,
+      write: ['E:\\b3b-legacy\\out.txt'],
+      entries: [
+        { path: { type: 'path', path: 'E:\\b3b-legacy\\nested' }, access: 'none' },
+      ],
+    },
+  },
+}, 'B3B: the legacy none restriction and null members must round-trip unchanged')
+
+// Wire-legal omissions and nulls must not be mistaken for an unknown structure.
+const b3bOmittedParams = {
+  threadId: 'thread-b3b-omitted-fixture',
+  turnId: 'turn-b3b-omitted-fixture',
+  itemId: 'item-b3b-omitted-fixture',
+  startedAtMs: Date.parse(at(2_000)),
+  cwd: 'relative/omitted',
+  permissions: { network: null, fileSystem: null },
+}
+const b3bOmittedInteraction = projectB3bPermissionsInteraction({
+  threadId: 'thread-b3b-omitted-fixture',
+  turnId: 'turn-b3b-omitted-fixture',
+  requestId: 7304,
+  params: b3bOmittedParams,
+})
+assert.equal(b3bOmittedInteraction.permissionsApproval?.canApprove, true,
+  'B3B: a request without permission components must stay recognizable')
+assert.deepEqual(b3bOmittedInteraction.permissionsApproval?.grant, {},
+  'B3B: null components must never become a grant')
+assert.deepEqual(b3bOmittedInteraction.permissionsApproval?.rows, [
+  { label: '环境', value: '未提供' },
+  { label: '工作目录', value: 'relative/omitted' },
+  { label: '原因', value: '未提供' },
+  { label: '网络访问', value: '未指定' },
+])
+
+// Unknown access values keep the dedicated interaction but can only be denied.
+const b3bUnknownAccessParams = {
+  threadId: 'thread-b3b-unknown-fixture',
+  turnId: 'turn-b3b-unknown-fixture',
+  itemId: 'item-b3b-unknown-fixture',
+  startedAtMs: Date.parse(at(2_000)),
+  cwd: 'relative/unknown',
+  reason: 'B3B synthetic unknown scope request',
+  permissions: {
+    network: { enabled: 'yes' },
+    fileSystem: {
+      read: ['relative/input.txt'],
+      entries: [
+        { path: { type: 'path', path: 'src/app.ts' }, access: 'allow' },
+        { path: { type: 'workspace_root' }, access: 'read' },
+      ],
+    },
+  },
+}
+const b3bUnknownAccessInteraction = projectB3bPermissionsInteraction({
+  threadId: 'thread-b3b-unknown-fixture',
+  turnId: 'turn-b3b-unknown-fixture',
+  requestId: 7305,
+  params: b3bUnknownAccessParams,
+})
+assert.equal(b3bUnknownAccessInteraction.permissionsApproval?.canApprove, false,
+  'B3B: an unknown access/path structure must not be approvable')
+assert.equal(b3bUnknownAccessInteraction.permissionsApproval?.grant, null)
+assert.equal(
+  (b3bUnknownAccessInteraction.permissionsApproval?.unavailableReason ?? '').length > 0,
+  true,
+  'B3B: an unrecognized request must explain why it can only be denied',
+)
+assert.deepEqual(b3bUnknownAccessInteraction.permissionsApproval?.rows.slice(0, 7), [
+  { label: '环境', value: '未提供' },
+  { label: '工作目录', value: 'relative/unknown' },
+  { label: '原因', value: 'B3B synthetic unknown scope request' },
+  { label: '网络访问', value: '无法识别' },
+  { label: '读取路径', value: 'relative/input.txt' },
+  { label: '范围项', value: 'path:src/app.ts · access:无法识别' },
+  { label: '范围项', value: 'path:无法识别 · access:read' },
+])
+const b3bUnknownDetailsRow = b3bUnknownAccessInteraction.permissionsApproval?.rows.at(-1)
+assert.equal(b3bUnknownDetailsRow?.label, '未识别项',
+  'B3B: the unrecognized parts must still be named')
+assert.match(String(b3bUnknownDetailsRow?.value), /范围项权限无法识别/)
+assert.match(String(b3bUnknownDetailsRow?.value), /范围项 path 类型无法识别/)
+
+// A schema-known but ungrantable special root, plus default/null subpaths.
+const b3bSpecialParams = {
+  threadId: 'thread-b3b-special-fixture',
+  turnId: 'turn-b3b-special-fixture',
+  itemId: 'item-b3b-special-fixture',
+  startedAtMs: Date.parse(at(2_000)),
+  cwd: 'relative/special',
+  reason: 'B3B synthetic special scope request',
+  permissions: {
+    fileSystem: {
+      entries: [
+        { path: { type: 'special', value: { kind: 'project_roots' } }, access: 'read' },
+        { path: { type: 'special', value: { kind: 'project_roots', subpath: null } }, access: 'read' },
+        { path: { type: 'special', value: { kind: 'unknown', path: 'weird/root', subpath: null } }, access: 'write' },
+      ],
+    },
+  },
+}
+const b3bSpecialInteraction = projectB3bPermissionsInteraction({
+  threadId: 'thread-b3b-special-fixture',
+  turnId: 'turn-b3b-special-fixture',
+  requestId: 7306,
+  params: b3bSpecialParams,
+})
+assert.equal(b3bSpecialInteraction.permissionsApproval?.canApprove, false,
+  'B3B: special.unknown must stay deny-only')
+assert.deepEqual(b3bSpecialInteraction.permissionsApproval?.rows, [
+  { label: '环境', value: '未提供' },
+  { label: '工作目录', value: 'relative/special' },
+  { label: '原因', value: 'B3B synthetic special scope request' },
+  { label: '网络访问', value: '未指定' },
+  { label: '范围项', value: 'special:project_roots(subpath=null) · access:read' },
+  { label: '范围项', value: 'special:project_roots(subpath=null) · access:read' },
+  { label: '范围项', value: 'special:unknown(path=weird/root subpath=null) · access:write' },
+  {
+    label: '未识别项',
+    value: '范围项 special unknown 无法授权 weird/root',
+  },
+], 'B3B: unknown special roots stay displayable and deny-only')
+
+// B3B2: an unknown member inside any path union variant, and any prototype-name special
+// kind, must stay a dedicated visible interaction that can only be denied.
+const b3b2OuterKeyParams = {
+  ...b3bScopeParams,
+  itemId: 'item-b3b2-outer-key',
+  permissions: {
+    fileSystem: {
+      entries: [
+        { path: { type: 'path', path: 'relative/input.txt', followAliases: true }, access: 'read' },
+      ],
+    },
+  },
+}
+const b3b2OuterKeyInteraction = projectB3bPermissionsInteraction({
+  threadId: 'thread-b3b-scope-fixture',
+  turnId: 'turn-b3b-scope-fixture',
+  requestId: 7307,
+  params: b3b2OuterKeyParams,
+})
+assert.deepEqual(b3b2OuterKeyInteraction.permissionsApproval, {
+  canApprove: false,
+  unavailableReason: (b3b2OuterKeyInteraction.permissionsApproval?.unavailableReason ?? ''),
+  rows: [
+    { label: '环境', value: 'env-b3b-remote' },
+    { label: '工作目录', value: 'relative/workspace' },
+    { label: '原因', value: 'B3B synthetic complete scope request' },
+    { label: '网络访问', value: '未指定' },
+    { label: '范围项', value: 'path:relative/input.txt · access:read' },
+    { label: '未识别项', value: '范围项 path 包含未知字段 followAliases' },
+  ],
+  grant: null,
+}, 'B3B2: an unknown member on the path variant must keep the raw scope and stay deny-only')
+assert.equal((b3b2OuterKeyInteraction.permissionsApproval?.unavailableReason ?? '').length > 0, true)
+
+for (const kind of ['toString', 'constructor', '__proto__']) {
+  const params = {
+    ...b3bScopeParams,
+    itemId: `item-b3b2-kind-${kind}`,
+    permissions: {
+      fileSystem: {
+        entries: [{ path: { type: 'special', value: { kind } }, access: 'read' }],
+      },
+    },
+  }
+  const interaction = projectB3bPermissionsInteraction({
+    threadId: 'thread-b3b-scope-fixture',
+    turnId: 'turn-b3b-scope-fixture',
+    requestId: 7308,
+    params,
+  })
+  assert.equal(interaction.permissionsApproval?.canApprove, false,
+    `B3B2: prototype-name kind ${kind} must stay deny-only`)
+  assert.equal(interaction.permissionsApproval?.grant, null,
+    `B3B2: prototype-name kind ${kind} must not build a grant`)
+  assert.deepEqual(interaction.permissionsApproval?.rows, [
+    { label: '环境', value: 'env-b3b-remote' },
+    { label: '工作目录', value: 'relative/workspace' },
+    { label: '原因', value: 'B3B synthetic complete scope request' },
+    { label: '网络访问', value: '未指定' },
+    { label: '范围项', value: 'path:无法识别 · access:read' },
+    { label: '未识别项', value: `范围项 special 类型无法识别 ${kind}` },
+  ], `B3B2: prototype-name kind ${kind} must be named in the display instead of throwing`)
+}
+
+const nestedQuestionProjection = projectConversation({
+  nowMs: Date.parse(at(10_000)),
+  threadRead: { thread: { id: 'thread-question-details', turns: [{ id: 'turn-question-details', status: 'inProgress', items: [] }] } },
+  pendingRequests: [{
+    id: 19,
+    threadId: 'thread-question-details',
+    turnId: 'turn-question-details',
+    method: 'item/tool/requestUserInput',
+    params: { request: { params: { questions: [{
+      id: 'nested-scope', header: '范围', question: '范围',
+      options: [{ label: '默认' }, { label: '自定义', description: '<b>按文字显示，不执行 HTML</b>' }],
+    }, { id: 'freeform', question: '请补充要求' }] } } },
+  }],
+}).turns[0]?.interactions[0]
+assert.deepEqual(nestedQuestionProjection?.questions, [
+  { id: 'nested-scope', header: '范围', question: '范围', isOther: false, options: ['默认', '自定义'], optionDescriptions: ['', '<b>按文字显示，不执行 HTML</b>'] },
+  { id: 'freeform', header: '', question: '请补充要求', isOther: false, options: [], optionDescriptions: [] },
+], 'nested, legacy and freeform questions retain complete plain-text details without changing option values')
+assert.equal(nestedQuestionProjection?.responseId, 19)
 assert.equal(pendingInteractions[2]?.authorizationUrl, 'https://example.test/authorize')
 assert.equal(pendingInteractions[3]?.title, 'GitHub · update_pull_request')
 assert.deepEqual(pendingInteractions[3]?.context, [{ label: 'repository', value: 'Qjzn/CX-Codex' }])
@@ -637,6 +1150,274 @@ assert.equal(missingFinalProjection.turns[0]?.finalStatus, 'missing')
 assert.equal(missingFinalProjection.turns[0]?.commentary[0]?.id, 'unknown-phase')
 assert.equal(missingFinalProjection.turns[0]?.blocks.some((block) => block.kind === 'notice' && block.id.endsWith(':missing-final')), false)
 
+// B2A RED (authoritative completed turn): the runtime and the turn both report
+// completed, but the only assistant message carries phase=partial_answer. It must
+// stay a partial assistant block with its body, and the turn must not gain a final.
+const b2aPartialCompletedProjection = projectConversation({
+  nowMs: Date.parse(at(20_000)),
+  runtime: {
+    executionState: 'completed',
+    lastStartedAtIso: at(0),
+    lastCompletedAtIso: at(20_000),
+    messageState: 'fresh',
+  },
+  threadRead: {
+    thread: {
+      id: 'B2A-partial-completed-thread',
+      turns: [{
+        id: 'B2A-PARTIAL-COMPLETED-TURN',
+        status: 'completed',
+        startedAt: at(0),
+        completedAt: at(20_000),
+        items: [
+          { type: 'userMessage', id: 'B2A-PARTIAL-COMPLETED-USER', content: [{ type: 'text', text: '继续实现' }] },
+          { type: 'agentMessage', id: 'B2A-PARTIAL-COMPLETED-1', phase: 'partial_answer', text: '阶段小结：已完成一半，等待继续。' },
+        ],
+      }],
+    },
+  },
+})
+const b2aPartialCompletedTurn = b2aPartialCompletedProjection.turns[0]
+const b2aPartialCompletedFound = b2aPartialCompletedTurn?.blocks.find((block) => block.kind === 'assistant' && block.id === 'B2A-PARTIAL-COMPLETED-1')
+const b2aPartialCompletedBlock = b2aPartialCompletedFound?.kind === 'assistant' ? b2aPartialCompletedFound : null
+assert.equal(b2aPartialCompletedBlock?.phase, 'partial',
+  'B2A: a partial_answer message in a completed turn must stay phase=partial')
+assert.equal(b2aPartialCompletedBlock?.text, '阶段小结：已完成一半，等待继续。',
+  'B2A: a partial answer in a completed turn must keep its body text')
+assert.equal(b2aPartialCompletedBlock?.streaming, false,
+  'B2A: a partial answer in an authoritative completed turn must settle even though the item carries no completion timing')
+assert.equal(b2aPartialCompletedTurn?.commentary.length, 0,
+  'B2A: a partial answer in a completed turn must not be projected as commentary')
+assert.equal(b2aPartialCompletedTurn?.final, null,
+  'B2A: a partial answer must never become the final when the runtime and turn are completed')
+assert.equal(b2aPartialCompletedTurn?.finalStatus, 'missing',
+  'B2A: a completed turn whose only assistant message is a partial answer has no final')
+assert.equal(b2aPartialCompletedTurn?.state, 'completed',
+  'B2A: an authoritative completed turn must still report state=completed')
+
+// B2A edge: a partial answer is the only assistant message, but the turn ends
+// interrupted/failed. It keeps phase=partial and must not supply the final.
+for (const lifecycle of [
+  { state: 'interrupted', turnId: 'B2A-PARTIAL-INTERRUPTED-TURN', itemId: 'B2A-PARTIAL-INTERRUPTED-1', text: '中断前的阶段小结。' },
+  { state: 'failed', turnId: 'B2A-PARTIAL-FAILED-TURN', itemId: 'B2A-PARTIAL-FAILED-1', text: '失败前的阶段小结。' },
+] as const) {
+  const lifecycleProjection = projectConversation({
+    nowMs: Date.parse(at(30_000)),
+    runtime: {
+      executionState: lifecycle.state,
+      lastStartedAtIso: at(0),
+      lastCompletedAtIso: at(30_000),
+      messageState: 'fresh',
+    },
+    threadRead: {
+      thread: {
+        id: `B2A-partial-${lifecycle.state}-thread`,
+        turns: [{
+          id: lifecycle.turnId,
+          status: lifecycle.state,
+          startedAt: at(0),
+          completedAt: at(30_000),
+          items: [{ type: 'agentMessage', id: lifecycle.itemId, phase: 'partial_answer', text: lifecycle.text }],
+        }],
+      },
+    },
+  })
+  assert.equal(lifecycleProjection.turns.length, 1,
+    `B2A: the ${lifecycle.state} lifecyle fixture must project exactly one turn`)
+  const lifecycleTurn = lifecycleProjection.turns.find((turn) => turn.id === lifecycle.turnId)
+  const lifecycleFound = lifecycleTurn?.blocks.find((block) => block.kind === 'assistant' && block.id === lifecycle.itemId)
+  const lifecycleBlock = lifecycleFound?.kind === 'assistant' ? lifecycleFound : null
+  assert.equal(lifecycleBlock?.phase, 'partial',
+    `B2A: a partial answer in a ${lifecycle.state} turn must stay phase=partial`)
+  assert.equal(lifecycleBlock?.text, lifecycle.text,
+    `B2A: a partial answer in a ${lifecycle.state} turn must keep its body`)
+  assert.equal(lifecycleBlock?.streaming, false,
+    `B2A: a partial answer in an authoritative ${lifecycle.state} turn must settle even though the item carries no completion timing`)
+  assert.equal(lifecycleTurn?.commentary.length, 0,
+    `B2A: a partial answer must not become commentary in a ${lifecycle.state} turn`)
+  assert.equal(lifecycleTurn?.final, null,
+    `B2A: a partial answer must never become the final of a ${lifecycle.state} turn`)
+  assert.equal(lifecycleTurn?.finalStatus, lifecycle.state,
+    `B2A: a ${lifecycle.state} turn whose only assistant message is a partial answer keeps its lifecycle final status`)
+  assert.equal(lifecycleTurn?.state, lifecycle.state,
+    `B2A: a ${lifecycle.state} turn keeps its lifecycle state`)
+}
+
+// B2A edge: deltas plus item/completed for one partial item must merge into a
+// single partial block instead of duplicating text.
+const b2aPartialDedupeProjection = projectConversation({
+  nowMs: Date.parse(at(40_000)),
+  runtime: {
+    executionState: 'running',
+    activeTurnId: 'B2A-PARTIAL-DEDUPE-TURN',
+    lastStartedAtIso: at(0),
+    messageState: 'fresh',
+  },
+  threadRead: { thread: { id: 'B2A-partial-dedupe-thread', turns: [] } },
+  notifications: [
+    { method: 'turn/started', params: { threadId: 'B2A-partial-dedupe-thread', turn: { id: 'B2A-PARTIAL-DEDUPE-TURN', status: 'inProgress', startedAt: at(0) } }, atIso: at(0), seq: 1 },
+    { method: 'item/started', params: { threadId: 'B2A-partial-dedupe-thread', turnId: 'B2A-PARTIAL-DEDUPE-TURN', item: { type: 'agentMessage', id: 'B2A-PARTIAL-DEDUPE-1', phase: 'partial_answer', text: '' } }, atIso: at(100), seq: 2 },
+    { method: 'item/agentMessage/delta', params: { threadId: 'B2A-partial-dedupe-thread', turnId: 'B2A-PARTIAL-DEDUPE-TURN', itemId: 'B2A-PARTIAL-DEDUPE-1', delta: '阶段一：已改类型。' }, atIso: at(200), seq: 3 },
+    { method: 'item/agentMessage/delta', params: { threadId: 'B2A-partial-dedupe-thread', turnId: 'B2A-PARTIAL-DEDUPE-TURN', itemId: 'B2A-PARTIAL-DEDUPE-1', delta: '阶段二：待验证。' }, atIso: at(300), seq: 4 },
+    { method: 'item/completed', params: { threadId: 'B2A-partial-dedupe-thread', turnId: 'B2A-PARTIAL-DEDUPE-TURN', item: { type: 'agentMessage', id: 'B2A-PARTIAL-DEDUPE-1', phase: 'partial_answer', text: '阶段一：已改类型。阶段二：待验证。' } }, atIso: at(400), seq: 5 },
+  ],
+})
+const b2aPartialDedupeTurn = b2aPartialDedupeProjection.turns.find((turn) => turn.id === 'B2A-PARTIAL-DEDUPE-TURN')
+assert.equal(b2aPartialDedupeProjection.turns.length, 1,
+  'B2A: one streaming partial item must not create extra turns')
+const b2aPartialDedupeMatches = (b2aPartialDedupeTurn?.blocks ?? [])
+  .filter((block) => block.kind === 'assistant' && block.id === 'B2A-PARTIAL-DEDUPE-1')
+assert.equal(b2aPartialDedupeMatches.length, 1,
+  'B2A: deltas plus item/completed for one partial item must project exactly one assistant block')
+const b2aPartialDedupeFound = b2aPartialDedupeMatches[0]
+const b2aPartialDedupeBlock = b2aPartialDedupeFound?.kind === 'assistant' ? b2aPartialDedupeFound : null
+assert.equal(b2aPartialDedupeBlock?.text, '阶段一：已改类型。阶段二：待验证。',
+  'B2A: the merged partial block keeps the concatenated body exactly once')
+assert.equal(b2aPartialDedupeBlock?.phase, 'partial',
+  'B2A: the merged partial block keeps phase=partial')
+assert.equal(b2aPartialDedupeBlock?.streaming, false,
+  'B2A: the merged partial block settles once item/completed arrives')
+assert.equal(b2aPartialDedupeTurn?.commentary.length, 0,
+  'B2A: the merged partial block must not appear in commentary')
+assert.equal(b2aPartialDedupeTurn?.final, null,
+  'B2A: a merged partial block must not be treated as the final')
+assert.equal(b2aPartialDedupeTurn?.state, 'running',
+  'B2A: a turn still streaming a partial answer stays running')
+
+// B2D boundary: the terminal settlement must not touch an in-flight partial answer.
+const b2dRunningPartialProjection = projectConversation({
+  nowMs: Date.parse(at(5_000)),
+  runtime: {
+    executionState: 'running',
+    activeTurnId: 'B2D-RUNNING-PARTIAL-TURN',
+    lastStartedAtIso: at(0),
+    messageState: 'fresh',
+  },
+  threadRead: { thread: { id: 'B2D-running-partial-thread', turns: [] } },
+  notifications: [
+    { method: 'turn/started', params: { threadId: 'B2D-running-partial-thread', turn: { id: 'B2D-RUNNING-PARTIAL-TURN', status: 'inProgress', startedAt: at(0) } }, atIso: at(0), seq: 1 },
+    { method: 'item/started', params: { threadId: 'B2D-running-partial-thread', turnId: 'B2D-RUNNING-PARTIAL-TURN', item: { type: 'agentMessage', id: 'B2D-RUNNING-PARTIAL-1', phase: 'partial_answer', text: '' } }, atIso: at(100), seq: 2 },
+    { method: 'item/agentMessage/delta', params: { threadId: 'B2D-running-partial-thread', turnId: 'B2D-RUNNING-PARTIAL-TURN', itemId: 'B2D-RUNNING-PARTIAL-1', delta: '正在写阶段小结…' }, atIso: at(200), seq: 3 },
+  ],
+})
+const b2dRunningPartialTurn = b2dRunningPartialProjection.turns.find((turn) => turn.id === 'B2D-RUNNING-PARTIAL-TURN')
+const b2dRunningPartialFound = b2dRunningPartialTurn?.blocks.find((block) => block.kind === 'assistant' && block.id === 'B2D-RUNNING-PARTIAL-1')
+const b2dRunningPartialBlock = b2dRunningPartialFound?.kind === 'assistant' ? b2dRunningPartialFound : null
+assert.equal(b2dRunningPartialBlock?.phase, 'partial',
+  'B2D: an in-flight partial answer stays phase=partial')
+assert.equal(b2dRunningPartialBlock?.streaming, true,
+  'B2D: a partial answer that is still streaming in a running turn must keep streaming=true')
+assert.equal(b2dRunningPartialBlock?.text, '正在写阶段小结…',
+  'B2D: an in-flight partial answer keeps its streamed body')
+assert.equal(b2dRunningPartialTurn?.final, null,
+  'B2D: an in-flight partial answer must not become the final')
+assert.equal(b2dRunningPartialTurn?.finalStatus, 'pending',
+  'B2D: a running turn keeps a pending final status while the partial answer streams')
+
+// B2D holdout: a partial item introduced by a delta before any item/started must
+// still resolve to phase=partial, and duplicated notifications must not duplicate it.
+const b2dDeltaFirstNotifications = [
+  { method: 'turn/started', params: { threadId: 'B2D-delta-first-thread', turn: { id: 'B2D-DELTA-FIRST-TURN', status: 'inProgress', startedAt: at(0) } }, atIso: at(0), seq: 1 },
+  { method: 'item/agentMessage/delta', params: { threadId: 'B2D-delta-first-thread', turnId: 'B2D-DELTA-FIRST-TURN', itemId: 'B2D-DELTA-FIRST-1', delta: '阶段小结：一次。' }, atIso: at(100), seq: 2 },
+  { method: 'item/agentMessage/delta', params: { threadId: 'B2D-delta-first-thread', turnId: 'B2D-DELTA-FIRST-TURN', itemId: 'B2D-DELTA-FIRST-1', delta: '阶段小结：一次。' }, atIso: at(100), seq: 2 },
+  { method: 'item/completed', params: { threadId: 'B2D-delta-first-thread', turnId: 'B2D-DELTA-FIRST-TURN', item: { type: 'agentMessage', id: 'B2D-DELTA-FIRST-1', phase: 'partial_answer', text: '阶段小结：一次。' } }, atIso: at(200), seq: 3 },
+  { method: 'item/completed', params: { threadId: 'B2D-delta-first-thread', turnId: 'B2D-DELTA-FIRST-TURN', item: { type: 'agentMessage', id: 'B2D-DELTA-FIRST-1', phase: 'partial_answer', text: '阶段小结：一次。' } }, atIso: at(200), seq: 3 },
+]
+const b2dDeltaFirstProjection = projectConversation({
+  nowMs: Date.parse(at(5_000)),
+  runtime: {
+    executionState: 'running',
+    activeTurnId: 'B2D-DELTA-FIRST-TURN',
+    lastStartedAtIso: at(0),
+    messageState: 'fresh',
+  },
+  threadRead: { thread: { id: 'B2D-delta-first-thread', turns: [] } },
+  notifications: b2dDeltaFirstNotifications,
+})
+assert.equal(b2dDeltaFirstProjection.turns.length, 1,
+  'B2D: a delta-first partial item must not create extra turns')
+const b2dDeltaFirstTurn = b2dDeltaFirstProjection.turns.find((turn) => turn.id === 'B2D-DELTA-FIRST-TURN')
+const b2dDeltaFirstMatches = (b2dDeltaFirstTurn?.blocks ?? [])
+  .filter((block) => block.kind === 'assistant' && block.id === 'B2D-DELTA-FIRST-1')
+assert.equal(b2dDeltaFirstMatches.length, 1,
+  'B2D: duplicated delta and completion notifications must project exactly one partial block')
+const b2dDeltaFirstFound = b2dDeltaFirstMatches[0]
+const b2dDeltaFirstBlock = b2dDeltaFirstFound?.kind === 'assistant' ? b2dDeltaFirstFound : null
+assert.equal(b2dDeltaFirstBlock?.phase, 'partial',
+  'B2D: a partial item introduced by a delta must resolve to phase=partial once the completion carries partial_answer')
+assert.equal(b2dDeltaFirstBlock?.text, '阶段小结：一次。',
+  'B2D: a deduplicated partial block keeps its body exactly once')
+assert.equal(b2dDeltaFirstBlock?.streaming, false,
+  'B2D: a completed partial item must not keep streaming while the turn is still running')
+assert.equal(b2dDeltaFirstTurn?.commentary.length, 0,
+  'B2D: a delta-first partial item must not be projected as commentary')
+assert.equal(b2dDeltaFirstTurn?.final, null,
+  'B2D: a delta-first partial item must not become the final')
+assert.equal(b2dDeltaFirstTurn?.state, 'running',
+  'B2D: a running turn with only a partial answer stays running')
+assert.equal(b2dDeltaFirstTurn?.finalStatus, 'pending',
+  'B2D: a running turn with only a partial answer reports a pending final status')
+
+// B2D holdout: two distinct partial ids with equal text plus two explicit finals.
+// Both partials survive, the ambiguous finals are not resolved, and the existing
+// ambiguity notice stays visible.
+const b2dAmbiguousPartialsProjection = projectConversation({
+  nowMs: Date.parse(at(50_000)),
+  runtime: {
+    executionState: 'completed',
+    lastStartedAtIso: at(0),
+    lastCompletedAtIso: at(50_000),
+    messageState: 'fresh',
+  },
+  threadRead: {
+    thread: {
+      id: 'B2D-ambiguous-partials-thread',
+      turns: [{
+        id: 'B2D-AMBIGUOUS-PARTIALS-TURN',
+        status: 'completed',
+        startedAt: at(0),
+        completedAt: at(50_000),
+        items: [
+          { type: 'agentMessage', id: 'B2D-PARTIAL-A', phase: 'partial_answer', text: '相同阶段文本' },
+          { type: 'agentMessage', id: 'B2D-PARTIAL-B', phase: 'partial_answer', text: '相同阶段文本' },
+          { type: 'agentMessage', id: 'B2D-FINAL-A', phase: 'final_answer', text: '第一份 final' },
+          { type: 'agentMessage', id: 'B2D-FINAL-B', phase: 'final_answer', text: '第二份 final' },
+        ],
+      }],
+    },
+  },
+})
+const b2dAmbiguousTurn = b2dAmbiguousPartialsProjection.turns.find((turn) => turn.id === 'B2D-AMBIGUOUS-PARTIALS-TURN')
+assert.equal(b2dAmbiguousTurn?.id, 'B2D-AMBIGUOUS-PARTIALS-TURN',
+  'B2D: the ambiguous-partial fixture must select its own turn')
+const b2dAmbiguousPartialIds: string[] = []
+for (const block of b2dAmbiguousTurn?.blocks ?? []) {
+  if (block.kind === 'assistant' && block.phase === 'partial') b2dAmbiguousPartialIds.push(block.id)
+}
+assert.deepEqual(b2dAmbiguousPartialIds, ['B2D-PARTIAL-A', 'B2D-PARTIAL-B'],
+  'B2D: two distinct partial answers with equal text must both be retained and ordered')
+type B2dAssistantBlockView = { kind: string; id: string; phase?: string; text?: string; streaming?: boolean }
+for (const partialId of ['B2D-PARTIAL-A', 'B2D-PARTIAL-B']) {
+  const ambiguousFound: B2dAssistantBlockView | undefined =
+    b2dAmbiguousTurn?.blocks.find((block) => block.kind === 'assistant' && block.id === partialId)
+  const ambiguousBlock: B2dAssistantBlockView | null = ambiguousFound ?? null
+  assert.equal(ambiguousBlock?.phase, 'partial',
+    `B2D: ${partialId} must stay phase=partial beside an ambiguous multi-final turn`)
+  assert.equal(ambiguousBlock?.text, '相同阶段文本',
+    `B2D: ${partialId} must keep its body even when another partial shares the same text`)
+  assert.equal(ambiguousBlock?.streaming, false,
+    `B2D: ${partialId} must settle in an authoritative completed turn`)
+}
+assert.equal(b2dAmbiguousTurn?.commentary.length, 0,
+  'B2D: neither partial answer may be projected as commentary in an ambiguous multi-final turn')
+assert.equal(b2dAmbiguousTurn?.final, null,
+  'B2D: two explicit finals must stay unresolved instead of falling back to a partial answer')
+assert.equal(
+  (b2dAmbiguousTurn?.blocks ?? []).some((block) => block.kind === 'notice' && block.id === 'B2D-AMBIGUOUS-PARTIALS-TURN:multiple-finals'),
+  true,
+  'B2D: the existing multiple-finals ambiguity notice must stay visible',
+)
+
 const completedFinalWithoutItemTiming = projectConversation({
   nowMs: Date.parse(at(2_000)),
   runtime: { executionState: 'completed', messageState: 'fresh' },
@@ -693,6 +1474,162 @@ const missingFinalMarkdown = buildThreadMarkdown({
 const missingFinalSection = missingFinalMarkdown.split('### Codex 最终回复')[1] ?? ''
 assert.doesNotMatch(missingFinalSection, /这不是可确认的 final/u)
 assert.match(missingFinalSection, /未产生明确标记为 final_answer/u)
+
+// B2C: a recovered partial answer must reach the Markdown export exactly once,
+// in chronological order, as its own answer section - never as the final.
+const b2cExportPartialText = '部分回复：前半段验证已完成。'
+const b2cExportToolCommand = 'node scripts/b2c-partial-export-fixture.mjs'
+const b2cExportFinalText = '最终回复：全部验证完成。'
+const b2cExportProjection = projectConversation({
+  nowMs: Date.parse(at(20_000)),
+  runtime: {
+    executionState: 'completed',
+    lastStartedAtIso: at(0),
+    lastCompletedAtIso: at(20_000),
+    messageState: 'fresh',
+  },
+  threadRead: {
+    thread: {
+      id: 'thread-b2c-partial-export',
+      turns: [{
+        id: 'turn-b2c-partial-export',
+        status: 'completed',
+        startedAt: at(0),
+        completedAt: at(20_000),
+        items: [
+          {
+            type: 'userMessage',
+            id: 'b2c-export-user',
+            startedAt: at(0),
+            content: [{ type: 'text', text: '导出部分回复' }],
+          },
+          {
+            type: 'agentMessage',
+            id: 'b2c-export-partial',
+            phase: 'partial_answer',
+            text: b2cExportPartialText,
+            startedAt: at(1_000),
+            completedAt: at(2_000),
+          },
+          {
+            type: 'commandExecution',
+            id: 'b2c-export-command',
+            command: b2cExportToolCommand,
+            cwd: 'E:\\repo',
+            status: 'completed',
+            aggregatedOutput: 'ok\n',
+            exitCode: 0,
+            durationMs: 2_000,
+            startedAt: at(3_000),
+            completedAt: at(5_000),
+          },
+          {
+            type: 'agentMessage',
+            id: 'b2c-export-final',
+            phase: 'final_answer',
+            text: b2cExportFinalText,
+            startedAt: at(18_000),
+            completedAt: at(20_000),
+          },
+        ],
+      }],
+    },
+  },
+})
+assert.equal(b2cExportProjection.turns.length, 1,
+  'B2C: the partial answer export fixture must project exactly one turn')
+const b2cExportTurn = b2cExportProjection.turns[0]
+assert.deepEqual(
+  (b2cExportTurn?.blocks ?? [])
+    .filter((block) => block.kind === 'assistant')
+    .map((block) => [block.phase, block.text]),
+  [['partial', b2cExportPartialText], ['final', b2cExportFinalText]],
+  'B2C: the export fixture must project the partial answer before the unique final',
+)
+const b2cExportMarkdown = buildThreadMarkdown({
+  title: '部分回复导出',
+  threadId: 'thread-b2c-partial-export',
+  exportedAtIso: at(21_000),
+  projection: b2cExportProjection,
+})
+const b2cExportPartialIndex = b2cExportMarkdown.indexOf(b2cExportPartialText)
+const b2cExportToolIndex = b2cExportMarkdown.indexOf(b2cExportToolCommand)
+const b2cExportFinalIndex = b2cExportMarkdown.indexOf(b2cExportFinalText)
+assert.notEqual(b2cExportPartialIndex, -1,
+  'B2C: the Markdown export must not omit a partial answer')
+assert.equal(b2cExportMarkdown.split(b2cExportPartialText).length - 1, 1,
+  'B2C: the partial answer body must appear exactly once in the export')
+assert.notEqual(b2cExportToolIndex, -1, 'B2C: the export must keep the process entry')
+assert.ok(
+  b2cExportPartialIndex < b2cExportToolIndex && b2cExportToolIndex < b2cExportFinalIndex,
+  'B2C: the partial answer, its process entry and the final must stay in chronological order',
+)
+assert.match(b2cExportMarkdown, /### Codex 部分回复/u,
+  'B2C: a partial answer must keep its own answer section')
+const b2cExportPartialSection = b2cExportMarkdown.split('### Codex 部分回复')[1]?.split('###')[0] ?? ''
+assert.match(b2cExportPartialSection, /部分回复：前半段验证已完成。/u,
+  'B2C: the partial answer section must carry the partial body')
+const b2cExportFinalSection = b2cExportMarkdown.split('### Codex 最终回复')[1] ?? ''
+assert.match(b2cExportFinalSection, /最终回复：全部验证完成。/u)
+assert.doesNotMatch(b2cExportFinalSection, /部分回复：前半段验证已完成。/u,
+  'B2C: a partial answer must not be exported as the final answer')
+
+// B2C: a completed turn that only ever produced a partial answer exports that
+// partial answer once and still reports the missing explicit final honestly.
+const b2cPartialOnlyText = '部分回复：本轮没有明确最终回复。'
+const b2cPartialOnlyExportProjection = projectConversation({
+  nowMs: Date.parse(at(20_000)),
+  runtime: {
+    executionState: 'completed',
+    lastStartedAtIso: at(0),
+    lastCompletedAtIso: at(20_000),
+    messageState: 'fresh',
+  },
+  threadRead: {
+    thread: {
+      id: 'thread-b2c-partial-only-export',
+      turns: [{
+        id: 'turn-b2c-partial-only-export',
+        status: 'completed',
+        startedAt: at(0),
+        completedAt: at(20_000),
+        items: [
+          {
+            type: 'userMessage',
+            id: 'b2c-partial-only-user',
+            startedAt: at(0),
+            content: [{ type: 'text', text: '只有部分回复' }],
+          },
+          {
+            type: 'agentMessage',
+            id: 'b2c-partial-only-answer',
+            phase: 'partial_answer',
+            text: b2cPartialOnlyText,
+            startedAt: at(1_000),
+            completedAt: at(2_000),
+          },
+        ],
+      }],
+    },
+  },
+})
+assert.equal(b2cPartialOnlyExportProjection.turns[0]?.final, null,
+  'B2C: a partial-only completed turn must stay without a final')
+assert.equal(b2cPartialOnlyExportProjection.turns[0]?.finalStatus, 'missing')
+const b2cPartialOnlyMarkdown = buildThreadMarkdown({
+  title: '只有部分回复的导出',
+  threadId: 'thread-b2c-partial-only-export',
+  exportedAtIso: at(21_000),
+  projection: b2cPartialOnlyExportProjection,
+})
+assert.equal(b2cPartialOnlyMarkdown.split(b2cPartialOnlyText).length - 1, 1,
+  'B2C: a partial-only export must carry the partial body exactly once')
+assert.match(b2cPartialOnlyMarkdown, /### Codex 部分回复/u)
+const b2cPartialOnlyFinalSection = b2cPartialOnlyMarkdown.split('### Codex 最终回复')[1] ?? ''
+assert.match(b2cPartialOnlyFinalSection, /本轮未产生明确标记为 final_answer 的最终回复。/u,
+  'B2C: a partial-only export must still report the missing explicit final')
+assert.doesNotMatch(b2cPartialOnlyFinalSection, /部分回复：本轮没有明确最终回复。/u,
+  'B2C: a partial-only export must not present the partial answer as the final')
 
 const duplicateTextProjection = projectConversation({
   nowMs: Date.parse(at(1_000)),

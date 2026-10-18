@@ -18,13 +18,16 @@ const cases = [
   'shared-followup-rejected', 'new-invalidation-after-followup-start', 'cached-to-fresh-after-runtime',
   'same-sequence-completion-time', 'cancelled-followup-valid-refresh',
   'notification-during-automatic-read',
+  'pending-bootstrap-during-selection', 'pending-late-bootstrap-resolution',
+  'pending-live-during-detail', 'pending-older-runtime-snapshot', 'pending-unselected-list-omission',
 ]
 const selected = process.argv[2] ? [process.argv[2]] : cases
 if (selected.some((name) => !cases.includes(name))) throw new Error(`Unknown refresh contract case: ${process.argv[2]}`)
 let passed = 0
 for (const name of selected) {
   // Each public-state instance and gateway cache starts in its own process.
-  const result = spawnSync(process.execPath, [outfile, name], { cwd: repoRoot, stdio: 'inherit' })
+  const result = spawnSync(process.execPath, [outfile, name], { cwd: repoRoot, stdio: 'inherit', timeout: 20_000 })
+  if (result.error) console.error(`${name}: ${result.error.message}`)
   if (result.status === 0) passed += 1
 }
 console.log(`${passed}/${selected.length} conversation-refresh-contract checks passed.`)

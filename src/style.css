@@ -41,10 +41,10 @@
   --font-sans-reading: "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono-ui: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", "Fira Code", "Consolas", "Liberation Mono", monospace;
   --font-size-body: 16px;
-  --font-size-reading: 15px;
+  --font-size-reading: 16px;
   --font-size-meta: 12px;
   --font-size-title: 17px;
-  --line-height-reading: 1.62;
+  --line-height-reading: 1.65;
   --tracking-tight-soft: 0;
   --tracking-body-soft: 0;
 }
@@ -78,9 +78,9 @@ body {
 
 @media (max-width: 767px) {
   :root {
-    --font-size-reading: 14px;
+    --font-size-reading: 16px;
     --font-size-title: 16px;
-    --line-height-reading: 1.52;
+    --line-height-reading: 1.65;
   }
 }
 
@@ -212,7 +212,7 @@ pre {
   @apply bg-zinc-950;
 }
 
-:root.dark .user-message {
+:root.dark .user-message-body {
   background: #27272a;
 }
 

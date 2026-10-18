@@ -1084,7 +1084,8 @@ Assert-ContentIncludes "docs/local-regression-execution-20260705.zh-CN.md" @(
 
 Assert-ContentIncludes "src/server/appServerMethodCatalog.ts" @(
   "catalogCache",
-  "catalogPromise",
+  "this.inflight.promise",
+  "toIdentityKey(frozen)",
   "Promise.all",
   "ClientRequest.json",
   "ServerNotification.json"

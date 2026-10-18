@@ -4377,21 +4377,25 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Steps
 1. Open Settings and locate `权限控制`.
-2. Toggle `完全放行权限请求`.
-3. Confirm `命令执行权限`、`文件变更权限`、`MCP 工具权限` become disabled while full allow is on.
-4. Turn full allow off and cycle each permission row between `自动允许` and `每次询问`.
-5. Restart the app server and reopen Settings.
-6. Trigger a command approval or MCP tool permission request.
+2. Confirm the section contains exactly one switch row `自动批准权限请求` (a focusable native button with `role="switch"` and a boolean `aria-checked`) and no `命令执行权限` / `文件变更权限` / `MCP 工具权限` rows.
+3. Confirm the permission help paragraph is actually rendered in both switch states (visible text, not only a tooltip): it stays at the standard hint size/padding, is referenced by the switch through `aria-describedby` (stable id `permission-switch-help`), and always ends with `关闭不会撤销已有会话授权。` on both a desktop and a `393×852` viewport. Confirm no other previously hidden settings hint became visible.
+4. Toggle the switch off and on with mouse/touch, then with the keyboard (Tab to focus, Enter/Space to toggle); confirm the row keeps a touch target of at least 44px.
+5. While a save is in flight click the switch again: the row stays disabled, no second `PUT /codex-api/web-settings` is sent, and a saving status is visible and announced (the permission status paragraph keeps `role="status"` and `aria-live="polite"` for busy and error text).
+6. Force the save to fail (stop the app server or make the PUT fail) while the switch is ON: an announced error status appears, the switch rolls back to the last credible value, and the panel then shows the authoritative value read back with `GET`.
+7. Restart the app server and reopen Settings.
+8. Trigger a command approval, a file change approval and an MCP tool permission request, plus a dedicated permission range request.
 
 #### Expected Results
-- Permission changes are saved to `~/.codex/web-bridge-settings.json`.
-- Saved permission state survives restart.
-- When a permission is set to `自动允许`, matching permission requests are approved without showing a pending card.
-- When a permission is set to `每次询问`, matching requests show the normal confirmation card.
+- The single switch persists `allowAllPermissionRequests` through `PUT /codex-api/web-settings` into `~/.codex/web-bridge-settings.json`; the `GET`/refresh/restart value is the same boolean and matches the UI.
+- The legacy `commandExecution` / `fileChange` / `mcpTools` fields stay in the saved payload (wire compatibility) but have no UI control and no effect on the effective policy; an invalid or missing value normalizes to `ask`, and only a literal boolean `true` turns the switch ON.
+- OFF (default): new command, file and recognized MCP tool permission requests show the normal confirmation card and are never auto approved, even when a legacy field still holds `allowForSession`.
+- ON: new command, file and recognized MCP tool permission requests are auto approved without a pending card; a dedicated `item/permissions/requestApproval` range request still waits for an explicit decision for the current turn, and unsupported `item/tool/call` requests are still rejected.
+- Turning the switch off only affects new permission requests: it does not revoke session grants the Runtime has already remembered, and a repeated request may never arrive again; it does not change the sandbox, network or permission profile.
+- Settings copy only promises the handling of new permission requests.
 - Telegram settings and Telegram endpoints are no longer present.
 
 #### Rollback/Cleanup
-- Delete `~/.codex/web-bridge-settings.json` to restore defaults.
+- Restore the switch to the value recorded before the test, or delete `~/.codex/web-bridge-settings.json` to restore the defaults.
 
 ### Feature: Mobile dictation control
 
@@ -13049,26 +13053,42 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Android settings update entry consolidation
 
 #### Prerequisites
-- Local 7420 is running from the latest `C:\src\CX-Codex` build.
-- Android shell assets have been synced after the frontend build.
-- For the native download prompt branch, GitHub latest release must have an Android APK asset and a version greater than the installed app version.
+- The current frontend dist (`npm.cmd run build:frontend`) served from a normally started local backend. A short-lived instance on its own isolated port is enough for this section; restarting real 7420 is not required.
+- Native-only and unverified here (optional): a synced Android shell build, plus a GitHub latest release carrying an Android APK asset newer than the installed app version, are needed only for the native download-prompt step below.
 
 #### Steps
 1. Run `git diff --check`.
-2. Run `npm.cmd run build`.
-3. Run `npm.cmd run mobile:android:sync`.
-4. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
-5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry`.
-6. On Android, open Settings and confirm there is no separate `APP 更新`, `版本状态`, `更新包`, or `重新安装` block.
-7. Tap the `当前版本` card and confirm it shows a checking/loading state while reading GitHub release metadata.
-8. If GitHub latest version is greater than the installed app version and has an Android APK asset, confirm the settings sheet closes and the download confirmation dialog appears.
-9. If the installed version is current, confirm the card settles to `已是最新` and no download dialog appears.
+2. Run `npm.cmd run build:frontend` (skip the Android sync unless the native-only step is being checked).
+3. Start the App from that dist on an isolated port and open Settings in an ordinary browser; a 7420 restart is not required.
+4. Open Settings in an ordinary browser (not the Android shell) and confirm the about block's brand kicker reads `CX-Codex Web`, not `Android Shell`; `Android Shell` only appears when a real native bridge is present.
+5. Confirm each version source is labelled separately: `网页构建版本` (always readable; the Vite build-time version), `连接的后端` (from `GET /codex-api/updates/backend`), and, only on the native Android build, `此设备 Android APK` (native `versionName`; shows `未读取` when unavailable and never falls back to the web version).
+6. Confirm the `连接的后端` row shows the frozen run identity (version · build id · build kind), the instance id, the unverified source (`来源未核验`), and the installation applicability reason once; no install/apply/restart control exists for the backend, and a placeholder `unknown` identity/value renders as `未知`/`此后端暂不提供版本信息` rather than `vunknown`.
+7. Confirm opening Settings performs only the read-only status GET; the metadata check (`POST /codex-api/updates/backend/check`) happens exactly once per explicit `检测后端更新` click and carries `X-CX-Codex-Intent: backend-update-check` with the empty JSON body `{}`.
+8. While a check runs the button is disabled (44px hit target) and no second request is sent; on failure the lock releases for retry, the frozen identity stays visible, and the previous comparison is cleared.
+9. Read the backend version once, then make the status endpoint fail for the App (for example an isolated proxy or harness answering 404) and close/reopen Settings: the last successfully read version stays visible, the previous comparison is gone, and a visible readable error line states that the read failed and can be retried, without presenting the cached version as freshly verified. When the status endpoint answers again, the stale error clears.
+10. On the native build the existing user-triggered APK action (version card → check/download prompt) still behaves as before; this step is not evidence of a real-device install.
 
 #### Expected Results
-- Settings keeps a single update entry under the app/version card: `当前版本` plus the current check/update action.
+- Settings keeps a single permission switch and a single user-triggered update entry; the P1 permission help stays visible and the G1 list filtering is unaffected.
 - The old App update section, repeated update package field, release page button, and same-version reinstall path are no longer shown.
 - Loading feedback appears inline while checking or downloading.
 - Download confirmation appears only when GitHub latest Android release is newer than the installed version and has an installable APK asset.
+- The about block labels `网页构建版本`, `连接的后端` and (native only) `此设备 Android APK` separately; the web build version is never used as the backend version or as the APK version.
+- Backend comparison labels stay honest about `newer` / `equal` / `ahead` / `unknown` / `error`, always state the unverified source, and never describe a metadata result as an installed or applied update.
+- While `automaticUpdateSupported === false` the server reason stays visible even when a newer release is found, and there is no download/apply/install/restart control for the backend.
+- A backend that cannot be identified (old backend 404/unknown) shows unavailable/unknown and is not backfilled from the page build version.
+- A failed read of the running backend (status endpoint unavailable/404, timeout, transport error) keeps the last successfully read version visible on screen, clears the previous comparison, and shows a visible readable error/status line saying the read failed and can be retried; the retained value is never presented as freshly verified, and the line clears on the next successful read. With no prior identity the row stays an honest unknown/unavailable instead of a fabricated version.
+- A late or mismatched result from another backend instance never replaces the current identity; closing and reopening settings re-reads the authoritative status.
+
+#### Unverified scope (U1a2 read-only detection)
+- Not covered by this feature section: real managed installation/rollback (no install transaction exists), acceptance of a real GitHub metadata request, real-device APK download/install, native integrity checks, and any real 7420/deployment switch.
+- The Android APK label and the native action are checked as labels/UI only; a simulated APK value is not native-device proof. A metadata result never proves that an update was installed.
+
+#### Executed evidence (U1a2, 2026-10-16; Node v22.19.0 via `export PATH="/d/nvm/v22.19.0:$PATH"`)
+- `npm.cmd run build:frontend` → exit **0** (`vue-tsc --noEmit` clean; both Vite builds and the Brotli precompress step succeeded). Raw log `output/hermes-codex-upgrade-20261015/followup-20261016/u1a2-app-build-frontend.log`, raw exit `u1a2-app-build-frontend.exit.txt`.
+- `git diff --check` → exit **0**, log 0 bytes (`u1a2-app-git-diff-check.log` / `.exit.txt`).
+- Source hashes at that measurement (`u1a2-app-after.sha256`): `src/App.vue` `54ceb7e4…`, `src/api/codexGateway.ts` `b082961f…`; `tests.md` was `6022e4b6…` before this evidence paragraph (the paragraph itself changes its hash). Pre-change byte copies/hashes: `u1a2-before/` + `u1a2-before.sha256` (App.vue `d692ab34…`, codexGateway.ts `661dbcb4…`, tests.md `7d2a7a07…`).
+- Not re-run: `verify:server-modules` / `build:cli` are reused from the accepted `u1-final-cleanup-*` runs (exit 0 each); backend and CLI sources were not modified in this substage. There is no frontend unit/e2e harness for this block, so the browser-level assertions above stay root's actual-dist acceptance rather than claims recorded here.
 
 #### Rollback/Cleanup Notes
 - Screenshot artifacts are saved under `output/regression-7420/p1-settings-mobile-update-entry/` when `-CaptureScreenshots` is used.
@@ -17706,3 +17726,350 @@ Close the remaining local dual-semantics gap after `ConversationProjection` beca
 ### Rollback
 
 - 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。
+
+## 会话正文与公开过程的桌面体验对齐（2026-09-11）
+
+### Expected behavior
+
+- 用户正文、公开进展、计划和最终回复共用语义富文本：标题、嵌套列表、只读任务勾选、引用、代码与表格正常排版；手机正文为 16px / 1.65，长代码和表格只在块内横向滚动。
+- 流式增量不重建内容未变化的顶层块；用户选中正在增长的段落或代码时，仅保留选中块的当前显示及 DOM，其他块继续更新。清除选区后，无需下一次网络消息便追上最新完整内容。Markdown 结构改变导致选中块身份消失时，暂保留该条消息显示至清除选区；不冻结底层数据或运行状态。
+- 正在运行时公开进展、真实状态动画和计时可直接看到，命令/输出按需展开；完成后默认收起过程，但选中文字或离开底部阅读时不得强制折叠、跳到底部。
+- 用户气泡外仅保留复制、更多，以及必要的真实发送失败操作；收藏/两步回退进入更多菜单。同一时刻最多一个消息菜单，支持键盘方向键、Escape/Tab 退出和焦点恢复。手机触控目标至少 44px。
+- 复制成功在原按钮反馈，不弹成功提示；复制失败明确反馈，并清除上一次成功状态。代码复制保持原始代码内容。
+- 本地绝对文件阅读链接进入受限预览，路径与行号说明保留，权限仍由现有文件接口验证；HTML/SVG 不作为同源顶层文档直接打开。明确的 `download=1` 下载语义保留。
+- 浅色与暗色下气泡圆角一致，操作栏不被气泡底色包围；减少动态效果设置下关闭脉冲动画。
+
+### Reusable verification
+
+- `npm run build:frontend`
+- `npm run verify:conversation-rich-text`
+- `npm run verify:conversation-transcript`
+- `npm run verify:core-flows`
+- `npm run verify:frontend-normalizers`
+- `npm run test:7420:frontend -- -SourceOnly`
+- `npm run test:reply-quality:browser -- --base-url http://127.0.0.1:17423 --output-dir output/reply-quality-browser`
+- 浏览器命令使用已安装的 `agent-browser`，在独立会话中屏蔽 `/codex-api/**`；仅测试固定样本，不读取服务认证信息、不发送真实消息。可通过 `CX_CODEX_AGENT_BROWSER` 指定原生 CLI 路径。
+- 固定页面为 `/#/__regression/reply-quality`，覆盖六种内容和 1440×900、393×852、884×1104 三种视口。视口仿真不是 Android 真机证据，也不是 Codex 桌面端像素一致性证明。
+- 实际 7420 验收另行验证新资源哈希、旧资源可用、原服务 PID 与认证门禁，以及真实发送→公开进展→完成→刷新后的唯一正文。截图和部署回退点放在 `output/conversation-desktop-parity-20260911`。
+
+### Rollback
+
+- 前端部署只追加哈希资源并原子替换入口，保留旧入口备份；回滚入口即可恢复上一版前端，不重启后端、不清理会话、SQLite、附件或认证状态。
+- 源码回退时同时恢复 `ThreadConversation.vue` 的旧渲染路径及对应样式/断言，不修改 ConversationProjection、Runtime、消息身份、队列或恢复版本门禁。
+
+## 补充问题与选项说明完整性（2026-09-11）
+
+### Expected behavior
+
+- 补充问题同时显示简短标题和完整问题；两者完全相同时只显示一次。选项的取舍说明在选择前可见，以纯文本呈现，不解析 HTML。
+- 单一会话投影保留与 `options` 同索引的 `optionDescriptions`；无标签的无效选项整体忽略，不能让说明错配。没有说明的旧请求与自由输入仍然可用。
+- 保留原生选择框与明确的“请选择”状态，不预选、不自动提交；发送值仍为原选项标签与用户补充，不包含说明文字。请求 ID、响应 ID、审批和队列所有权不改变。
+- 手机与粗指针布局的选择框、补充输入和回复框高度至少 44px；问题与说明允许自然换行，不制造页面横向溢出。
+
+### Reusable verification
+
+- `npm run verify:conversation-transcript`：先确认新增断言在旧投影上失败，再验证选项说明、无效选项对齐、嵌套请求、旧请求/自由输入与原响应身份。
+- `npm run build:frontend`
+- 浏览器打开 `/#/__regression/conversation-blocks?uxState=waiting`，使用 `.request-card[data-interaction-type="user-input"]` 验证完整问题、`.request-option-descriptions` 内两项说明、未回答时禁用提交和 44px 输入目标。选择并补充后，结果仍须为 request `742004` 与原 `verification-scope` 标签值。
+- 以上固定夹具不是实际模型/设备验证；真实会话与部署证据由本次候选验收记录另行给出。
+
+### Rollback
+
+- 整体恢复本项投影字段、提问模板/样式和固定夹具即可；不回退任何请求执行、Runtime、消息队列或持久化数据。
+
+## 异步代码高亮（2026-09-11）
+
+- 原文先显示，高亮不能阻塞或延迟流式文字。明确标注的 11 类常用语言使用独立 Worker；未知/无标签/超过 20,000 字符的代码保留纯文本，不自动猜测，不弹错误提示。
+- 浅深色配色可区分语法且不改变字体、行高或布局。复制仍取原始代码，不能包含语言栏、按钮或高亮 HTML。
+- Worker 单任务串行、最多 64 项等待、取消后丢弃旧结果、3 秒失败降级、空闲 10 秒销毁。页面已卸载、代码已变化或用户正在选择代码时，迟到结果不得替换原 DOM。
+- `npm run verify:conversation-rich-text` 同时运行语义富文本、11 语法/别名/字符保真和 Worker 调度生命周期测试；`npm run test:reply-quality:browser -- --base-url http://127.0.0.1:17423` 覆盖 49 项固定样本验收。
+- 密集代码样本使用 `window.__CX_REPLY_QUALITY__.setCodeText` 输入 20,000 字符，检查高亮前后逐字一致、2,000 语法标记、无横向页面溢出，并分别记录浏览器 Long Task（门槛小于 80ms）和心跳延迟。一次浏览器测量不代表真机、P95 或整个产品性能门槛。
+- 本轮证据位于 `output/code-reading-20260911`；独立依赖构建避免改动正在运行的 7420 Node 模块。静态部署只追加新哈希资源及随包许可证，再原子替换入口；可恢复备份入口，后端/会话数据不变。新依赖用途、预算和移除路径见 `docs/conversation-code-highlighting.md`。
+
+## 流式阅读连续性（2026-09-11）
+
+- `node scripts/reading-stream-browser-smoke.mjs --base-url http://127.0.0.1:17423 --output-dir output/reading-stream-browser` 使用独立 agent-browser 固定夹具；桌面/手机宽度分别在正常与减少动态效果媒体下运行，共 24 项。
+- 正在增长的代码/段落选区与原 DOM 不丢失；释放选区后 250ms 内显示完整最新内容且无重复块。已完成段落被选中不应阻止旁边代码增长。
+- 历史公开进展和任务完成不得抢走阅读位置；底部跟随正常，801 轮历史下保留阅读锚点和虚拟化窗口。不将宽度仿真解释为手机真机或外网延迟证据。
+- 回退只涉及共享富文本的选区呈现策略与回归断言，不回退模型、Runtime、原生队列或持久化数据。本轮红绿证据保留在 `output/stream-continuity-20260911`。
+
+## 本机 7420 启动入口对齐（2026-09-11）
+
+- 本机唯一启用的 Startup 入口与手动启动复用同一启动脚本，指向当前验证部署；不再由旧 `codexui-sidebar-shortcuts` 工作树接管 7420。禁用计划任务及独立 FRP 服务不变。
+- 保留切换时正在使用的配置、密码、监听地址和 Runtime 数据库；不能以旧临时部署数据库覆盖重启后接受的请求。启动不固定已被桌面更新器移除的 Codex 版本目录，复用项目的可执行文件发现逻辑。
+- 停机前双向核对 RPC、原生加载任务、队列、目标、持久请求和租约；`completed_pending_sync` 按生产状态机视为已执行结束，单独报告但不删除。仍需检查 `can_stop`、`stop_requested` 等真实阻塞字段。
+- 用同一入口实际启动，再核对进程链、HTTP 入口与资源哈希、伪造 Host 下匿名 HTTP/WS 拒绝，以及既有请求 ID 全保留。真实发送后验证标题/列表/代码、运行到完成、桌面/手机宽度和刷新后无重复；不将模拟宽度解释为真机或外网证据。
+- 本机证据与可回退脚本在 `output/startup-alignment-20260911`。回退启动入口时保留上线后的数据库，避免丢弃新增任务。该部署目录及它引用的依赖目录正在使用，不可作为普通测试输出清理。
+
+## 社区安装与公式反馈回归（2026-10-15）
+
+- 安装源：`node --test scripts/dependency-security.test.mjs` 验证官方 HTTPS 源可通过，镜像、HTTP、非默认端口、伪造域名、URL 凭据及无效 URL 在执行审计前被拒绝。本轮 7 项通过；`npm run verify:dependency-security` 校验 430 条官方源 URL，实时审计 0 漏洞。
+- 严格安装：隔离 Node 22.22.2 / npm 12.2.0，使用 `npm ci --allow-remote=none --ignore-scripts`。镜像负例退出 1 且报 EALLOWREMOTE；最终官方锁干净安装退出 0。该证据不包括安装脚本、Windows bootstrap、服务启动或正式发布包。
+- 公式：`npm run verify:conversation-rich-text` 共 48 项通过，覆盖四种公式分隔符、代码与价格保留、价格后接行内代码、`$$x` → `$$x$` → `$$x$$` 流式边界、错误/未闭合/超长输入回退，以及不可信公式与普通 Markdown 的消毒隔离。
+- 页面：`node scripts/reply-quality-browser-smoke.mjs --base-url http://127.0.0.1:17425 --output-dir output/operations-20261015/browser --session cx-operations-suite-1015` 使用独立 agent-browser 空白 profile、候选静态预览并阻断 Codex API；桌面、手机和折叠屏宽度、深色主题、字体、矩阵、长公式局部滚动、复制及阅读位置等 54/54 通过。手机公式截图已人工检查；宽度仿真不等于 Android 真机或真实发送验收。
+- 构建与相邻能力：`npm run build:frontend`、`npm run build:cli`、`npm run verify:server-modules`、`npm run verify:frontend-normalizers` 均通过。服务模块首次遇到沙箱临时目录限制及 SQLite 原生构件缺失，改用隔离临时目录并恢复已锁定构件后通过；没有据此变更数据库业务逻辑。
+- 证据：`output/operations-20261015/verification.json`、浏览器 `report.json` 和构建/安装日志。正式包、Android APK、FCM 深度 Doze 和 PRODUCT_GOAL 的其余门禁仍须各自验收。
+
+## 公式审查问题修复回归（2026-10-15）
+
+- 使用 `npm run verify:conversation-rich-text`，新增边界、资源与逐消息缓存三个专项入口。宏放大、价格吞公式、代码分隔符、未闭合扫描和流式重算均先保留 RED，再执行 GREEN；原始日志在 `output/fix-review-20261015/`。
+- 公式执行合同：单公式进入 KaTeX 前最多 4000 字符、128 个控制序列、32 个未转义开组；自定义宏/别名、动态扩展、私有控制词与超额输入保留可读源码。内置公式、矩阵、积分、Braket、公开 tag 继续渲染，不声称完整 TeX 支持或任意输入硬超时。未闭合输入不能吞掉行内代码或围栏代码；中文/英文价格后仍须显示真正公式及加粗，数字数学表达式继续支持。
+- 流式合同：仅在当前消息渲染器中复用当次使用的公式结果及失败回退，区分显示模式；最多 128 条和 512 Ki 字符，移除公式时释放对应缓存。原 100 个相同 4×4 矩阵的消息追加一字后，KaTeX 调用必须为 0，旧矩阵块保持身份；不同消息不共享缓存。
+- 页面入口：`http://127.0.0.1:17425/#/__regression/reply-quality?case=math`。检查价格 `$10；**重要**；结果$x+1$`、代码中的关闭分隔符、长行内与独立公式、错误/受限源码回退。393px 下只允许公式内部横向滚动；溢出的行内公式可键盘聚焦并用方向键滚动，宽窗口容纳公式后移除额外焦点。
+- 固化页面回归：`node scripts/reply-quality-browser-smoke.mjs --base-url http://127.0.0.1:17425 --output-dir output/fix-review-20261015/browser-confirm --session cx-fix-confirm-1015`；使用独立空白 profile、阻断 `/codex-api/**`，测试结果以对应 `report.json` 为准。该入口使用固定样本，不能作为真实任务发送、生产 7420、Android 真机或发布验收。
+- 最终结果：富文本 70/70，前端构建通过；完整页面回归 57 通过、1 项 native 浏览器连接超时。用新空白 profile 加 `--only math-currency-preserves-markdown,math-code-delimiters-stay-literal,phone-math-inline-scroll-keyboard,math-macro-budget-readable-fallback,dark-code,dark-math` 定向复测 6/6，补齐失败场景，合计 58 个唯一场景已覆盖。报告位于 `browser-confirm/report.json` 与 `browser-targeted/report.json`，都相对于 `output/fix-review-20261015/`；不覆盖原失败。最终源码指纹及六项映射见同目录 `result.json`。
+
+## 模型拒绝不再隐式换模型（2026-10-15，B1）
+
+- 行为：请求的模型被明确拒绝时，保留原始错误与可恢复的消息状态；不再隐式选择或持久化 `gpt-5.2-codex`，不向模型目录注入虚构模型及其推理能力，不自动回滚会话，也不在另一个模型或新 `clientMessageId` 上重放。用户仍可显式改选模型、编辑、重试与回滚。
+- 保留的契约：传输/无效响应类不确定投递仍按同一 `clientMessageId` 查询并按需重放同一请求体；新会话确认中/等待、失败气泡与预览、outbox 与 `FailedUserMessageRequest`、队列与终态记账、自定义渠道选择不变；成功通知、目标续跑与自动提交只在没有 turn 错误时触发。`rollbackThread` 仅保留给用户主动回滚。
+- 合成用例：`D:\nvm\v22.19.0\node.exe scripts/verify-delivery-contract.mjs` 46/46 通过（退出 0）。新建会话与既有会话各新增一项“显式模型拒绝保持所选模型”样本，断言第二次发送为 0、无边界传输重试、原始 400 模型错误留存、localStorage 模型选择与 `availableModels`/`availableModelIds` 不变、outbox 仍为 `failed` 且失败气泡/预览保留；原有 44 项投递、恢复、outbox 与队列用例全部保持通过。先前 RED 见 `output/hermes-codex-upgrade-20261015/b1a-red.log`（发送数 2≠1）。
+- 用户主动重试：失败请求记录仍携带原始 `modelId` 与参数，直接重试沿用该模型（本次仅保留既有代码路径，未新增该分支的合成样本）；要换模型须由用户显式改选后重新发送。
+- 未验证：异步通知分支的合成覆盖、浏览器/真机、真实模型运行时与当前 Codex 桌面一致性未由本批证明；`npm run build:frontend`（vue-tsc `--noEmit` + 两次 vite build + 预压缩）退出 0 只表示类型与构建通过，不构成 UI 或发布验收。
+
+## 模型拒绝的异步通知与用户重试合成覆盖（2026-10-15，B1C，仅测试）
+
+- 入口与结果：`D:\nvm\v22.19.0\node.exe scripts/verify-delivery-contract.mjs` 在保留原 46 条用例的基础上新增 4 条，实际 49/50 通过、退出 1。日志 `output/hermes-codex-upgrade-20261015/b1c-tests.log`；结论见同目录 `b1c-result.json`。本轮未改产品源码。
+- 通过：与已接受回合并列同一 turn 身份的 `turn/completed` 失败回合被消费、不重放、无边界重试、无配置写入或回滚依赖、模型与 localStorage 与模型目录不变，且执行态收敛为结束；不带任何 ID 的 `error` 通知（含重复注入一次）被消费、不结算也不打断运行中的任务、不新增发送、可见用户消息不重复；显式 `retryFailedUserMessage` 使用失败气泡的真实 ID 时正好产生第二次发送，并沿用存储的 `requestedModelId`、原文本与线程，用户新改选的模型保持不变。
+- 未通过（按契约保留、未弱化、未改产品源码）：带 `threadId`+`turnId` 的 `error` 通知（同一 `MODEL_REJECTED_MESSAGE` 文本）在“错误已消费、发送数 1、无额外 HTTP 依赖、模型快照不变、气泡不重复”五项断言全部通过后，`selectedThreadExecutionActive` 由 true 变为 false。同一文本在无 ID 时不会结算，因此差异来自通知携带的线程/回合身份而非文本分类器。该条判定（合法归属结算或缺陷）留待监督复核。
+- 夹具限制：仅文本负载（附件/图片未覆盖）、这 4 条仅既有会话模式、未排空全局假计时器、新会话模式的异步变体未覆盖。浏览器、真机、Android、真实 7420 运行时与当前桌面一致性仍未验证；本次未重跑前端构建。
+
+## 更正：带 ID 的 error 通知前提（2026-10-15，B1D，仅测试）
+
+- 契约更正：B1C 记录中“带 `threadId`+`turnId` 的 error 通知为非终态、不得结算任务”的前提不成立，属监督任务契约错误，本批按更正后的前提重写该用例；B1C 原始日志与结论保留不改（`b1c-tests.log` 49/50、退出 1）。这不表示隐藏缺陷：`documentation/app-server-schemas/typescript/v2/ErrorNotification.ts` 定义 `error`、`willRetry`、`threadId`、`turnId`；`applyRuntimeNotificationState`（B1 未改动）对已归属的 `method=error` 置为 `failed`，文本分类器只决定是否附加处理分支。
+- 更正后的用例：`params={threadId,turnId,willRetry:false,error:{message,codexErrorInfo:null,additionalDetails:null}}`，断言该已归属的非重试任务错误被消费、恰好一次发送、无边界重试、无配置写入或回滚依赖、模型/localStorage/模型目录与 outbox 标识不变、可见用户消息不重复，且匹配任务的执行态收敛为结束。这与既有的 `turn/completed` 失败回合用例互不相同，互为补充。
+- 强化后的无 ID 用例：注入前断言恰好一个可见用户块并记录其 id/text/deliveryState 与 outbox 投影；第一次与重复注入后分别比对同一完整投影、运行态、模型快照、发送数与额外 HTTP 依赖；无归属通知不得停止所选任务或把其用户消息标为失败。outbox 比对保留身份/状态/载荷字段，排除可能被恢复流程合法刷新的尝试/时间戳记账字段。
+- 结果：`D:\nvm\v22.19.0\node.exe scripts/verify-delivery-contract.mjs` 50/50 通过、退出 0（日志 `output/hermes-codex-upgrade-20261015/b1d-tests.log`）。`willRetry:true` 的语义不在本批判断范围，留作独立的协议校验问题。仍未验证：新会话模式的异步变体、附件类负载、浏览器/真机/Android/真实 7420 运行时与当前桌面一致性；未重跑前端构建。
+
+## 阶段正文 partial_answer（2026-10-15，B2）
+
+`partial_answer` 保留为独立的 assistant `phase=partial`，不混入公开进展，也不冒充最终回复；只有显式 `final_answer` 提供唯一最终正文。完成、失败或中断的权威终态会收敛阶段正文的 streaming 标记；只有 partial 的完成回合在投影中保持缺少 final，导出保留说明，页面不伪造最终回复。历史读取保留原始 phase 与既有去重规则，Markdown 导出按块顺序输出阶段正文、过程和最终回复，partial 正文只出现一次。页面中的阶段正文不随过程折叠、历史窗口或阅读冻结隐藏；复用既有富文本、公式/代码与原文复制组件，保留稳定消息 ID。
+
+本地合成验证已通过：`b2f-transcript.log` 为 NATIVE_EXIT=0；历史测试 `b2c1-history-green.log` 为 22/22；使用真实生产 reader/projector/export 的独立 holdout `b2-independent-probe.json` 为 12/12、退出 0。`build:cli`、`verify:server-modules`、F/G 前端构建均有退出 0 日志。候选静态入口的独立 agent-browser 回归 `b2-browser-green2/report.json` 为 44 通过、0 失败、0 未验证，`b2-browser-green2.log` 为 NATIVE_EXIT=0；root 实际查看桌面交错过程、手机纯 partial、手机冻结后新 partial 三图，记录于 `b2-browser-visual-review.json`。green1 的 18/44 与原失败报告保留：query 切换未重新初始化夹具导致 harness 误报，green2 的 loadCase 强制真实 reload 并核对页面 marker 后通过，期间没有靠修改产品源码消除这些误报。复制 Vue 算法的 `b2f-segment-probe.mjs` 不计为产品独立验收。上述文件均位于 `output/hermes-codex-upgrade-20261015/`。
+
+手工合同：在候选预览打开 `/#/__regression/conversation-blocks?partialAnswers=completed`，折叠/展开过程，检查两段正文持续可见、工具展开后仍在二者之间、显式 final 唯一、代码/公式与复制原文正确；`partialAnswers=no-final` 保留两段正文且不生成最终回复。用 `partialAnswers=running` 追加同 ID 正文，分别验证底部跟随、离开底部阅读位置和既有 DOM 身份；再检查 `partialAnswers=completed&variant=pure`、`variant=interleaved`、`partialAnswers=running&variant=frozen` 的纯 partial、交错过程与冻结工具组扩展/新 partial，并核对无 partial 的原场景。浏览器证据使用本地合成原始条目、生产投影与生产 Vue，阻断 Codex API；桌面/手机宽度仿真不代表实际设备。真实 7420、真实模型/当前原生 Runtime、Android/真机、安装升级和发布仍未由 B2 覆盖。
+
+## 专用权限请求审批（item/permissions/requestApproval，2026-10-15，B3B）
+
+- 行为：`item/permissions/requestApproval` 单独识别为 `permissions-approval` 交互（即使请求结构未知也不回落 generic），只提供“本轮允许”和“拒绝”两个动作，统一显式 `scope:'turn'`；不提供 session/always 记忆、不暴露 `strictAutoReview`、不复用 legacy `decision` 结果。计划模式直接返回 `{permissions:{},scope:'turn'}` 空授予；非计划模式即使 `allowAllPermissionRequests` 或某项 `allowForSession` 为真也一律排队等待用户显式决定。command/file/MCP 审批的既有语义、优先级与自动批准保持不变。
+- 服务端次序与失败保留：按 id 只读查 pending 原请求 → 用该原请求校验并重建响应 → 同步发送 → 消费 → 发出 resolved。没有 pending、响应为 error envelope、`{}`、legacy decision、`scope` 非 turn、`strictAutoReview`、未知字段、非对象 permissions，或授予分量不是原请求的完整已识别分量（扩大路径/glob 深度、新增 special root、删除或改写 `none`/`deny` 限制项、改变数组顺序、授予请求中不存在的分量）时不发送、不消费、不产生 resolved；同步发送抛错时原请求与 id 保留在唯一 store，可由用户用同一 id 重试，成功后只消费一次，重复响应不再发送。该保证只覆盖同步写入未抛错，不表示 Codex 已处理或工具已获得/被拒权限。
+- 展示合同：投影为专用交互附带 `permissionsApproval` 视图 `{canApprove, unavailableReason, rows, grant}`。rows 完整表达 environmentId（缺省明确“未提供”）、cwd、reason、network.enabled 的 true/false/null、全部 read/write 路径、globScanMaxDepth、entries 的 `path`/`glob_pattern`/`special` 与 access；保留原始文本，不 path.resolve、不检查存在性、不推断本机环境。0.130 的 `none` 与 0.162.1 的 `deny` 都作为限制项原样保留，不相互改名、不删除；`special` 的 root/minimal/project_roots(subpath)/tmpdir/slash_tmp 全部显示，`special.unknown` 保守标为不可授权。wire 合法的省略/null（environmentId、reason、network、fileSystem、read/write、entries、globScanMaxDepth）不判为未知结构。
+- 合成验证：`D:\nvm\v22.19.0\node.exe scripts/verify-server-modules.mjs` 退出 0（`server module smoke ok`，日志 `output/hermes-codex-upgrade-20261015/b3b1-green-server-4.log`）；`D:\nvm\v22.19.0\node.exe scripts/verify-conversation-transcript.mjs` 退出 0（`Conversation transcript smoke passed`，日志 `b3b1-green-transcript-2.log`）。实现前两套脚本的运行期 RED 为 `b3b1-red-server.log`（同步 send 抛错后 pending 被消费，`0 !== 1`）与 `b3b1-red-transcript.log`（交互类型仍为 generic），退出码见 `b3b1-red-exits.txt`。
+- 手工合同（B3C 完成后生效）：在隔离夹具中打开权限请求交互，核对环境/工作目录/原因/网络/读写路径/glob/范围项逐项显示与原始文本一致；确认只有“仅本轮允许”和“拒绝”两个动作、计划模式直接拒绝、未知结构的“仅本轮允许”禁用而“拒绝”仍可用且说明不可授权；重复点击只提交一次；服务端拒收时页面提示且请求仍待处理。
+- 未知结构处理修正（B3B2，2026-10-15）：路径 union 的每个变体（`path`/`glob_pattern`/`special`）各自校验成员，任何未知成员（例如外层 `futureRestriction`、路径对象上的 `followAliases`/遗留 `access`）只记入“未识别项”，请求保持仅可拒绝，不会被剥离后批准；`special.kind` 查表改为 own-key 安全的 Map，`toString`/`constructor`/`__proto__` 等原型名 kind 不再抛异常，仍是 `permissions-approval` 专用交互（可显示、可拒绝，空 grant 经真实 handler 生效并保留待处理状态直到被拒），未识别明细保留原始 kind/字段文本，已知路径与 pattern 在“范围项”行中原样显示。
+- 未验证：本批没有专用 UI（`ThreadConversation.vue`、`useDesktopState.ts` 未改），真实 pending 即使出现在旧 generic 按钮上也会被服务端拒绝而不产生授权；实际 7420 运行版本、Runtime 授权/拒权行为、空 grant 在引擎中的语义、浏览器/真机与发布均未由本轮证明。
+
+## 专用权限卡 UI 与单请求失败回执（2026-10-15，B3C2）
+
+- 卡片：`permissions-approval` 交互渲染专用卡（卡根元素带 `data-permissions-request-id="<numeric id>"`，numeric ID 也在卡内可见），卡内**只有**“仅本轮允许”（`data-permissions-action="allow-turn"`）与“拒绝”（`data-permissions-action="deny"`）两颗按钮；不出现 generic“继续”、session/always、`strictAutoReview`、legacy `decision` 或空 result。command/file/MCP/用户输入与 generic 分支保持原样。
+- 完整范围：`interaction.permissionsApproval.rows` 逐行渲染为 `dt` 加 `dd[data-permission-row]`，顺序与原文一致；环境（缺省明确“未提供”）、cwd、reason、network 的 允许/不允许/未指定、全部 read/write 路径、globScanMaxDepth（深度 3 可见）、entries 的 `path`/`glob_pattern`/`special`（root/minimal/project_roots(subpath)/tmpdir/slash_tmp）与 read/write/none/deny 原样保留。路径是纯文本：不 `path.resolve`、不做存在性检查、不改写为本机路径，不使用 `v-html`；长值换行、手机宽度无横向溢出。
+- 未知结构（deny-only）：`canApprove=false` 时卡内显示 `data-permissions-unavailable-reason` 的真实可见原因，“仅本轮允许”禁用而“拒绝”仍可用；拒绝发精确 `{permissions:{},scope:'turn'}`，不回落 generic“继续”，不默认同意。
+- payload：允许发 `{id:<numeric responseId>,result:{permissions:<完整已识别 grant>,scope:'turn'}}`；拒绝发 `{id,result:{permissions:{},scope:'turn'}}`。本地 `onResponseError` 回调只存在于 Vue emit 与 composable 参数，App 原对象转交、composable 调用 gateway 时只摘 result/error，回调绝不进入 HTTP JSON。
+- 单请求失败回执与同页重试：真实按钮点击后该 numeric ID 进入 responding（两按钮禁用，双击只发一次）；HTTP 非 2xx 时生产 `respondToPendingServerRequest` 先保留原全局 error 赋值与 pending，再调用**该次 reply** 的 `onResponseError`。卡片保留、显示 `data-permissions-response-error`（`role="alert"`，文本为真实错误）并只释放该 ID 的提交锁，不刷新/不切聊天即可再次点击同一颗按钮；第二次成功后只移除该 ID，成功路径不触发失败回调，无关 pending（例如 7315）始终保留。再次点击清掉该 ID 旧错误，pending 离开时清理该 ID 的错误；不维护第二份 pending、不清空其他锁、不靠 loadError 或全局 error 变化解锁别的卡。
+- 合成验证：`node scripts/verify-delivery-contract.mjs` 退出 0（51/51；C1 的 HTTP500 后 callback 0 次 RED 转 GREEN，两次同 ID/同 result、callback 仅一次、无关 pending 保留、wire 不含函数，日志 `output/hermes-codex-upgrade-20261015/b3c2-delivery-green.log`）；`node scripts/verify-conversation-transcript.mjs` 退出 0（B2 partial/order/terminal 与 B3B 权限投影无退化，日志 `b3c2-conversation-green.log`）；`npm.cmd run build:frontend` 退出 0（含 `vue-tsc --noEmit`，日志 `b3c2-frontend-build.log`）。
+- 独立浏览器验收：root在隔离17439服务运行固定完整B3 probe，桌面1365×900/手机393×852共24/24通过、0失败/0未验证，真实HTTP两次状态为500→200、numeric ID均7314且只剩无关7315；见 `output/hermes-codex-upgrade-20261015/b3-browser-green1/report.json`。Codex已看图复核完整范围、手机unknown禁用允许、500后同卡错误及可重试状态（`b3-browser-visual-review.json`）；这是AI截图复核，不冒称人员验收。相同构建重跑原B2 probe44/44通过（`b2-browser-after-b3/report.json`），CLI/server沿未变输入复用B3B2的有效检查。
+- 隔离证据边界：覆盖真实Vue组件/生产composable与同源合成HTTP，不证明真实Codex引擎按grant执行或拒绝、当前7420 CLI版本、Android/真机、安装浸泡与发布行为；完整24项而非`--only`作为本地浏览器放行条件。root本地候选接受见 `b3-review.md`。
+
+## model/list 会话缓存清理与迟到回写（2026-10-15，B4A1）
+
+- 行为：新增 `AppServerRpcCache.clearModelList()`，递增独立的 model generation，清空全部 `model/list` params key 的缓存与对应的 model 在途共享读取；`clearAppServerSessionStores` 在原有 `clearSharedReads` → `invalidateThreadList` 之后追加调用它，pending/token/plan 的清理顺序与含义不变。`invalidateThreadList` 未被改成 `clearThreadList`：cleanup 后 thread/list 旧值仍按原失效合同可读为 stale，刷新后的同代写入与持久快照重载不受影响。
+- 迟到回写保护：普通 miss 与后台 stale refresh 都在 enqueue 前捕获当时的 model generation，只有同代才允许写模型缓存；旧 generation 的成功结果不再落地，旧 refresh 的 bookkeeping 更新也只在同代发生。`deleteSharedRead(key, request)` 的身份保护保留，旧 promise 的 `finally` 只清理自己，不会丢掉新 generation 的共享读取。
+- 合成验证：`node scripts/verify-server-modules.mjs` 退出 0（`server module smoke ok`，日志 `output/hermes-codex-upgrade-20261015/b4a1-verify-server-modules.log`，原始退出存 `b4a1-verify-server-modules.exit.txt`）；`npm.cmd run build:cli` 退出 0（tsup `Build success`，日志 `b4a1-build-cli.log`）。实现前的真实运行期 RED 为 `b4a-model-cleanup-red.log`/`.exit.txt`（Compile 通过进入 Run，actual A / expected B）及 root 独立隔离复现 `b4a-codex-isolated-red2.log`/`.exit.txt`（同为 actual A / expected B）。
+- 新增覆盖（`smokeAppServerRpcCache`，全部使用合成 cache 与 `threadListCachePath:''`，一个持久例使用临时隔离路径）：cleanup 后不同 model params key 全部读为 null、在途 model 读取被丢弃且不被复用、cleanup 后首次读取重新取数恰好一次并缓存；同代 fresh 命中不发起取数；旧 A 成功或失败都不得覆盖新代缓存，也不得删除新代共享读取（第三读与新读取同一 promise、enqueue 计数仍为 1）；stale model 读取立即返回旧值、后台 refresh 最多一次、cleanup 后旧 refresh 的成功与失败都不落地；cleanup 后 thread/list 仍按原失效合同可读旧值，同代刷新仍能写缓存并从文件重载。
+- 未验证/边界：除 B4A 既有四行断言外，本轮新增的 holdout 断言只在实现后运行（GREEN），未单独观察 RED；后台 refresh 的 bookkeeping 代际守卫属防御性改动，本轮无可公开观察的区分性断言，不宣称已被行为例证明。合成缓存不代表真实 Codex 模型目录、正在运行的 CLI 版本、进程身份或 Runtime 已升级，也不覆盖前端/浏览器/真实服务与 7420 验收。
+
+## 活动启动身份 owner 与 health（2026-10-15，B4B1）
+
+- 身份捕获：`src/commandResolution.ts` 新增只读 `CodexLaunchIdentity`（`generation`、绝对 `launchPath`、`versionRaw`、`sha256`、`identityKind: native|launcher|unknown`，必要时一个短 `reason`）与 `captureCodexLaunchIdentity()`。helper 把最终裸名/相对候选绝对固定（裸名取 PATH 上首个真实命中，相对路径按 cwd resolve），`--version` 探测、真实文件 SHA 与之后的启动都绑定这同一个标注目标，不再二次 resolve，raw version 原样保留。probe/hash 任一失败或候选无法绝对固定时整条身份降级为 `unknown`，把不可信 `versionRaw`/`sha256` 置空并只保留已固定 `launchPath` 与短原因（`version-probe-failed`/`hash-failed`/`version-probe-and-hash-failed`/`unresolved-launch-path`/`empty-launch-command`）；helper 不新增启动阻断，原解析/spawn/握手失败合同不变。
+- 分代与冻结：`src/server/appServerProcess.ts` 只在 `start()` 真实创建/替换 child 时分配自增 generation 并冻结身份，启动只用捕获的目标加原 Windows shim 语义；捕获后到 spawn 之间文件指纹变化会把该身份降级为 `unknown`（`launch-window-fingerprint-changed`），既不假造可信身份也不重启、不改模型任务。候选 A→B 或 PATH 变动、同路径文件在 A 活动时改变都不能改写仍在运行的 A 的已冻结身份；只有真实替换才捕获新 SHA，A/B 同 `versionRaw` 不同 bytes 也能区分。
+- 发布时机：公开 `getActiveLaunchIdentity()` 与 `getStatus().activeLaunchIdentity` 只在**当前 child initialize 握手成功之后**返回；未启动、启动失败、握手 pending/失败、当前 child 退出、restart/dispose 清理后一律无活动身份。既有握手失败若保留 child，则该 child 的内部身份与 generation 保留，重试不再 resolve/probe/spawn，原 child 握手成功后才发布。身份 probe/hash 失败但握手成功时发布 `unknown`（与握手失败返回无身份不同）。initialize 的成功/失败/finally 都带当前 child 与该次 promise 的身份保护：迟到结果不给新 child 发 `initialized`、不置新 child 的 `initialized`、也不清新 child 的 `initializePromise`；旧 child 的 stdout/error/exit 在 B 活动时既不清 B 也不污染 B 的初始化状态。
+- seam 与隔离：`AppServerProcess` 增加可选 constructor 依赖（候选解析、`--version` 探测 transport、spawn），生产默认仍走原 `resolveCodexCommand`/真实 probe/真实 `spawn`。`smokeAppServerProcess` 改为 async 并在入口 await，在**构造第一个 owner 之前**把 `CODEX_HOME` 指向 `new URL('./b4b1-owner-home-', import.meta.url)` 下的 mkdtemp 合成目录，finally 处置 owner 并恢复原 env；合成目录落在编译 smoke 的 outputRoot 内，由既有 verifier 在子进程退出后清理，不新增 flush API、不访问私有 cache、不读用户目录。
+- 合成验证：`node scripts/verify-server-modules.mjs` 退出 0（`server module smoke ok`，日志 `output/hermes-codex-upgrade-20261015/b4b1-owner-server-modules.log`，原始退出码 `b4b1-owner-server-modules.exit.txt`）；`npm.cmd run build:cli` 退出 0（tsup `Build success`，日志 `b4b1-owner-build-cli.log`，原始退出码 `b4b1-owner-build-cli.exit.txt`）。有效运行期 RED：`b4b1-owner-server-modules-red.log`/`.exit.txt`，编译通过并进入 Run，真实 start→warmup/initialize 的前置断言（含 spawn/resolve/probe 计数与 initialize 参数）全部通过后在 `active launch identity must be published after the initialize handshake` 处 `actual: undefined`；该 RED 通过在同一 seam 上临时收回公开发布门取得，非编译错误、非未接参数。**修正（supervisor）：这条只是 mutation control，不是原实现 RED，也不构成“先 RED 后实现”的合规证据；相关结论与原始源码对照见文末“B4B1 修正”一节。**
+- 新增覆盖（`smokeCodexLaunchIdentityCapture` 与 `smokeAppServerProcess`，全部合成文件与合成 child，不启动真实 app-server）：绝对 native 目标的 version/hash 绑定、相对候选绝对固定、PATH-only 裸名首个命中固定、`.cmd` launcher 与 native 区分（launcher SHA 是 launcher 文件本身而非其内部 native）、不可解析候选与 probe/hash 失败降级 unknown、生产 hash helper 与独立计算一致、冻结身份保留真实 generation；fake child 走真实 JSON-RPC initialize 并收到 `initialized` 通知，公开身份与 health 的 launchPath/rawVersion/合成文件 SHA/generation 同源，clientInfo 仍为 CX 包版本（name `codex-web-local`、title `CX-Codex`）、launchPolicy 默认值与 restartProtection 0 保留；多次 status/health 读取不重新 resolve/probe/hash，health 快照是可改写副本且改它不影响 owner；候选切换与同路径改字节不改写已捕获身份；真实替换才新 generation；旧 A 的 stdout/error/exit 无影响；握手失败无活动身份且重试不新增 resolve/probe/spawn；probe 失败 + 握手成功发布 unknown；dispose/重复 dispose、initialize 窗口内 dispose、启动失败（无 codex 命令）均无身份且不写入被放弃的 child。
+- 未验证/边界：本批只声明并验收 owner/health 接口，未接 methodCatalog/catalog/factory（留给 B4B2），未改 cache/sessionCleanup/audit/summary/diagnostics/UI/schema baseline（B4A1 cache `945b7b00…` 与 cleanup `2010ac40…` 未变）。合成 fake child 与合成文件 hash 不代表真实新版 Runtime/7420 已升级、Active 可执行身份、模型可用性、Android/真机、安装浸泡或发布；未启动真实 app-server、未连网、无 Git/发布/凭据/持久配置改动。同路径字节改变、health 副本不可回写等保护项未单独观察 RED，作为实现后 holdout 一次通过（迟到 A stdout 事件后续已在修正批里先观察到 RED，见下节）。
+
+## B4B1 修正（supervisor correction，2026-10-15）
+
+- 证据分层，不得混淆：①本 run 开头的 `b4b1-owner-checkpoint.md` 短初稿是当时状态记录；②`b4b1-owner-server-modules-red` 是 **mutation control**——通过临时把新写的公开 getter 直接 `return null`、并让 status 不带该字段取得，不是原实现 RED，也不满足“先 RED 后实现”（补丁操作存档在 `b4b1-gate-mutation-operations.json`）；③root 在**未被改动的原实现**上独立执行的 `b4b1-original-owner-red-probe.result.json`（RUNTIME_RED_ORIGINAL_CONTROL、rawExit1，fake 握手真实成功后才卡在缺失身份断言）是本批之后的原源码对照，不是本 run 自己的 RED；④本 run 的 server smoke / CLI 退出 0 只是**自检**，不构成 root 独立验收。
+- 修正的缺陷（每条都先在同一 seam 上观察到真实运行期 RED 再做最小修复）：RED 汇总 `b4b1-correction-red.log`/`.exit.txt`，raw exit 1，7/7 用例失败，失败模式与 review/独立证据一致。
+  1. 版本探测窗口：`captureCodexLaunchIdentity` 原先先 probe 再首次 hash，探测期间文件 A→B 会发布 version(A)+SHA(B) 并在 spawn 后复核里过关。现在**探测前后各读一次真实 hash 并要求相同**；不同或任一次读取失败则整条 `unknown`（新增 reason `identity-changed-during-version-probe`；hash 不可用时沿用 `hash-failed`），保留已固定 `launchPath` 与真实 generation，不改启动阻断、不重解析到别的候选、不给运行中的进程重贴标签；原 spawn 后指纹复核保留。RED：probe 回调内改写真实隔离文件，未修前得到 `native`、修后 `unknown`。
+  2. 原始 stdout 与探测语义：`versionRaw` 现在保留 probe 的**原始 stdout（含结尾换行）**，只用 trim 判断空；native 与 `.cmd`/`.bat` 的默认 `--version` 改走 `getSpawnInvocation` + `spawnSync`（与 launch 同一 shim 语义）并带 5s 有界超时。RED：合成 probe stdout 带 `\n` 未修前被裁掉；真实 `.cmd` 目标未修前直接 spawn 失败得到 `unknown`，修后经 cmd.exe 得到 `launcher` 且保留换行。低层例：真实 `process.execPath --version`、真实合成 `.cmd` 回显。
+  3. 被放弃的握手：`ensureInitialized` 中 child 变化原先 `return`（把放弃当成功），公开 `rpc()` 会继续 `call/start` 拉起替换 child 并写出未 initialize 的业务 RPC。现在改为用既有 transport 错误**拒绝**本次握手（`assertCurrentChildForInitialization`）：无新 child、无业务请求；显式 `warmup` 重试与迟到 A 保护保留。RED：`owner.rpc('model/list',{})` 后立即 dispose，未修前 spawn 2、修后 spawn 1 且原调用 rejected。
+  4. 迟到 A stdout：owner 回调新增当前 child 守卫（`this.process !== proc` 时丢弃该 chunk），不扩大共享 handler 的白名单。RED：A 退出并被 B 真实替换后，A 的 stdout 通知未修前会送达 B 的监听器，修后 0 条；当前 B 的通知正常送达 1 条。
+- 修正后自检：`npm.cmd run verify:server-modules` 退出 0（`server module smoke ok`，7/7 correction 用例 passed，日志 `b4b1-correction-verify-server-modules.log`/`.exit.txt`）；`npm.cmd run build:cli` 退出 0（tsup `Build success in 71ms`，日志 `b4b1-correction-build-cli.log`/`.exit.txt`）。白名单仍只有五个文件，B4A1 cache `945b7b00…` / cleanup `2010ac40…`、`utils/commandInvocation.ts`、`server/appServerProcessHandlers.ts` 未改（见 `b4b1-correction-scope.txt`）。
+- 撤回的表述：guided 日志里的两次 `~/.codex` 元数据列举（只有文件名与时间戳）不能证明活动来源，也不能证明“没有写真实目录”；本批隔离证据只来自任务自带的合成 `CODEX_HOME` 与受控合成数据/transport。此后不再列出、检查或比较真实 `~/.codex`、凭据、会话及其元数据，也不做无谓的目录扫描去证明否定命题。
+- 仍未验证：H1–H5 独立 holdout 需 root 重跑；H6 catalog / H7 / H8、audit/summary、真实新版 Runtime/7420/授权/Android/安装浸泡与发布全部未验；合成 owner 接线通过不等于整个 B4 通过，也不代表真实 Codex 二进制版本或模型可用性。
+
+### B4B1 RPC 续体修正（第二轮，supervisor correction，2026-10-15）
+
+- root 独立 `b4b1-independent-owner-green1/report.json`：30 例全部执行，**29 passed / 1 failed**（H1 3/3、H2 7/7、H3 7/7、H4 10/11、H5 2/2），源码哈希稳定 → B4B1 仍未接受、不得进入 B4B2。
+- 唯一失败：`initialized public rpc disposed synchronously must reject across its resolved initialize await`（`spawn 2 !== 1`）。成因是**公开续体窗口**：owner 完成真实 initialize 之后，`rpc()` 里 `await ensureInitialized()` 即便已经 fulfilled 仍会让出一次事件循环；在这期间同步 dispose，续体恢复后 GUARD（都在 `ensureInitialized` 内部、早已返回）全都不适用，于是继续走 cache 失效 → `call()` → `start()`，拉起一个**未 initialize 的替换 child** 并写出业务 RPC。
+- 本 run 先在既有合成 correction smoke 里加了 already-initialized 变体并观察到同名真实 RED：`b4b1-rpc-continuation-red.log`/`.exit.txt` = `1`，correction 用例 **1/8 失败**（正是该变体，其余 7 例仍 passed）。未使用 getter/字段置空类 mutation，未覆盖任何旧日志名。
+- 最小修复（本轮产品改动只有 `src/server/appServerProcess.ts`）：`rpc()` 先把 `ensureInitialized()` 落成 promise（同步跑到首个 await），**await 之前**捕获当时的 `this.process`，await 之后用新增私有 `assertSameInitializedChild` 校验同一 child 仍是当前 `this.process` 且 `this.initialized` 为真，再允许 cache 失效 / enqueue / call；不重试或重启被放弃的请求，不新增生命周期计数器/公开接口，显式 `warmup` 重试、generation、迟到 A 保护与 H1–H3/H5 行为均不变。
+- 修正后自检（非 root 接受）：`npm.cmd run verify:server-modules` `.exit.txt` = `0`（8/8 correction 用例 passed、`server module smoke ok`）；`npm.cmd run build:cli` `.exit.txt` = `0`（tsup `Build success in 91ms`）。白名单仍只有五个文件，`tests.md` 与任务输出外无其他改动；run 末原始退出码见 `b4b1-rpc-continuation-scope.txt`。
+- 仍未验证：独立 30 例需 root 重跑后才谈接受；H6–H8/catalog、audit/summary、真实新版 Runtime/7420/授权/Android/安装浸泡/发布全部未验；本 run 的全部退出 0 都只是自检。
+
+## method catalog 身份绑定与 launcher 信任边界（2026-10-15，B4B2）
+
+- 消费已验收 owner 身份：`src/server/appServerMethodCatalog.ts` 的构造参数由裸 generator 改为显式 provider `getActiveLaunchIdentity(): CodexLaunchIdentity|null`；catalog 只读该身份，不写回、不推测 generation、不因 PATH/文件变化替 owner 重新归属身份。`src/server/codexBridgeSharedState.ts` 的 catalog factory 改为 `(appServer) => TMethodCatalog`，`createMethodCatalog` 收到**同一个已创建 owner**（`appServer`），不再可能创建第二个 owner；`src/server/codexAppServerBridge.ts` 的私有 `getSharedBridgeState()` 用 `(appServer) => new AppServerMethodCatalog({ getActiveLaunchIdentity: () => appServer.getActiveLaunchIdentity() })` 接线，全局仍只有一个 appServer 与一个 catalog。
+- 身份键与冻结：cache/inflight 键 = generation + 绝对 launchPath + rawVersion + sha256 + identityKind；命中按冻结身份，不重新 probe/hash/version（热路径零全文件 hash、零 resolve）。生成前先冻结本次身份副本，生成前/后各做一次窗口核对：当前 owner 身份键仍等于冻结键，且冻结 `launchPath` 的真实文件 SHA 仍等于冻结 SHA；任一不符即按既有明确错误合同结束，不写 cache、不把磁盘上的 B 解释成 active A，也不把 A 的结果冒充当前 B。
+- 默认生成路径绑定：真实 schema 子命令只对冻结身份的绝对 `launchPath` 调用 `getSpawnInvocation(launchPath, ['app-server','generate-json-schema','--out',outDir])`，保留原 Windows shim 语义；**移除了生产独立 `resolveCodexCommand()` 回退**。低层 runner seam 只用于让默认路径在测试里用 fake child 执行并记录真实 command/args，生产默认仍是原 `spawn` + stderr/exit 语义。
+- 并发与迟到：同一活动身份的 methods/notifications 共享一次生成；每个 promise 的 finalizer 只清理自己持有的当前 key/promise，迟到 A 的成功/失败/finally 不清 B 的 inflight、不加第三次生成；过期调用按明确 unavailable 或生成器错误结束，不返回 B 的内容。generator 失败只清自己当代 inflight，同代重试合法且会重新走真实核对。
+- **launcher 信任边界（本批收紧，最小改动）**：`isCompleteLaunchIdentity` 现在只接受**完整 native** 身份（非空绝对 path、`identityKind === 'native'`、非空 sha256 与非空 rawVersion）。`launcher`（如 `.cmd`/`.bat` wrapper）与 `unknown`/不完整身份一律返回既有明确 unavailable（reason 沿用 `incomplete-launch-identity`），且这些调用**不进入 generator、不 spawn、不 hash**。理由：wrapper 字节不变也可能执行不同的下游 native 二进制，wrapper 指纹与其 raw version 不能证明生成的 schema 描述当前活动的 native 实例；不逆向 wrapper。owner 侧启动策略不变（启动 wrapper 与信任 wrapper 的 schema 身份是两个不同边界）。
+- RED 分层（不得混淆）：
+  1. **S1 运行时 RED（有效）**：`b4b2-catalog-red.log`/`.exit.txt` raw **1**，进入运行时断言后在 `a replacement identity must not be served from A cache` 处 actual `b4b2/catalog/methods-a` / expected `…-b`；使用本批显式允许的最小 provider/seam，不是未改动原实现的执行，root 见 `b4b2-red-review.md`。
+  2. **launcher 运行时 RED（有效，与 S1 不同）**：`b4b2-catalog-launcher-red1.log`/`.exit.txt` raw **1**，23 例中 22 passed、唯一失败 `S3L launcher-only identity cannot bind the native target`，detail 为 `Missing expected rejection` —— 在仍未收紧的产品上 launcher 身份实际到达了 generator；随后才做上述最小 native-only guard。
+  3. 历史失败（保留，不称通过）：green1 曾在 TypeScript 编译期失败（`TS2339`，property identityKind on never），同一 `b4b2-catalog-green1.log/.exit.txt` 名称随后被 S1 成功运行覆盖；root 已把原始文本归档为 `b4b2-observed-compile-failure.txt`，本批自那以后一律用全新编号且 create-only 的日志名。green2 停在新测试夹具的编译错误（`not callable`/`never`），不是运行时产品 RED。
+  4. green3 自检 21 例 19 passed、S3/S10 failed（`build:cli` raw 0），两者均为**测试 oracle 错误**并已公开更正：S3 旧断言同时要求 cmd 包装后的 args 与未包装原生 argv（与 Windows `getSpawnInvocation` 的 `/d /s /c <command>` 合同矛盾），现拆为「native 目标 + 默认生成路径」成功例与「launcher → unavailable 零生成」例；S10 旧断言要求 4 次 hash，但失败的生成只有 pre-hash，合法总数为 3（失败 pre + 成功 pre/post）。产品未为迎合计数而改动，失败工件保留。
+- 合成验证（本 run 自检，不构成 root 接受）：`node E:/javaword/CXCodex/codexui/scripts/verify-server-modules.mjs` 原始退出 **0**（`server module smoke ok`，catalog 用例 **23/23 passed**；日志 `b4b2-catalog-green4.log`，原始退出码 `b4b2-catalog-green4.exit.txt`）；`npm.cmd run build:cli` 原始退出 **0**（tsup `Build success in 74ms`；日志 `b4b2-catalog-green4-build-cli.log`，原始退出码 `b4b2-catalog-green4-build-cli.exit.txt`）。native Node22、command-local `export PATH="/d/nvm/v22.19.0:$PATH"`，两处 raw exit 均在命令内紧接着写入。
+- 覆盖矩阵（`smokeB4b2CatalogIdentity`，全部合成 provider/fake child/隔离目录，无真实 app-server/网络/7420）：
+  - S1 身份 A→B 跟随 owner，各自一次生成、methods/notifications 独立标记；S2 命中零 hash/零生成；S3 native 默认生成路径记录真实 command/args（直接 spawn，无 wrapper）；S3L launcher → unavailable 且零生成零 hash；S4 同 path/version/generation 新 SHA 重新生成；S5 同文件/同 SHA 新 generation 重新生成；S6 已有 A cache 时磁盘改为 B 仍返回 A 且不重 hash；S7 无 cache 且磁盘已变 → fail closed、零生成，真 replacement 后按 B 生成；S8 生成窗口内改字节 → 拒收、不缓存、后续不再从改动字节生成；S9 无 active / unknown / 缺 SHA / 缺 rawVersion / 空 path 全部明确 unavailable 且零生成零 hash；S10 生成失败只清当代、同代重试成功（hash 3）；S11 迟到 A 成功而 B 已缓存 → 不覆盖 B；S12 迟到 A 成功而 B pending → 不清 B、第三读仍共享同一次 B 生成；S13 迟到 A 失败而 B pending → 不清 B；S14 迟到 A 失败而 B 已缓存 → B 目录保持、A settle 后再次读仍为 B。
+  - F1 shared factory 严格收到同一真实 owner 且全局只创建一次；F2 真实 owner 未 warmup → meta 路由明确 unavailable、零生成零 spawn；F3 warmup 后 methods/notifications 共享一次生成并返回两个 `{data:[marker]}`，记录的默认 command/args 等于冻结 native 目标的 `getSpawnInvocation` 结果、hash 2 次；F4 meta 命中与 health 读取不新增 resolve/probe/hash/生成；F5 运行 A 时出现新安装/PATH 候选 B 仍生成 A、generation 不变、catalog 不 re-resolve；F6 真实替换发布 B 后两类 list 并发仅一次新生成、各含 B 标记、参数与计数断言；F7 dispose 后 meta 与 catalog 均明确 unavailable、不冒用先前 cache；F8 握手失败无活动身份且不生成，重试沿用保留 child 后 catalog 正常生成（resolve/probe/spawn 各 1）。
+  - 既有 `smokeAppServerMethodCatalog` 旧缓存断言（并发一次生成、二次命中仍 1）在改为显式身份 provider 后逐条保留；`smokeCodexBridgeSharedState` 增加「catalog factory 收到的 owner 严格等于首次创建的 appServer」断言。
+- 隔离与 transport：所有 catalog 断言用合成 provider + 标记化合成 schema JSON；真实 owner 例复用 B4B1 已验收的 `createB4b1OwnerHarness` 与 `withB4b1SyntheticHome`，在**构造第一个 `AppServerProcess` 之前**把 `CODEX_HOME` 指向编译 smoke outputRoot 内的 mkdtemp 合成目录，finally 处置 owner 并恢复 env，由既有 verifier 在子进程退出后清理。业务 spawn 全为 fake child；meta 路由用真实导出 handler + 合成 req/res 直接调用，不启动 HTTP 服务或整个 middleware。计数用 hasher 包装**委托真实** `readCodexLaunchFileSha256`（只计次数，不替换算法）；catalog 自身的 mkdtemp schema 目录由其 finally 清理，仅清理已知产物。
+- 未验证/边界：本批只做本地自检，**root 独立验收仍待完成**（root 独立 probe 的 H8 曾以 launcher 到达 generator 记录真实失败，见 `b4b2-independent-catalog-red1/report.json`；本批不编辑、不执行该 probe）。wrapper limitation：真实 Windows 上以 `.cmd`/`.bat` shim 安装的 Codex 会因本边界返回 unavailable（有意 fail closed），在未证明 wrapper→native 绑定之前不接受其 schema 身份；这不等同于声称 native 同源，也不改 owner 启动策略。合成运行只证明模块接线与该边界，不证明真实 0.162.1 app-server/7420 已升级、实际授权、模型可用性、Android/真机或安装浸泡；B4C audit provenance/diagnostics 未开始，整体 B4 未通过。
+
+## audit provenance 与同一活动身份的诊断比较（2026-10-16，B4C recovery，编写未执行）
+
+- 状态：**待 root 验证**。本 run 只有文件工具、未执行任何命令；下面所有 authored 覆盖与请求命令一律由 root 运行，本文件不记录任何自跑原始退出码（不编造 raw exit）。
+- 白名单：`scripts/audit-app-server-schemas.ps1`、`scripts/update-app-server-schema-audit-summary.mjs`、`src/server/appServerSchemaAuditSummary.ts`、`src/server/diagnosticsRoutes.ts`、`scripts/server-module-smoke.ts`、`tests.md`，新增小型 `scripts/schema-audit-identity-smoke.mjs`。输出一律 `output/hermes-codex-upgrade-20261015/b4c-*`。
+- 首个运行期 RED（保留原测试并修正 oracle 投影，不弱化语义）：`smokeAppServerSchemaAuditSummary` 中「synthetic generatedBy + raw CRLF」断言。原状：normalize 返回对象无 generatedBy → `asRecord(undefined) = null` → `deepEqual(null, {...})` 失败（见 `b4c-red-review.md`：Node22 verifier exit1、generatedBy=null）。修后：normalized 合法新增 selectionSource/verification/generation/baseline/generated 等已验证 provenance，故 oracle **只投影四个供给字段**（launchPath/versionRaw/sha256/identityKind）再 deepEqual，并额外断言 versionRaw 原样保留 `codex-cli sentinel\r\n`（未 trim），以及旧 summary 无 provenance 时 generatedBy/contentDiff 保持 null。四个字段断言全部保留。
+- 产品改动（四条）：
+  - summary：新增 `SchemaAuditGeneratedBy`（复用 B4B 四字段，**无 generation 计数**——offline 生成没有 active generation，不编造）、`SchemaAuditContentDiff`、`SchemaAuditIdentityMatch`；normalizer 逐项保留/校验，缺字段一律 null/unknown，不从 process.env/当前安装/其他 summary/B4B 活动身份回填；新增纯比较函数 `compareSchemaAuditIdentity(summary, activeStatus)`（不现场 resolve/--version/hash/generate）。
+  - diagnostics：`handleDiagnosticsRoutes` 在**首个 await 之前**用 `createAppServerHealthSnapshot(getAppServerStatus())` 冻结一次状态（含嵌套 identity 副本），health/full 两分支复用同一快照与同一比较结果，输出 `schemaAudit.identityMatch`；仍走既有 `redactDiagnosticsValue`，HTTP status/hook/windowsSandbox 超时/认证/脱敏合同不变。
+  - updater：raw→summary 逐项保留 `generatedBy`（versionRaw 原样、SHA 大小写不归一）；`reviewStatus` 改由真实 contentDiff 驱动（complete 且全 matched → baseline-matched；任一 drift → drift-recorded；error/缺 metadata → unknown；名称计数只能升级为 drift、不能改绿）；**不再读取既有输出**，故旧 raw 缺身份时不会继承既有输出身份。
+  - PS：新增 `-CodexCommand`（explicit > 两组 env > PATH）；生成前绝对化并冻结目标，两阶段与指纹校验均用同一绝对路径；`--version` 失败即停；生成前后指纹变化 → changed；launcher 只发 launcher-only + shim hash（不冒充 native）；versionRaw 用局部 `System.Diagnostics.ProcessStartInfo` 原始捕获（无按行 join/Trim）；raw summary 新增 `generatedBy` 与 `contentDiff`（每目录 status/raw exit）；summary 在 diff 结果已知后写入，失败路径先落盘再以**首个原始退出码**退出。
+- authored 覆盖（合成夹具，无真实 Runtime/7420/网络）：
+  - comparator 矩阵：A/A native matched；SHA 大小写差异仍 matched；Windows 路径大小写/分隔符等价；path/version/SHA 各自 mismatch；同 version 不同 SHA mismatch；旧无身份/缺 SHA/缺 version/launcher-only/changed/failed/未运行/无 active/非 64-hex 全 unknown；available/reviewStatus 与结果正交；comparedAgainstGeneration 来自冻结快照、缺 generation 时为 null；比较不改动输入。
+  - diagnostics：每请求 getAppServerStatus 恰好一次（health=1、full=2）；在 await 期间**真实切换依赖状态并原地替换嵌套身份**，断言输出仍是被捕获的 A（running=true、generation=4、launchPath=A）且 `identityMatch=matched(comparedAgainstGeneration=4)`；原敏感字段脱敏断言保留。
+  - updater：显式 `--input/--output` 往返 provenance（含 CRLF versionRaw、大写 SHA）；同名同数量但 contentDiff=drift → drift-recorded；contentDiff=failed/error 或缺 metadata → unknown；既有输出有身份而 raw 无身份 → 输出 generatedBy=null；docs 默认 summary hash 前后不变。
+  - PS fake launcher（`.cmd`，记录每次调用 `%~f0 %*`）：显式 -CodexCommand 下 PATH 新增候选不得换目标（所有调用行均为冻结 launcher）；合成 schema 后与基线 diff → drift exit 1 且 launcher-only provenance；`--version` 非零保留原退出（7）；generate-ts 非零保留原退出（3）；目标自修改 → `generation.status=changed`、`reason=target-fingerprint-changed`、exit 1；SkipGenerate exit 0 且不产 provenance summary。PowerShell 不可用 → 明确 SKIPPED（unverified），不写 passed。
+- 请求 root 命令（均未由 agent 执行）：
+  1. `node E:/javaword/CXCodex/codexui/scripts/verify-server-modules.mjs`
+  2. `node E:/javaword/CXCodex/codexui/scripts/schema-audit-identity-smoke.mjs`
+  3. `npm.cmd run build:cli`
+  4. 只读复核 portable SHA（期望 `DD13BDB162A184FA04039488B234A8258EF9B76F84E926C505D5742B19249A6A`）后执行 `npm.cmd run audit:app-server-schemas -- -CodexCommand "E:/javaword/CXCodex/codexui/output/b3-schema-0.162.1/codex-x86_64-pc-windows-msvc.exe" -OutputRoot "output/hermes-codex-upgrade-20261015/b4c-audit" -FullDiff`；仅把该 raw summary 经 updater 写到 b4c output（不写 docs 默认路径）。exit 1 是真实 drift 待审，不是生成崩溃。
+- 未验证层级（结论三层，不越界）：① schema 静态生成/审计（可真实 portable 验证）；② 候选运行时身份与缓存（B4B 合成生命周期）；③ 真实 7420/真实新版 app-server 的运行、授权与用户入口（本批未测；不宣称活动服务升级，不关闭 Android/远端/Release/总产品目标）。
+- 已知风险（供 root 判读）：PS stdout 原始字节保真与编码；PS uppercase 与 Node lowercase SHA 依赖 comparator 归一；快照别名（已按需只复制参与比较/返回的状态与嵌套身份，不整库 JSON 克隆）；假 launcher 只能证明 launcher provenance，不证明 native 同源。
+
+## 2026-10-16 升级候选最终收口（B5 文档整理）
+
+- 行为合同（本地候选，限离线／合成范围）：
+  - B1 模型回退：失败后不再静默写入固定旧模型、不虚构模型能力；保留所选模型与原始错误，失败可重试并由用户主动发起。
+  - B2 回复呈现：partial_answer 只作过程正文，不作为最终答案或任务终态；工具交错、明确 final、历史读取与刷新、导出保持同一语义。
+  - B3 权限请求：兼容 0.130.0／0.162.1 两版离线 schema 的 none／deny／path union／environmentId；省略 scope 时默认到当前 turn；产品只对本轮请求返回允许／拒绝，按精确子集匹配，失败保留可重试。
+  - B4 版本绑定：缓存按代际绑定并防迟到回写；活动启动身份冻结后发布；离线 audit 的 generatedBy／contentDiff 与运行身份比较分别记录，不互相替代。
+- 原始结果（引用 Codex 已执行的本地检查，不在本文重跑）：B4C identity 25/25 raw 0、diagnostics 23/23 raw 0、PowerShell／updater green2 15/15 raw 0（green1 为 blocked raw 2，保留）、可选夹具 10 项 raw 0、capture green2 3/3 raw 0（green1 为 inconclusive raw 2，保留）、最终 server 与 CLI 各 raw 0（server-final3／cli-final3）；pinned portable 离线 audit 子阶段 raw 退出码 0/0/0、TS／JSON 内容 diff 原始退出码均为 1（差异数量不由这个 1 表示）、总退出 1 且 drift-recorded，sanitizer raw 0。更早批次：B4A1 独立 probe 15 组、B4B1 独立 owner 30/30、B4B2 独立 catalog 13/13、B3 policy probe 123/123、B1 候选 50/50（原实现 44/50）。逐批接受记录见下方索引所列 review 文件与 `b4c-review.md`。
+- 单一收口索引：`output/hermes-codex-upgrade-20261015/b5-evidence-index.md`；B4C 最终源码快照 `b4c-final-scope2.json`，B5 前快照 `b5-workspace-before-final.json`。
+- 与上方历史检查点的关系：上一节标题里的“编写未执行”是当时的检查点，本轮最终状态以本节为准；旧失败、旧退出码与旧 RED 全部保留，不因后续通过而抹去。旧 B2 接受记录中的“人工核对”实际是 Codex 对截图的 AI 复核，不是用户或真人的验收。
+- 尚未验证层（本轮本地结果不覆盖）：真实新版 Codex Runtime 与模型可用性、真实 OS 授权执行、当前 7420 使用中的 executable 与版本、安装升级回滚与 2h 浸泡、Android 与物理设备、系统辅助技术、remote CI／release。以上均未由本轮本地结果证明，本轮无 Git 写入、发布或部署。
+- Codex 最终验收：B5 治理首次 raw1（旧 catalogPromise 文本要求过期）；最小对齐当前共享 promise 与身份 key 后，治理复测 raw0。原有产品断言未删除，B5 不改产品源码；scope 与最终接受详见 `output/hermes-codex-upgrade-20261015/b5-review.md`。两个隔离浏览器预览已关闭，真实7420未切换。
+
+### 2026-10-16：新版 Runtime 隔离验证合同
+
+- 使用固定摘要的官方 Runtime 0.162.1 及同标签 code-mode host，在随机 loopback 端口、独立 Codex/User 数据目录验证；不切换真实7420、不发布。
+- 模型：目录可读与实际可调用分别验收；选定模型须真实产生流式内容和 `final_answer`。无效模型须真实失败且不静默替换。目录中其他模型不由单模型调用推定可用。
+- 权限：真实请求须按 thread/turn/request ID 关联；正式 UI 展示精确范围并支持本轮允许、拒绝；中断终态只清除相同 thread/turn 的 pending，迟到响应被拒绝，不替 Runtime 生成授权。可重试/缺身份/冲突身份事件不得误清除其他请求。
+- 回复和恢复：页面先连接、后台新建会话并发出权限请求，再切入会话，须无需刷新出现权限卡；实际点击“仅本轮允许”后完成。在同一正式输入框续聊并收到最终答复，完成后刷新仍保留历史且不复活审批卡。
+- 会话刷新回归覆盖：迟到空快照、迟到 bootstrap、正文补读期间的新请求、普通事件序号较新而权限版本未变、未选中新会话被分页目录遗漏；显式 resolved/权威空结果仍能清除。执行状态快照被排序拒绝时，通过独立权威 pending GET 恢复权限事实；目录缺项不代表权限已解决。
+- 检查入口：`node scripts/verify-conversation-refresh-contract.mjs`、`npm run build:frontend`；服务端终态清理另跑 `npm run verify:server-modules` 和 `npm run build:cli`。真实 UI、原始探针退出码及 Runtime 事件须独立验收，不能以 Hermes 自身退出0或合成回归通过代替。
+- 证据目录：`output/hermes-codex-upgrade-20261015/runtime-isolation/`。保留各次失败；最终状态以 `runtime-validation-review.md` 为准。此节更新前述 B5 的部分未验证层，不证明 OS 沙箱强制执行/授权过期、全部模型资格、未实际出现的回复阶段、升级回滚/2h 浸泡、Android、远程 CI 或发布。
+
+## G1：普通会话列表排除内部工作线程（候选实现，待 root 浏览器验收）
+
+用户入口契约（合成数据下可复现）：默认普通会话列表（`thread/list` 省略或空 `sourceKinds`）不再展示结构化来源可确认的内部线程——`subAgent|subagent` 的 `review`/`compact`/`memory_consolidation`/`guardian` 直值、`{other:'guardian'}`、根 `{internal:'guardian'|'memory_consolidation'}`，以及线程自身严格 `ephemeral === true` / `sideConversation === true`。保留：普通会话（含标题/预览写有 “Guardian review”“compact memory_consolidation”者）、thread_spawn、`{other:'worker'|'guardian-worker'}`、未知/未来来源、缺 source、`{internal:<未知>}`、以及 `'true'`/`1` 等非布尔标记。精确枚举逐字比较（不 trim）；原始 source 优先，其次有限布尔分类，最后回退精确归一化 `sourceKind`。普通列表的原始行在**每一页**（含归档页与游标页）过滤，且归档/游标页不触发补充读取；非空 `sourceKinds` 诊断查询语义不变（内部行保留）。隐藏只影响列表可见性：不归档、不删除、不停止、不改 pins/session_index/消息/审批/Runtime。置顶补充命中列表缓存时同样按普通列表谓词输出，隐藏项不占用可见输出预算；缓存仍保存有效原始 summary，普通列表与诊断查询互不污染缓存。
+
+实现入口：`src/shared/threadVisibility.ts`（唯一谓词 `isThreadVisibleInOrdinaryList`）、`src/server/appServerThreadListAugment.ts`、`src/api/normalizers/v2.ts` + `src/types/codex.ts` + `src/utils/projectGroupOrdering.ts`、`src/composables/useDesktopState.ts`（列表缓存版本 1→2、缓存读/写谓词、活动本地补回守卫）。
+
+验证命令与实测退出码（Windows 显式 `PATH="/d/nvm/v22.19.0:$PATH"`，runner 自带合成 CODEX_HOME；日志见 `output/hermes-codex-upgrade-20261015/followup-20261016/g1b4-*.log`）：
+- `node scripts/verify-conversation-retention.mjs` → 0（7/7，含 v1 旧缓存不 hydrate、v2 缓存只 hydrate 可见行、布尔严格标记、活动旧内部项不被补回）
+- `npm.cmd run verify:frontend-normalizers` → 0；`npm.cmd run verify:server-modules` → 0
+- `npm.cmd run build:cli` → 0；`npm.cmd run build:frontend` → 0；`git diff --check` → 0
+
+未验证边界（候选实现，禁止当作已完成验收）：未做浏览器/桌面/手机实机验收；未读真实 Codex 会话、未跑真实 7420、未做 Runtime/Android/release 验收；截图中“五条”未与真实来源逐条对应；`sideConversation` 与 `{internal:...}` 为合成兼容形态。以上均由 root 另行验收。
+
+### G1 候选实现边界（G1B4c 更正）
+
+- 侧栏列表缓存：版本 1→2；读取与写入都按同一普通列表谓词过滤；可见组为空时**删除本列表缓存键**（不再留下旧磁盘行）。只动这一个 key，消息缓存/outbox/认证/hidden IDs/pins 不受影响。
+- 侧栏“活动旧项补回”守卫（`mergeIncomingWithLocalInProgressThreads` 内的可见性过滤）**尚未被测试证明**：现有合成夹具无法在不制造生产可见状态的情况下让活动判定为真，该私有路径留待 root 单独验证。
+- `node scripts/verify-conversation-retention.mjs` 当前为 **7/8（退出码 1）**：空缓存持久化用例已通过；「running ordinary cached row survives an empty refresh」仍未达成，不得当作已通过；`npm.cmd run build:frontend` 与 `git diff --check` 为 0。
+
+### G1B4d 更正（retention 现状与边界）
+
+- `node scripts/verify-conversation-retention.mjs` 现为 **8/8（退出码 0，51 次 mock HTTP）**，`git diff --check` 为 0；此前的 7/8 结论作废（保留于 `g1b4c-checkpoint.md` 与旧日志）。
+- running 夹具已改用独立线程 ID（`thread-running-fixture`）与按请求 ID 返回的 transcript，避免 gateway 模块级 per-thread 快照缓存复用旧的“已完成”状态；`/state`、`/runtime`、`thread/read` 三处对同一 ID 描述同一 transcript。未改产品缓存与活动状态规则。
+- 边界：本套件能证明的是公开路径（缓存 hydrate 过滤、空缓存不落盘、运行中普通行在空列表刷新后保留且旧 completed 文本可读）；私有 `mergeIncomingWithLocalInProgressThreads` 的活动补回守卫由 root 独立用例验证，本套件不声称覆盖。
+
+### K1 任务看板手工验收合同（待 root 在真实构建上执行，当前未通过）
+
+- 正常 App：侧栏既有三格快捷行保持不变，第二行「看板」→ 四列标题与实际计数；搜索与项目下拉（含「全部项目」）改变筛选后计数同步变化；点卡片进入真实 `/thread/:threadId`，浏览器返回仍回到看板；直达与刷新 `/#/task-board`（以及 `/task-board` 干净路径）都落到看板，不会被当成普通会话。
+- 状态反馈：加载中、空筛选、读取失败后可重试、状态未确认/待同步（需关注列）文案与卡片状态一致；离线提示只在浏览器离线时出现；某列超过 20 张时每次只增加 20 张「显示后 N 个」并可「收起」，不会一次渲染全部。
+- 响应式与可达性：393px 单列、884px 两列、桌面四列均无横向溢出；Tab 可达侧栏看板入口、筛选项、刷新、卡片与「显示后 N 个」，焦点可见；深色主题沿用现有变量，无新增全局主题改动。
+- 范围：投影/网关/取数证据均为合成 fetch 与本地脚本；本批只提交源码与合成验证结果，页面通过与否由 root 在真实构建上判定，不覆盖助手对话、派发或后台执行。
+
+### 2026-10-16 root 顺序验收与助手身份合同
+
+- G1：正常构建页面已完成桌面、393px、884px 验证；结构化内部/临时会话不进入普通列表，名称含 Guardian review 的普通会话保留。此前“未做浏览器验收”仅描述当时实现检查点；当前结论见 `output/hermes-codex-upgrade-20261015/followup-20261016/g1-root-acceptance.md`。截图中的真实五条未逐条映射，未清理真实数据。
+- P1：设置只保留「自动批准权限请求」总开关；默认关闭；保存中防重入、失败可见并回读权威值。正常页面已测手机 Enter/Space、保存/刷新、延迟与失败恢复。关闭不会撤销既有会话授权；不能据此宣称 OS 撤权通过。证据见同目录 `p1-root-acceptance.md`。
+- U1a：检测更新区分 Web/后端身份，识别不可读版本、旧接口、查询失败与实例变化。当前仅只读检测；自动安装、Android 真机升级和回滚未实现/未验收。实际页面结果见 `u1-root-acceptance.md`。
+- K1：正常看板页面的筛选、16 张可见卡片（2/2/10/2）、刷新防重、失败/离线/重试、会话跳转与返回、干净/hash 路由刷新、三宽度与暗色已实际验证，见 `k1-root-acceptance.md`。只覆盖当前已加载会话的最近状态；不把整页数据假称全量任务系统。最终独立页面复核另记于本轮报告。
+
+A1 可重复入口：正常 App 侧栏「助手」，直达 `/assistant` 或 `/#/assistant`。首次打开只 GET，不创建记录；用户明确「保存助手」才写入名称和已配置工作区。身份为服务端生成的单例 ID，使用 SQLite 持久化及修订号冲突检查，主对话 ID 为空。
+
+必须保留的用户行为：
+
+- 首次空态、保存、刷新后同一身份；保存期间名称/工作区和保存按钮停用，Enter 不重复写入。
+- 保存失败同时保留已保存摘要和未保存草稿；409 后回读当前身份但保留草稿，只有再次明确保存才使用新修订号写入。
+- 冲突后的回读失败时禁止保存，提供「重试读取」，恢复后仍保留草稿；初次读取失败也不得假称未配置/已保存。
+- 离页取消及旧响应不得污染新页面；手机侧栏导航关闭抽屉；键盘焦点可见；桌面/393px/884px 无横向溢出，主要控件至少44px。
+- 实际停止并新建隔离服务进程，使用同一个任务临时 SQLite，身份 ID/名称/修订号/创建时间不变；这证明助手身份恢复，不证明 Runtime 授权或后台任务恢复。
+- 页面明确「主对话、任务派发、后台执行未接入」，不提供假发送框、自动创建会话或假任务执行。
+
+A1 实测：`node scripts/assistant-gateway-smoke.mjs` 9组通过；`node scripts/assistant-identity-route-smoke.mjs` 27项实际 HTTP/临时 SQLite 检查通过；存储独立并发进程检查通过；前端与 CLI 构建、隔离 server-module 全套通过。正常构建页面操作见 `a1-browser-matrix.raw.log`，重启及最终截图见 `a1-final-capture.raw.log`、`a1-app-run2/root-evidence-result.json`。所有此处路径均相对于上述 followup 目录（公共 scripts 除外）。后续最终页面复核与范围以本轮验收报告为准。
+
+### 2026-10-16 A2 主对话基础与恢复保护（完整功能未验收）
+
+- 新增专用 `POST /codex-api/assistant/conversation` 和服务端原子单例预留；修订号、工作区与内容绑定冲突必须可见。重复请求和重启读取不得再次发送。生产未配置经验证的受限 starter 时，`conversation=false`，有效 POST 返回503并且不预留主对话；普通 starter 不能启用此能力。
+- 受控助手请求在外发前写入不可自动重放的标记。缺失线程/轮次回执、传输断开或不明确的 thread-not-found 文本保持未知，不能冷启动重发或使用其他活动轮次ID冒充成功。该恢复保护不是角色授权；不能凭客户端消息前缀信任请求来源。
+- 可重复局部验证：`node scripts/assistant-conversation-smoke.mjs`（40次实际HTTP、临时SQLite、合成native transport）；`node scripts/assistant-runtime-recovery-smoke.mjs`（9个故障场景，实际Runtime starter）；`node scripts/assistant-gateway-smoke.mjs`（10组API适配）。普通既有身份HTTP/存储回归仍通过；前端构建、CLI构建、隔离server modules通过。精确结果见 `output/hermes-codex-upgrade-20261015/assistant-next-20261016/a2-root-review.md`。
+- 正常构建页面：桌面/393px/884px打开助手→明确保存身份→刷新；注入一次GET503→保存停用→点击重试恢复；实际退出并重启隔离App服务后身份不变。浏览器直接请求主对话端点仍503，无主线程预留、无native start。页面保持“主对话尚未接入”，不提供假发送框。该页面证据仅验收基础状态和错误恢复，不是主对话多轮闭环通过。
+- 原生0.162.1在任务专用数据目录及本地合成模型/MCP端点完成13项协议断言，含worker写入/补丁/资源读取正控，以及主线程与同一线程冷恢复的明确只读拒绝。尚未接入共享生产Bridge、普通发送、队列与动态工具来源校验；真实模型推理、本产品主对话、任务派发和结果回传均未因本轮通过。A2整体未验收，D1/R1未开始；未切换真实7420、未发布。
+
+隔离范围：实际构建的 App/路由/临时身份数据库；会话数据、工作区和更新元数据均为合成。真实 Runtime R5 仍因地区403待验收；Android设备、真实7420切换、发布均未执行。旧测试隔离不足导致真实认证文件是否被旧 smoke 触达无法追溯，已修正后续测试 HOME/CODEX_HOME 隔离，详见 `test-home-root-acceptance.md`；不能宣称本轮所有真实数据绝对未触及。
+
+最终页面复核：独立审查首次要求看板≤1023px补16px边距；Hermes完成后前端构建0、`a1-review-fix-capture.exit.txt=0`，原8张截图重新捕获，旧图已哈希复制保留。复核该项 resolved、disposition ship（仅评分该修正，无新增可见回归）；设计核对 No changes。最终请求审计见 `a1-app-run3/root-evidence-result.json`，0意外请求/执行RPC；完整收口和未完成范围见 `batch-acceptance-report.md`。
+
+### 2026-10-17 运行开销与预览加载回归
+
+- `npm run verify:runtime-slimming`：会话详情缓存保持最多64项的LRU；命中更新顺序、替换、删除和clear不改变数据投影。缓存淘汰只影响可重读的数据，不删除会话或持久状态。
+- 列表缓存的内存失效仍立即生效，同一同步批次及写入期间的多次更新合并序列化；等待落盘必须覆盖最新状态，序列化/磁盘失败不能阻断RPC。不是跨事件限频，也不是可靠消息存储。
+- 宠物任务按原顺序选最多8项后投影；选中任务插入、稳定排序和响应式更新保持。Web不计算仅供原生watch使用的数据，其他Web预览仍可读取投影。Android行为由Vue单测验证，未据此验收真机。
+- PDF与Word引擎分别按需加载；文本/JSON/Markdown/图片不加载两者。实际页面验收使用构建后的`local-preview.html`与合成文件：文本内容、Markdown不执行脚本、图片解码、PDF两页与缩放、Word正文可见；CSP与legacy worker配置保持。仅PDF请求worker，Word不请求PDF引擎。动态import失败仍使用已有文档错误分支（合成边界测试）。
+- 日志路径只合并同home与UUID尚未结束的扫描，成功/空/失败均清理；后续请求仍能发现新日志与较新分片。metadata身份、目录junction和既有软链拒绝保持。`npm run verify:session-identity`可独立复核；Windows文件symlink无法创建时必须报告skip。
+- 生产依赖分类保持所有版本和integrity不变。独立目录`npm ci --omit=dev --ignore-scripts`与CLI help通过，九个前端依赖不可解析；SQLite读写重开使用已存在的同平台原生二进制单独验证。不能把禁用生命周期的安装当作原生addon新装通过；Windows源码安装器仍完整安装并构建。
+- 本轮构建、浏览器、RED/GREEN与安装证据：`output/runtime-slimming-20261017/report.md`。正常App看板和宠物预览仅使用隔离合成数据；真实Runtime、Android设备、真实7420和发布不属于本轮验收。
+
+### 2026-10-17 运行包调试文件分离与小图资源
+
+- `npm run build:cli` 应在 `output/cli-debug/<内容哈希>/` 留存原始JS、含sourcesContent的map和SHA-256清单，运行目录只保留无sourceMappingURL注释的 `index.js`。使用清单的 `runtimeSha256` 对应运行文件，归档中的原始JS与map必须成对保留；调试目录独立于普通运行包。
+- `npm run verify:cli-debug` 覆盖归档/运行文件一致性、源码映射、重复构建幂等、不完整map与归档冲突失败保护。npm模拟打包清单不得携带 `.map` / `output/`，应保留CLI和必要运行资源。归档失败时必须保留未归档的构建文件并使构建失败。
+- 小尺寸品牌图使用 `public/branding/cx-codex-ui-icon-192.png`，逐字节复用既有Android 192px launcher；启动入口、设置品牌、宠物进入按钮与文档夹具的小图引用应指向该资源，CSS尺寸、alt和点击行为不变。原始公开品牌图和Android资源保持；大图预览夹具继续使用原始资源。图片解码、192×192尺寸、资源/构建字节一致以及前端构建已验证。
+- 本批按用户要求未打开浏览器。后续浏览器验收：进入启动入口/设置，展开宠物任务栏与文档夹具，检查小图在明暗主题和高DPI下可辨、未拉伸或偏移，点击行为不变；请求小图资源正常，刷新后仍正常。页面视觉与实际设备当前均待验收，不能以静态解码代替。
+- 精确构建、包清单、哈希、体积和未验证边界见 `output/package-assets-slimming-20261017/report.md`。不启动真实7420、不执行发布命令、不发布或部署；本轮没有新增产品依赖。
+
+### 2026-10-17 更新后本地7420实际浏览器验收
+
+- 用户授权对更新后的真实本地7420进行页面验收和问题修复。新会话请求已接受但尚无线程ID时，通知触发的持久outbox恢复不得把`pending_start`误标成失败；保持相同`clientMessageId`和“正在确认送达”，等待权威线程身份。明确拒绝、断网和已知失败仍走原有分支。
+- `node scripts/verify-delivery-contract.mjs`新增通知与新会话启动竞态用例：修复前51/52、退出1，修复后52/52、退出0；`npm run build:frontend`通过。仅更新本地7420前端，保留旧哈希资源与覆盖文件备份，不重启后端、不发布。
+- BrowserSkill真实页面：桌面1264×715、手机模拟393×852。权限只有一个总开关，关闭后刷新仍关闭，最终恢复原开启状态；网页和后端均显示2.8.1。助手身份保存并刷新保留；看板搜索、项目筛选、执行中/已完成、卡片打开结果可操作。三次新会话和一次追加回复实际返回，刷新保留两轮结果；修复后新会话66次DOM状态采样未出现失败标记。Chrome模拟手机不等同Android真机验收。
+- **未通过项**：助手主对话、任务派发、后台执行和结果回传仍未接入，不得把身份保存或普通会话成功当作助手链路成功。检测后端更新的GitHub官方API实际限流（HTTP403、配额0），当前安装方式不支持自动安装；未执行安装更新、Android升级或发布。
+- 看板只覆盖侧栏已加载会话；本轮曾观察到列表刷新期间新任务短暂缺席/项目未确认，完整页面重载后324个会话含本轮全部3项。未以此证明跨页面列表即时收敛或长时稳定性。
+- 证据、截图、构建/回归日志、实际资源校验与回滚方法：`output/browser-acceptance7420-20261017/report.md`。
+
+## 2026-10-18 助手主对话、文本任务派发与回传候选
+
+- 新验收契约：助手身份对应唯一主对话；主对话使用受限协调角色和三个宿主工具，复杂文本任务交给单一后台执行槽位。任务来源、工作区、模型、提示哈希与权限在服务端冻结；公开 Runtime/RPC 不得伪造内部请求或改变托管 worker。当前只支持提供文本的只读分析，不支持文件、命令、图片或 MCP 执行。
+- 回传复用既有 RuntimeMessageQueue；任务完成与回传完成分别显示。仅匹配原生 worker 线程/轮次的终态及 explicit final_answer 可冻结成功结果；仅匹配主对话汇总轮次的原生终态/最终答案可标记已回传。排队、Runtime.completed、commentary、超时和停止意图均不能代替该证据。持久写入边界之后未知结果保留占位且不自动重发；旧轮次快照不得终结尚未取得 native turn ID 的助手请求。
+- 定向验证：`node --test scripts/assistant-*.test.mjs`；前端 `npm run build:frontend`（只使用 vue-tsc --noEmit）、后端 `npm run build:cli`、`npm run verify:server-modules`。覆盖 SQLite 事务竞争/主机接管、私有原生上下文、伪造来源、晚到 native ID 与停止、最终答案缺失、忙碌排队、回传队首失败、未知写入不重放及超过100轮主对话。
+- 页面验收入口为隔离候选 `http://127.0.0.1:17427/#/assistant`：保存身份→开始主对话→要求派发文本分析→刷新查看任务→查看只读执行记录→回主对话看结果；刷新及受控重启后 ID/数量保持一致。桌面和393×852手机模拟检查任务状态、禁用发送/回退/计划执行入口、回传提示与横向溢出。真实页面实际结果与限制以 `output/hermes-codex-upgrade-20261015/assistant-connect-20261017/report.md` 为准，不能把测试替身当实际模型或设备验收。
+- 候选没有替换真实7420，也没有提交、推送或发布。此前章节“主对话/派发/回传未接入”仍描述此前已安装版本；本节仅描述此次源码候选。Android、OS级执行和长期运行仍待验收。

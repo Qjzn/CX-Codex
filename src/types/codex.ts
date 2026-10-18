@@ -135,10 +135,20 @@ export type UserInput = {
 
 export type UiThread = {
   id: string
+  /** Backend-owned assistant worker; execution is controlled from the assistant. */
+  assistantManaged?: boolean
   title: string
   projectName: string
   cwd: string
   sourceKind?: string
+  /**
+   * Finite ordinary-list visibility classification captured from the raw source before sourceKind is
+   * coarsened (see src/shared/threadVisibility.ts). Only these booleans are kept - never a raw Thread
+   * copy. Absent values mean "unknown" and stay visible.
+   */
+  internalSource?: boolean
+  ephemeral?: boolean
+  sideConversation?: boolean
   hasWorktree: boolean
   createdAtIso: string
   updatedAtIso: string

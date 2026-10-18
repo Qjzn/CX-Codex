@@ -47,6 +47,10 @@ export function areUiThreadFieldsEqual(first: UiThread, second: UiThread): boole
     first.projectName === second.projectName &&
     first.cwd === second.cwd &&
     first.sourceKind === second.sourceKind &&
+    first.assistantManaged === second.assistantManaged &&
+    first.internalSource === second.internalSource &&
+    first.ephemeral === second.ephemeral &&
+    first.sideConversation === second.sideConversation &&
     first.hasWorktree === second.hasWorktree &&
     first.createdAtIso === second.createdAtIso &&
     first.updatedAtIso === second.updatedAtIso &&
@@ -161,6 +165,11 @@ export function preserveResolvedThreadProjectIdentity(
             cwd: previousOccurrence.thread.cwd,
             hasWorktree: previousOccurrence.thread.hasWorktree,
             sourceKind: thread.sourceKind || previousOccurrence.thread.sourceKind,
+            // Fresh classification wins; only an absent value falls back to the previous occurrence,
+            // so a reused UiThread object can never silently drop the finite visibility fields.
+            internalSource: thread.internalSource ?? previousOccurrence.thread.internalSource,
+            ephemeral: thread.ephemeral ?? previousOccurrence.thread.ephemeral,
+            sideConversation: thread.sideConversation ?? previousOccurrence.thread.sideConversation,
           }
         : thread.projectName === targetProjectName
           ? thread

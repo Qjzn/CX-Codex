@@ -1800,6 +1800,87 @@ assert.equal(groups[0]?.threads[0]?.sourceKind, 'cli')
 assert.equal(groups[0]?.threads[1]?.sourceKind, 'subAgent.thread_spawn')
 assert.equal(groups[0]?.threads[2]?.sourceKind, 'futureSource')
 
+// G1 visibility matrix: structured internal sources and strict ephemeral/sideConversation
+// flags must not surface in the normal list, while unknown/future sources, thread_spawn,
+// other worker values and same-named normal conversations stay visible.
+const visibilityRow = (id, updatedAt, source, flags) => ({
+  id,
+  cwd: 'E:\\\\repo',
+  preview: 'Visibility row ' + id,
+  modelProvider: 'openai',
+  cliVersion: '0.0.0',
+  createdAt: 1,
+  updatedAt,
+  path: null,
+  source,
+  gitInfo: null,
+  turns: [],
+  ...(flags || {}),
+})
+const visibilityRowWithoutSource = (id, updatedAt) => {
+  const row = visibilityRow(id, updatedAt, 'cli')
+  delete row.source
+  return row
+}
+const visibilityRows = [
+  visibilityRow('vis-cli-normal', 210, 'cli'),
+  visibilityRow('vis-guardian-other', 209, { subAgent: { other: 'guardian' } }),
+  visibilityRow('vis-guardian-legacy-lowercase', 208, { subagent: { other: 'guardian' } }),
+  visibilityRow('vis-subagent-review', 207, { subAgent: 'review' }),
+  visibilityRow('vis-subagent-compact', 206, { subAgent: 'compact' }),
+  visibilityRow('vis-subagent-memory-consolidation', 205, { subAgent: 'memory_consolidation' }),
+  visibilityRow('vis-guardian-direct-value', 204, { subAgent: 'guardian' }),
+  visibilityRow('vis-internal-guardian', 203, { internal: 'guardian' }),
+  visibilityRow('vis-internal-memory-consolidation', 202, { internal: 'memory_consolidation' }),
+  visibilityRow('vis-internal-unknown', 201, { internal: 'future_internal' }),
+  visibilityRow('vis-ephemeral-true', 200, 'cli', { ephemeral: true }),
+  visibilityRow('vis-side-conversation-true', 199, 'cli', { sideConversation: true }),
+  visibilityRow('vis-ephemeral-false', 198, 'cli', { ephemeral: false }),
+  visibilityRow('vis-side-conversation-false', 197, 'cli', { sideConversation: false }),
+  visibilityRow('vis-thread-spawn', 196, { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }),
+  visibilityRow('vis-worker', 195, { subAgent: { other: 'worker' } }),
+  visibilityRow('vis-guardian-worker', 194, { subAgent: { other: 'guardian-worker' } }),
+  visibilityRow('vis-unknown-source', 193, 'unknown'),
+  visibilityRow('vis-future-source', 192, { futureSource: { enabled: true } }),
+  visibilityRowWithoutSource('vis-no-source', 191),
+  visibilityRow('vis-cli-title-guardian-review', 190, 'cli', { name: 'Guardian review' }),
+  visibilityRow('vis-cli-preview-compact-memory', 189, 'cli', { preview: 'compact memory_consolidation' }),
+  // Strict boolean markers: only the literal boolean true hides a thread.
+  visibilityRow('vis-spawn-ephemeral', 188, { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }, { ephemeral: true }),
+  visibilityRow('vis-ephemeral-string-true', 187, 'cli', { ephemeral: 'true' }),
+  visibilityRow('vis-side-conversation-number-one', 186, 'cli', { sideConversation: 1 }),
+  // Unpadded exact enums only: these padded raw spellings must stay visible even though the
+  // display sourceKind normalization trims them to subAgent.guardian / subAgent.review.
+  visibilityRow('vis-subagent-padded-guardian', 185, { subAgent: ' guardian ' }),
+  visibilityRow('vis-subagent-padded-review', 184, { subAgent: ' review ' }),
+  visibilityRow('vis-guardian-other-padded', 183, { subAgent: { other: 'guardian ' } }),
+]
+const visibilityGroups = normalizeThreadGroupsV2({ data: visibilityRows, nextCursor: null })
+
+assert.equal(visibilityGroups.length, 1)
+assert.deepEqual(visibilityGroups[0]?.threads.map((thread) => thread.id), [
+  'vis-cli-normal',
+  'vis-internal-unknown',
+  'vis-ephemeral-false',
+  'vis-side-conversation-false',
+  'vis-thread-spawn',
+  'vis-worker',
+  'vis-guardian-worker',
+  'vis-unknown-source',
+  'vis-future-source',
+  'vis-no-source',
+  'vis-cli-title-guardian-review',
+  'vis-cli-preview-compact-memory',
+  'vis-ephemeral-string-true',
+  'vis-side-conversation-number-one',
+  'vis-subagent-padded-guardian',
+  'vis-subagent-padded-review',
+  'vis-guardian-other-padded',
+])
+assert.equal(visibilityGroups[0]?.threads[0]?.sourceKind, 'cli')
+assert.equal(visibilityGroups[0]?.threads[4]?.sourceKind, 'subAgent.thread_spawn')
+assert.equal(visibilityGroups[0]?.threads[8]?.sourceKind, 'futureSource')
+
 const recentProjectGroups = orderProjectGroupsByRecentActivity([
   {
     projectName: 'empty-project',

@@ -454,6 +454,7 @@ if (-not $SkipPackageSmoke) {
     "scripts\run-powershell-script.mjs",
     "scripts\manage-windows-service.ps1"
   ) -ForbiddenEntries @(
+    "dist-cli\index.js.map",
     "src\server\codexAppServerBridge.ts",
     "scripts\verify-release.ps1",
     "tests.md"

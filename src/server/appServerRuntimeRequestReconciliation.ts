@@ -69,10 +69,28 @@ export function updateRuntimeRequestsFromSnapshot(
   runtimeStore: RuntimeRequestReconciliationStore,
 ): number {
   const activeRequests = runtimeStore.listRequestsByThread(threadId, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES)
+  let updatedCount = 0
   for (const request of activeRequests) {
+    // Backend-managed requests (assistant-main/task/report) are reported via their own
+    // native report turn/start. Before that receipt arrives, the thread snapshot still
+    // describes the OLD main-thread turn, so applying it would wrongly mark the unsent
+    // report completed and drop its durable payload. Only bound requests (turnId set)
+    // can be identified by the thread snapshot.
+    if (isUnboundBackendManagedRequest(request)) continue
     runtimeStore.updateRequest(request.requestId, createRuntimeRequestSnapshotPatch(request, threadId, snapshot))
+    updatedCount += 1
   }
-  return activeRequests.length
+  return updatedCount
+}
+
+const RUNTIME_BACKEND_MANAGED_CLIENT_MESSAGE_ID_PREFIX =
+  /^(assistant-main|assistant-task|assistant-report):/
+
+export function isUnboundBackendManagedRequest(
+  request: Pick<RuntimeRequestRecord, 'clientMessageId' | 'turnId'>,
+): boolean {
+  return !request.turnId
+    && RUNTIME_BACKEND_MANAGED_CLIENT_MESSAGE_ID_PREFIX.test(request.clientMessageId)
 }
 
 export function createRuntimeThreadReconciler(

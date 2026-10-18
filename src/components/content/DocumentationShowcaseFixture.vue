@@ -21,7 +21,7 @@
   <main v-else-if="isSetupView" class="docs-setup-page" aria-label="CX-Codex connection setup demo">
     <section class="docs-setup-card">
       <div class="docs-setup-brand">
-        <img src="/branding/cx-codex-app-icon.png" alt="" class="docs-setup-logo" />
+        <img src="/branding/cx-codex-ui-icon-192.png" alt="" class="docs-setup-logo" />
         <div>
           <p class="docs-setup-kicker">CX-Codex</p>
           <h1>连接你的 Codex</h1>
@@ -50,7 +50,7 @@
       <section class="docs-sidebar sidebar-root">
         <div class="docs-sidebar-toolbar">
           <div class="docs-sidebar-brand">
-            <img src="/branding/cx-codex-app-icon.png" alt="" />
+            <img src="/branding/cx-codex-ui-icon-192.png" alt="" />
             <span>CX-Codex</span>
           </div>
           <button type="button" aria-label="收起侧栏" @click="closeMobileDrawer">

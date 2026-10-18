@@ -64,6 +64,7 @@ export type RuntimeMessageQueueEntry = {
 export type RuntimeMessageQueueDependencies = {
   store: RuntimeMessageQueueStore
   startRuntimeTurn(payload: unknown): Promise<unknown>
+  shouldApplyQueuedSpeedMode?: (payload: unknown) => boolean
   rpc(method: string, params: unknown): Promise<unknown>
   publishNotification(notification: { method: string; params: unknown }): void
   getErrorMessage(error: unknown, fallback: string): string
@@ -298,7 +299,7 @@ export class RuntimeMessageQueue {
           })
         }
       }
-      await this.applyQueuedSpeedMode(next.payload)
+      if (this.dependencies.shouldApplyQueuedSpeedMode?.(next.payload) !== false) await this.applyQueuedSpeedMode(next.payload)
       const pending = this.dependencies.store.getRequest(next.requestId)
       if (!pending || pending.status !== 'queued') return
       // Configuration may await a slow RPC while the user changes the queue.

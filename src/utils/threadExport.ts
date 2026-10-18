@@ -40,11 +40,34 @@ function appendTurn(lines: string[], turn: ConversationTurn): void {
     if (attachments.length > 0) appendList(lines, '附件', attachments)
   }
 
-  if (turn.commentary.length > 0 || turn.activities.length > 0) {
+  // One chronological pass over the projected blocks so a partial answer keeps
+  // its own position: process entries open one execution-process section, a
+  // partial answer closes it and gets its own answer section.
+  let processOpen = false
+  const openProcess = (): void => {
+    if (processOpen) return
     lines.push('### 执行过程')
     lines.push('')
-    for (const commentary of turn.commentary) appendText(lines, commentary.text)
-    for (const activity of turn.activities) appendActivity(lines, activity)
+    processOpen = true
+  }
+  for (const block of turn.blocks) {
+    if (block.kind === 'activity') {
+      openProcess()
+      appendActivity(lines, block)
+      continue
+    }
+    if (block.kind !== 'assistant' || block.phase === 'final') continue
+    if (block.phase === 'partial') {
+      if (block.text.trim()) {
+        lines.push('### Codex 部分回复')
+        lines.push('')
+        appendText(lines, block.text)
+      }
+      processOpen = false
+      continue
+    }
+    openProcess()
+    appendText(lines, block.text)
   }
 
   if (turn.fileChanges.length > 0) {

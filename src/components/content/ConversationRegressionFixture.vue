@@ -4,10 +4,11 @@
     aria-label="Conversation block regression fixture"
     :data-ux-baseline-state="uxBaselineState || undefined"
     :data-ux-horizontal-overflow="isUxBaselineFixture ? String(uxBaselineHasHorizontalOverflow) : undefined"
+    :data-permissions-approval-state="isPermissionsApprovalFixture ? permissionsApprovalState : undefined"
   >
     <section
       class="conversation-regression-shell"
-      :class="{ 'conversation-regression-shell--constrained-height': hasStreamingMetrics || isScrollReturnFixture }"
+      :class="{ 'conversation-regression-shell--constrained-height': hasStreamingMetrics || isScrollReturnFixture || isPartialAnswersRunning }"
     >
       <header class="conversation-regression-header">
         <p class="conversation-regression-kicker">Regression Fixture</p>
@@ -67,17 +68,41 @@
           aria-hidden="true"
         />
       </div>
+      <div v-if="isPartialAnswersFixture" class="conversation-scroll-switch-controls" data-testid="partial-answers-controls">
+        <span
+          class="conversation-scroll-switch-state"
+          :data-partial-answers-state="partialAnswersState"
+          :data-partial-stage-append-count="partialAnswersAppendCount"
+          aria-hidden="true"
+        />
+        <button
+          v-if="isPartialAnswersRunning"
+          type="button"
+          data-fixture-action="append-partial"
+          @click="appendPartialStageText"
+        >
+          追加阶段正文
+        </button>
+        <button v-if="isPartialAnswersFrozen" type="button"
+          data-fixture-action="extend-frozen-tool-group" @click="extendFrozenToolGroup">
+          追加同组工具
+        </button>
+        <button v-if="isPartialAnswersFrozen" type="button"
+          data-fixture-action="insert-frozen-partial" @click="insertFrozenPartialBoundary">
+          插入阶段边界
+        </button>
+      </div>
       <ThreadConversation
         v-if="!isQueueFailureFixture"
         ref="threadConversationRef"
         class="conversation-regression-thread"
         :projection="fixtureProjection"
         :is-loading="false"
-        :is-turn-in-progress="isUxBaselineFixture ? isUxBaselineRunning : isSendFeedbackFixture ? sendFeedbackPhase === 'running' : !isLoadFailureFixture && !isDetachedFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture && !isMarkdownSemanticFixture && !isAttachmentEnvelopeFixture"
+        :is-turn-in-progress="isPartialAnswersFixture ? isPartialAnswersRunning : isUxBaselineFixture ? isUxBaselineRunning : isSendFeedbackFixture ? sendFeedbackPhase === 'running' : !isLoadFailureFixture && !isDetachedFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture && !isMarkdownSemanticFixture && !isAttachmentEnvelopeFixture"
         :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
-        :active-thread-id="activeThreadId"
+        :active-thread-id="isPermissionsApprovalFixture ? permissionsFixtureThreadId : activeThreadId"
         cwd="E:/workspace/CXCodex/codexui"
         :scroll-state="activeScrollState"
         :favorite-message-ids="favoriteMessageIds"
@@ -115,10 +140,12 @@
       <span
         class="conversation-regression-server-response"
         :data-last-response="lastServerRequestResponse"
+        :data-response-count="serverRequestResponses.length"
+        :data-responses="serverRequestResponsesJson"
         aria-hidden="true"
       />
       <QueuedMessages
-        v-if="!isSendFeedbackFixture && !isLoadFailureFixture && !isDetachedFailureFixture && !isUxBaselineFixture && !isMarkdownSemanticFixture && !isAttachmentEnvelopeFixture"
+        v-if="!isSendFeedbackFixture && !isLoadFailureFixture && !isDetachedFailureFixture && !isUxBaselineFixture && !isMarkdownSemanticFixture && !isAttachmentEnvelopeFixture && !isPartialAnswersFixture"
         class="conversation-regression-queue"
         :messages="queuedMessages"
         :is-processing="!isQueueFailureFixture && !isNativeWriterQueueFixture && !isQueueReorderFixture"
@@ -141,9 +168,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, effectScope, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ThreadConversation from './ThreadConversation.vue'
 import { beginChatFeedbackMetric, chatFeedbackNow, markChatFeedbackFirstAssistantData, markChatFeedbackServerAcknowledged } from '../../composables/chatFeedbackMetrics'
+import { useDesktopState } from '../../composables/useDesktopState'
 import QueuedMessages from './QueuedMessages.vue'
 import FailedMessagesTray from './FailedMessagesTray.vue'
 import {
@@ -306,8 +334,8 @@ const allPendingRequests: UiServerRequest[] = [
         question: '请选择需要覆盖的设备。',
         isOther: true,
         options: [
-          { label: '桌面、手机和折叠屏' },
-          { label: '仅桌面' },
+          { label: '桌面、手机和折叠屏', description: '覆盖主要使用场景，验证时间较长。' },
+          { label: '仅桌面', description: '快速检查当前页面，不包含移动端体验。' },
         ],
       }],
     },
@@ -419,6 +447,208 @@ const fixtureImplementingPlanId = ref(fixtureParams.get('planSubmitting') === '1
 const fixtureImplementedPlanIds = ref<string[]>(isPlanSubmittedFixture ? ['plan:fixture-plan-turn'] : [])
 const activeThreadId = ref(isScrollSwitchRaceFixture ? 'regression-scroll-a' : 'regression-conversation-blocks')
 if (isSendFeedbackFixture) beginSendFeedbackSample()
+
+// B3C dedicated permissions-approval samples. Only raw production wire inputs are declared here:
+// the projection, the interaction rows and the reply chain stay production code paths. The
+// Windows-style sample paths keep the literal text used by the independent browser probe.
+const permissionsApprovalState = fixtureParams.get('permissionsApproval') ?? ''
+const isPermissionsApprovalFixture = ['legacy', 'current', 'unknown', 'retry'].includes(permissionsApprovalState)
+const isPermissionsRetryFixture = permissionsApprovalState === 'retry'
+const permissionsFixtureThreadId = 'b3c-fixture-thread'
+const permissionsFixtureTurnId = 'b3c-fixture-turn'
+const permissionsFixtureStartedAtMs = 1788998400000
+const permissionsFixtureReceivedAtIso = '2026-09-10T00:00:01Z'
+
+const permissionsLegacyRead = Array.from(
+  { length: 12 },
+  (_, index) => `E:\\b3c-example\\read-${String(index + 1).padStart(2, '0')}\\原文 资料.txt`,
+)
+const permissionsLegacyWrite = [
+  'E:\\b3c-example\\write-01\\结果.json',
+  'E:\\b3c-example\\write-02\\结果.md',
+  'E:\\b3c-example\\write-03\\末项.txt',
+]
+const permissionsLegacyFileSystem = {
+  read: permissionsLegacyRead,
+  write: permissionsLegacyWrite,
+  entries: [
+    { path: { type: 'path', path: 'E:\\b3c-example\\entry-read.txt' }, access: 'read' },
+    { path: { type: 'path', path: 'E:\\b3c-example\\entry-write.txt' }, access: 'write' },
+    { path: { type: 'path', path: 'E:\\b3c-example\\restricted-none.txt' }, access: 'none' },
+  ],
+}
+const permissionsCurrentRead = [
+  '/srv/b3c-example/只读 资料/客户清单.csv',
+  './workspace/相对 路径/report.md',
+  'D:\\b3c-example\\原文 路径\\输入.txt',
+  ...Array.from({ length: 9 }, (_, index) => `./workspace/read-${String(index + 4).padStart(2, '0')}/原文 资料.txt`),
+]
+const permissionsLiteralPath = './workspace/<b3c-probe-literal data-scope="unsafe">.txt'
+const permissionsCurrentFileSystem = {
+  read: permissionsCurrentRead,
+  write: ['./workspace/output/结果.json'],
+  globScanMaxDepth: 3,
+  entries: [
+    { path: { type: 'path', path: './workspace/entry-read.txt' }, access: 'read' },
+    { path: { type: 'glob_pattern', pattern: 'src/**/[权限]*.ts' }, access: 'write' },
+    { path: { type: 'special', value: { kind: 'root' } }, access: 'deny' },
+    { path: { type: 'special', value: { kind: 'minimal' } }, access: 'read' },
+    { path: { type: 'special', value: { kind: 'project_roots', subpath: '包/只读 资料' } }, access: 'write' },
+    { path: { type: 'special', value: { kind: 'tmpdir' } }, access: 'write' },
+    { path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'read' },
+    { path: { type: 'path', path: permissionsLiteralPath }, access: 'deny' },
+  ],
+}
+const permissionsUnknownFileSystem = {
+  read: ['./workspace/unknown-readable.txt'],
+  write: null,
+  entries: [
+    {
+      path: { type: 'special', value: { kind: 'unknown', path: './workspace/future-scope', subpath: 'future-subpath' } },
+      access: 'read',
+    },
+    { path: { type: 'path', path: './workspace/future-access.txt' }, access: 'future-access' },
+  ],
+}
+
+function permissionsFixtureRequest(
+  id: number,
+  sample: { environmentId?: string | null; cwd: string; reason: string; permissions: unknown },
+): UiServerRequest {
+  const itemId = `b3c-fixture-item-${String(id)}`
+  return {
+    id,
+    method: 'item/permissions/requestApproval',
+    threadId: permissionsFixtureThreadId,
+    turnId: permissionsFixtureTurnId,
+    itemId,
+    receivedAtIso: permissionsFixtureReceivedAtIso,
+    params: {
+      threadId: permissionsFixtureThreadId,
+      turnId: permissionsFixtureTurnId,
+      itemId,
+      startedAtMs: permissionsFixtureStartedAtMs,
+      ...('environmentId' in sample ? { environmentId: sample.environmentId } : {}),
+      cwd: sample.cwd,
+      reason: sample.reason,
+      permissions: sample.permissions,
+    },
+  }
+}
+
+const permissionsFixtureRequestsById: Record<string, UiServerRequest[]> = {
+  legacy: [permissionsFixtureRequest(7311, {
+    cwd: 'E:\\b3c-example',
+    reason: 'B3C legacy synthetic scope',
+    permissions: { network: { enabled: false }, fileSystem: permissionsLegacyFileSystem },
+  })],
+  current: [permissionsFixtureRequest(7312, {
+    environmentId: 'b3c-example-environment',
+    cwd: './workspace',
+    reason: 'B3C current synthetic scope',
+    permissions: { network: { enabled: true }, fileSystem: permissionsCurrentFileSystem },
+  })],
+  unknown: [permissionsFixtureRequest(7313, {
+    environmentId: null,
+    cwd: './workspace',
+    reason: 'B3C unknown synthetic scope',
+    permissions: { network: { enabled: null }, fileSystem: permissionsUnknownFileSystem },
+  })],
+  retry: [
+    permissionsFixtureRequest(7314, {
+      environmentId: 'b3c-example-environment',
+      cwd: './workspace',
+      reason: 'B3C retry synthetic scope',
+      permissions: { network: { enabled: true }, fileSystem: null },
+    }),
+    permissionsFixtureRequest(7315, {
+      environmentId: 'b3c-example-environment',
+      cwd: './workspace',
+      reason: 'B3C retry unrelated synthetic scope',
+      permissions: { network: { enabled: false }, fileSystem: null },
+    }),
+  ],
+}
+// Synthetic authority of this fixture only. Normal modes never mutate it: a recorded emit must not
+// remove the request. Only the retry mode may converge it, and only after the production reply
+// chain both ran and reported no failure through the original component callback.
+const permissionsFixturePending = ref<UiServerRequest[]>(permissionsFixtureRequestsById[permissionsApprovalState] ?? [])
+// Local UI-only callback slot: neither the production reply type nor the component supports it yet.
+type PermissionsApprovalReplyPayload = {
+  id: number
+  result?: unknown
+  error?: { code?: number; message: string }
+  onResponseError?: (message: string) => void
+}
+// Retry only: a controlled scope owns one real production state instance. It is never polled and
+// never boots a service; only the production reply chain is used.
+const permissionsRetryScope = isPermissionsRetryFixture ? effectScope(true) : null
+const permissionsRetryDesktopState = permissionsRetryScope
+  ? permissionsRetryScope.run(() => useDesktopState())
+  : null
+
+function projectPermissionsApprovalFixture(): ConversationProjection {
+  const startedAt = new Date(permissionsFixtureStartedAtMs).toISOString()
+  return projectConversation({
+    threadRead: { thread: { id: permissionsFixtureThreadId, turns: [{
+      id: permissionsFixtureTurnId,
+      status: 'inProgress',
+      startedAt,
+      items: [
+        { id: 'b3c-fixture-user', type: 'userMessage', content: [{ type: 'text', text: '请批准这次工具调用的权限范围。' }] },
+        { id: 'b3c-fixture-commentary', type: 'agentMessage', phase: 'commentary', text: '需要你确认权限范围后才能继续执行。' },
+      ],
+    }] } },
+    runtime: {
+      executionState: 'running',
+      activeTurnId: permissionsFixtureTurnId,
+      lastStartedAtIso: startedAt,
+      messageState: 'fresh',
+    },
+    pendingRequests: permissionsFixturePending.value,
+    nowMs: Date.now(),
+  })
+}
+
+async function forwardPermissionsApprovalReply(payload: PermissionsApprovalReplyPayload): Promise<void> {
+  const originalCallback = payload.onResponseError
+  // Per-call closure: concurrent replies must never share one failure flag.
+  let failed = false
+  const forwarded: PermissionsApprovalReplyPayload = {
+    id: payload.id,
+    result: payload.result,
+    ...(payload.error ? { error: payload.error } : {}),
+    // Only the production catch may invoke this wrapper, and it may only touch this call's flag.
+    onResponseError: (message: string) => {
+      failed = true
+      originalCallback?.(message)
+    },
+  }
+  await permissionsRetryDesktopState?.respondToPendingServerRequest(forwarded)
+  // A resolved promise is not success. Converge this synthetic pending only when the component
+  // really supplied a callback and this call's production chain stayed clean; otherwise keep it.
+  if (originalCallback && !failed) {
+    permissionsFixturePending.value = permissionsFixturePending.value.filter((request) => request.id !== payload.id)
+  }
+}
+
+onBeforeUnmount(() => {
+  if (!permissionsRetryDesktopState) return
+  permissionsRetryDesktopState.stopPolling()
+  permissionsRetryScope?.stop()
+})
+
+// Dedicated partial-answer scenarios: partialAnswers=running|completed|no-final.
+const partialAnswersState = fixtureParams.get('partialAnswers') ?? ''
+const isPartialAnswersFixture = ['running', 'completed', 'no-final'].includes(partialAnswersState)
+const isPartialAnswersRunning = partialAnswersState === 'running'
+const isPartialAnswersCompleted = partialAnswersState === 'completed'
+const partialAnswersVariant = fixtureParams.get('variant') ?? ''
+const isPartialAnswersPure = isPartialAnswersCompleted && partialAnswersVariant === 'pure'
+const isPartialAnswersInterleaved = isPartialAnswersCompleted && partialAnswersVariant === 'interleaved'
+const isPartialAnswersFrozen = isPartialAnswersRunning && partialAnswersVariant === 'frozen'
+const partialFixtureTurnId = 'partial-fixture-turn'
+const partialFixtureFinalItemId = 'partial-fixture-final'
 
 function beginSendFeedbackSample(): void {
   beginChatFeedbackMetric({ threadId: activeThreadId.value, clientMessageId: 'feedback-client', optimisticMessageId: 'feedback-message', submitStartedAtMs: chatFeedbackNow() })
@@ -657,6 +887,8 @@ const connectionSettingsCount = ref(0)
 const copyStatus = ref<{ message: string; tone: 'success' | 'info' | 'warning' | 'danger' } | null>(null)
 const serverRequestResponses = ref<Array<{ id: number; result?: unknown; error?: { code?: number; message: string } }>>([])
 const lastServerRequestResponse = computed(() => JSON.stringify(serverRequestResponses.value.at(-1) ?? null))
+// Audit attributes derive from the real emitted payload array; a callback function never serializes.
+const serverRequestResponsesJson = computed(() => JSON.stringify(serverRequestResponses.value))
 
 const fixtureRuntimeStartedAtMs = Date.now() - 6500
 const hasActiveFixtureRuntime = !isLoadFailureFixture
@@ -871,7 +1103,161 @@ function projectStructuredFixtureItems(source: StructuredFixtureItem[]): Convers
   })
 }
 
+// Dedicated partial-answer fixture data. Raw production wire items only: the
+// projection and the rendered thread stay production code paths.
+interface PartialAnswersFixtureItem {
+  id: string
+  type: string
+  [key: string]: unknown
+}
+
+const partialFixtureStartedAtIso = '2026-07-06T09:00:00.000Z'
+function partialFixtureIso(offsetSeconds: number): string {
+  return new Date(Date.parse(partialFixtureStartedAtIso) + offsetSeconds * 1_000).toISOString()
+}
+
+const partialAnswersStageTwoLineCount = isPartialAnswersRunning ? 24 : 3
+function buildPartialAnswersStageTwoText(): string {
+  const lines = [
+    '阶段二（PARTIAL-TWO 唯一短语）：同一阶段条目继续补齐，行内公式 $a^2 + b^2 = c^2$ 保持不变。',
+    '',
+  ]
+  for (let index = 1; index <= partialAnswersStageTwoLineCount; index += 1) {
+    // Blank separator keeps each stage line a real paragraph (no Markdown soft-break flattening)
+    // so the running scenario has a genuinely scrollable transcript.
+    lines.push(`阶段二正文第 ${String(index)} 行：阶段正文追加不应产生新的 block，也不应重置阅读位置。`, '')
+  }
+  return lines.join('\n')
+}
+
+const partialAnswersAppendCount = ref(0)
+
+function buildPartialAnswersItems(): PartialAnswersFixtureItem[] {
+  const items: PartialAnswersFixtureItem[] = [
+    {
+      id: 'partial-fixture-user',
+      type: 'userMessage',
+      startedAt: partialFixtureIso(0),
+      content: [{ type: 'text', text: '请把两段阶段正文和最终回复分别呈现出来。' }],
+    },
+    {
+      id: 'partial-fixture-commentary',
+      type: 'agentMessage',
+      phase: 'commentary',
+      text: '先确认阶段拆分的目标，再依次输出阶段正文与工具结果。',
+      startedAt: partialFixtureIso(1),
+      completedAt: partialFixtureIso(2),
+    },
+    {
+      id: 'partial-fixture-1',
+      type: 'agentMessage',
+      phase: 'partial_answer',
+      text: [
+        '阶段一（PARTIAL-ONE 唯一短语）：先核对投影链路是否保留两段阶段正文的顺序。',
+        '',
+        '```ts',
+        "const stageOneId = 'partial-fixture-1'",
+        'const blocks = projectConversation({ threadRead }).turns[0]?.blocks ?? []',
+        '```',
+        '',
+        '阶段一小结：工具位于两段阶段正文之间，渲染必须按 blocks 原序输出。',
+      ].join('\n'),
+      startedAt: partialFixtureIso(3),
+      completedAt: partialFixtureIso(4),
+    },
+    {
+      id: 'partial-fixture-tool',
+      type: 'commandExecution',
+      command: 'npm run verify:conversation-blocks',
+      cwd: 'E:/workspace/CXCodex/codexui',
+      status: 'completed',
+      aggregatedOutput: 'conversation blocks fixture ok\n',
+      exitCode: 0,
+      durationMs: 2_000,
+      startedAt: partialFixtureIso(5),
+      completedAt: partialFixtureIso(7),
+    },
+    {
+      id: 'partial-fixture-2',
+      type: 'agentMessage',
+      phase: 'partial_answer',
+      text: buildPartialAnswersStageTwoText(),
+      startedAt: partialFixtureIso(8),
+      // Only the running scenario leaves the second stage text without completedAt (still streaming).
+      ...(isPartialAnswersRunning ? {} : { completedAt: partialFixtureIso(9) }),
+    },
+  ]
+  if (isPartialAnswersPure || isPartialAnswersInterleaved) {
+    const required = (id: string): PartialAnswersFixtureItem => {
+      const item = items.find((candidate) => candidate.id === id)
+      if (!item) throw new Error(`Missing partial fixture item: ${id}`)
+      return item
+    }
+    const p1 = required('partial-fixture-1')
+    const p2 = required('partial-fixture-2')
+    if (isPartialAnswersPure) return [p1, p2]
+
+    const c1 = required('partial-fixture-commentary')
+    const t1 = required('partial-fixture-tool')
+    return [
+      { ...c1, text: 'INTERLEAVED-C1：检查执行前的公开进展。',
+        startedAt: partialFixtureIso(1), completedAt: partialFixtureIso(2) },
+      { ...t1, startedAt: partialFixtureIso(3), completedAt: partialFixtureIso(4), durationMs: 1_000 },
+      { ...c1, id: 'partial-fixture-commentary-2', text: 'INTERLEAVED-C2：工具之后的公开进展。',
+        startedAt: partialFixtureIso(5), completedAt: partialFixtureIso(6) },
+      { ...p1, startedAt: partialFixtureIso(7), completedAt: partialFixtureIso(8) },
+      { ...t1, id: 'partial-fixture-tool-2', command: 'echo INTERLEAVED-TOOL-2',
+        aggregatedOutput: 'second synthetic tool result\n',
+        startedAt: partialFixtureIso(9), completedAt: partialFixtureIso(10), durationMs: 1_000 },
+      { ...p2, startedAt: partialFixtureIso(11), completedAt: partialFixtureIso(12) },
+    ]
+  }
+  if (isPartialAnswersCompleted) {
+    items.push({
+      id: partialFixtureFinalItemId,
+      type: 'agentMessage',
+      phase: 'final_answer',
+      text: '唯一最终回复（PARTIAL-FINAL 唯一短语）：阶段正文已经产出了可核对结论。',
+      startedAt: partialFixtureIso(11),
+      completedAt: partialFixtureIso(12),
+    })
+  }
+  return items
+}
+
+// No runtime / pending masking: pendingRequests is always empty and the runtime
+// state is set explicitly for each scenario.
+const partialAnswersRuntime = isPartialAnswersRunning
+  ? {
+      executionState: 'running' as const,
+      activeTurnId: partialFixtureTurnId,
+      lastStartedAtIso: partialFixtureIso(0),
+      messageState: 'fresh' as const,
+    }
+  : { executionState: 'completed' as const, messageState: 'fresh' as const }
+
+const partialAnswersItems = ref<PartialAnswersFixtureItem[]>(buildPartialAnswersItems())
+
+const partialAnswersTurn = computed(() => ({
+  id: partialFixtureTurnId,
+  status: isPartialAnswersRunning ? 'inProgress' : 'completed',
+  startedAt: partialFixtureIso(0),
+  ...(isPartialAnswersRunning ? {} : { completedAt: partialFixtureIso(12) }),
+  items: partialAnswersItems.value,
+}))
+
 const fixtureProjection = computed(() => {
+  if (isPermissionsApprovalFixture) {
+    return projectPermissionsApprovalFixture()
+  }
+  if (isPartialAnswersFixture) {
+    return projectConversation({
+      threadRead: { thread: { id: activeThreadId.value, turns: [partialAnswersTurn.value] } },
+      runtime: partialAnswersRuntime,
+      pendingRequests: [],
+      nowMs: Date.now(),
+    })
+  }
   if (isUxBaselineFixture) {
     const source = uxBaselineItemsByState[uxBaselineState] ?? []
     const indexes = [...new Set(source.map((item) => item.turnIndex))]
@@ -1013,8 +1399,10 @@ function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
 }
 
-function onRespondServerRequest(payload: { id: number; result?: unknown; error?: { code?: number; message: string } }): void {
+function onRespondServerRequest(payload: PermissionsApprovalReplyPayload): void {
   serverRequestResponses.value = [...serverRequestResponses.value, payload]
+  // Normal modes only record the real emit: the synthetic pending stays and no HTTP happens.
+  if (isPermissionsRetryFixture) void forwardPermissionsApprovalReply(payload)
 }
 
 function implementFixturePlan(intent: ConversationPlanImplementationIntent): void {
@@ -1042,6 +1430,49 @@ function appendResumeOutput(): void {
       }),
     ],
   }
+}
+
+function appendPartialStageText(): void {
+  if (!isPartialAnswersRunning) return
+  partialAnswersAppendCount.value += 1
+  // A real blank line before the text: the append must render as a new paragraph with
+  // measurable height growth instead of a soft break inside the existing paragraph.
+  const appendedParagraph = `追加阶段正文 ${String(partialAnswersAppendCount.value)}：同一阶段条目继续输出，仍不产生新的 block，也不重置阅读位置。`
+  partialAnswersItems.value = partialAnswersItems.value.map((item) => item.id === 'partial-fixture-2'
+    ? { ...item, text: `${String(item.text ?? '')}\n\n${appendedParagraph}` }
+    : item)
+}
+
+function extendFrozenToolGroup(): void {
+  if (!isPartialAnswersFrozen) return
+  const items = partialAnswersItems.value
+  if (items.some((item) => item.id === 'partial-fixture-frozen-tool-2')) return
+  const index = items.findIndex((item) => item.id === 'partial-fixture-tool')
+  const tool = items[index]
+  if (!tool) return
+  partialAnswersItems.value = [
+    ...items.slice(0, index + 1),
+    { ...tool, id: 'partial-fixture-frozen-tool-2', command: 'echo FROZEN-TOOL-2',
+      aggregatedOutput: 'second frozen synthetic tool result\n',
+      startedAt: partialFixtureIso(7.1), completedAt: partialFixtureIso(7.8), durationMs: 700 },
+    ...items.slice(index + 1),
+  ]
+}
+
+function insertFrozenPartialBoundary(): void {
+  if (!isPartialAnswersFrozen) return
+  const items = partialAnswersItems.value
+  if (items.some((item) => item.id === 'partial-fixture-frozen-boundary')) return
+  if (!items.some((item) => item.id === 'partial-fixture-frozen-tool-2')) return
+  const index = items.findIndex((item) => item.id === 'partial-fixture-tool')
+  if (index < 0) return
+  partialAnswersItems.value = [
+    ...items.slice(0, index + 1),
+    { type: 'agentMessage', id: 'partial-fixture-frozen-boundary', phase: 'partial_answer',
+      text: 'FROZEN-BOUNDARY：阅读过程冻结期间新到的阶段正文仍应可见。',
+      startedAt: partialFixtureIso(7.05), completedAt: partialFixtureIso(7.08) },
+    ...items.slice(index + 1),
+  ]
 }
 
 function onUpdateScrollState(payload: { threadId: string; state: ThreadScrollState }): void {

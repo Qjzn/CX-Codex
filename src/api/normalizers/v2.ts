@@ -9,6 +9,7 @@ import type {
 import type { AcknowledgedUserMessage, UiFileAttachment, UiProjectGroup, UiThread } from '../../types/codex.js'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering.js'
+import { isThreadVisibleInOrdinaryList, readThreadVisibilityFields } from '../../shared/threadVisibility.js'
 import { isInternalContextMessageText } from '../../internalContextMessage.js'
 import { readUserMessageClientId } from '../../conversation-transcript/userMessageIdentity.js'
 
@@ -211,6 +212,10 @@ function toUiThread(summary: Thread): UiThread {
   const rawSummary = summary as Record<string, unknown>
   const cwd = normalizePathForUi(typeof rawSummary.cwd === 'string' ? rawSummary.cwd : summary.cwd)
   const comparableCwd = normalizePathForComparison(cwd)
+  // Classify from the raw source before readThreadSourceKind coarsens it: {subAgent:{other:'guardian'}}
+  // and {subAgent:{other:'worker'}} both become 'subAgent.other' there, so the finite classification
+  // (three booleans only, no raw Thread copy) is captured here and carried on the UiThread.
+  const visibilityFields = readThreadVisibilityFields(rawSummary)
   const sourceKind = readThreadSourceKind(rawSummary.source)
   const hasWorktree =
     rawSummary.isWorktree === true ||
@@ -222,10 +227,12 @@ function toUiThread(summary: Thread): UiThread {
 
   return {
     id: summary.id,
+    ...(rawSummary.assistantManaged === true ? { assistantManaged: true } : {}),
     title: toThreadTitle(summary),
     projectName: toProjectName(cwd),
     cwd,
     sourceKind,
+    ...visibilityFields,
     hasWorktree,
     createdAtIso: toIso(summary.createdAt),
     updatedAtIso: toIso(summary.updatedAt),
@@ -260,6 +267,9 @@ export function normalizeThreadGroupsV2(payload: ThreadListResponse): UiProjectG
     const uiThread = toUiThread(thread)
     if (seenThreadIds.has(uiThread.id)) continue
     seenThreadIds.add(uiThread.id)
+    // Ordinary list visibility: confirmed internal sources and strictly true ephemeral /
+    // sideConversation markers stay out; unknown, future and ordinary rows stay in.
+    if (!isThreadVisibleInOrdinaryList(uiThread)) continue
     uiThreads.push(uiThread)
   }
   return groupThreadsByProject(uiThreads)

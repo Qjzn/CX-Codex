@@ -5,8 +5,11 @@ function normalizeInitialHashRoute(): void {
 
   const { pathname, search, hash } = window.location
   const isKnownCleanRoute = pathname === '/skills'
+    || pathname === '/task-board'
+    || pathname === '/assistant'
     || pathname === '/github-trending'
     || pathname === '/__regression/conversation-blocks'
+    || pathname === '/__regression/reply-quality'
     || pathname === '/__regression/sidebar-rows'
     || pathname === '/__regression/composer-shell'
     || pathname === '/__regression/command-menu'
@@ -49,9 +52,24 @@ const router = createRouter({
       component: EmptyRouteView,
     },
     {
+      path: '/task-board',
+      name: 'task-board',
+      component: EmptyRouteView,
+    },
+    {
+      path: '/assistant',
+      name: 'assistant',
+      component: EmptyRouteView,
+    },
+    {
       path: '/__regression/conversation-blocks',
       name: 'regression-conversation-blocks',
       component: () => import('../components/content/ConversationRegressionFixture.vue'),
+    },
+    {
+      path: '/__regression/reply-quality',
+      name: 'regression-reply-quality',
+      component: () => import('../components/content/ReplyQualityFixture.vue'),
     },
     {
       path: '/__regression/sidebar-rows',

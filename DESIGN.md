@@ -50,7 +50,7 @@ Do not add a repeated Codex avatar/status heading to every turn. The divider and
 
 - Conversation reading width: at most `48rem` on desktop; the visible Composer shell uses the same `48rem` axis, with only its component gutters outside that line. Both become single-column on narrow screens.
 - Composer remains a compact two-level control: text above, controls below, with one clear send/stop action. Its default surface is a `12px` light border with no floating-card shadow; focus may add only a one-pixel accent ring.
-- UI text: 12–14px. Chinese answer text: 15px desktop, 14px phone, approximately 1.6 line height.
+- UI text: 12–14px. Conversation prose uses a shared 16px baseline and 1.65 line height on desktop and phone; public progress differs by secondary color, not reduced legibility. Heading, list, quote, code and table spacing belongs to `ConversationRichText`.
 - User bubbles: neutral surface, 16px radius, no decorative shadow or speech-tail geometry.
 - Activity rows: flat rows, not nested cards. Cards are reserved for files, permissions, errors, and other bounded interaction objects.
 - File and command content use the existing monospace token. Paths must truncate safely without hiding their file-level stats.
@@ -64,7 +64,9 @@ Do not add a repeated Codex avatar/status heading to every turn. The divider and
 - Completed process disclosure starts collapsed and toggles with a native button exposing `aria-expanded`, except when the reader has selected text, focused process controls, scrolled away, or explicitly opened history. Preserve that mounted presentation until explicit navigation or return-to-latest; do not retract text beneath the reader.
 - A small turn-local display clock extends projected elapsed time once per second only while running with a known anchor. Hidden pages stop the interval; waiting, degraded, unknown-clock and terminal states never fabricate running seconds. This clock does not poll or own task state.
 - File summaries start collapsed; opening one reveals compact single-line file rows and per-file additions/removals, while each large diff remains collapsed until requested.
-- Hover-only actions become persistently visible on phone or coarse-pointer devices.
+- Message actions use quiet copy and more icons outside the user bubble. Favorite and turn rollback live in a viewport-clamped keyboard-operable menu; failed-message edit/retry stay direct. Copy success is local to the action, while failure remains explicit. Public progress has one turn-level copy action rather than a reserved button column per paragraph.
+- User, public progress, plan and final text share one sanitized semantic renderer. Unchanged top-level Markdown blocks retain their DOM through streaming; trailing reference definitions may still update earlier links. Code copying excludes chrome and wide tables/code scroll locally without widening the transcript.
+- Code is readable immediately; syntax coloring is an optional asynchronous enhancement. Only explicitly named supported languages use a lazy, bounded Worker. Unknown languages, blocks over 20,000 characters and Worker failure retain exact plain text without a toast; colors never change font metrics. Late results cannot replace newer text or an active code selection.
 - Every independent coarse-pointer action is at least 44px high or wide as appropriate.
 - The return-to-latest action is a centered circular control. It shows an arrow while idle and three running dots while the latest turn is active.
 - Expanding history or process detail must preserve the user's reading anchor. New streaming content follows only while the reader remains at the bottom and is not selecting or focusing process content. Frozen presentation is bounded to mounted turns, is not persisted, and explicit message navigation can refresh its target window.
@@ -97,7 +99,7 @@ Motion communicates state; it does not decorate the page.
 - Disclosure chevrons: 180ms, ease-out, transform only.
 - Process reveal: 180ms, opacity plus at most 4px vertical translation. Do not animate measured height.
 - Hover/focus/press feedback: 80–180ms using color, opacity, or transform.
-- Continuous animation is limited to the running divider dot, running return-to-latest dots, disclosed active activity dots, and the active turn's streaming caret. A terminal final never keeps a blinking caret merely because its item timestamp is absent.
+- Continuous animation is limited to the running divider dot, running return-to-latest dots, and disclosed active activity dots. Streaming text has no separate trailing caret below the message actions; the truthful running clock owns progress feedback and terminal replies remain still.
 - No page-load choreography, spring physics, parallax, glass blur, animated gradients, or layout animation.
 - Under `prefers-reduced-motion: reduce`, continuous animation stops and disclosure transitions complete in 1ms while all controls remain usable.
 

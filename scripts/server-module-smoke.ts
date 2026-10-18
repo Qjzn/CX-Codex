@@ -1,14 +1,27 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { generateKeyPairSync } from 'node:crypto'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { writeFileSync } from 'node:fs'
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
-import { createServer as createNodeHttpServer } from 'node:http'
+import { createServer as createNodeHttpServer, request as requestNodeHttp } from 'node:http'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
+import { ReadableStream as NodeReadableStream } from 'node:stream/web'
+import { fileURLToPath } from 'node:url'
+import { TextEncoder } from 'node:util'
 import Database from 'better-sqlite3'
-import { getWindowsDesktopCodexExecutables, resolveGitCommand, resolveRipgrepCommand } from '../src/commandResolution.js'
+import {
+  captureCodexLaunchIdentity,
+  createCodexLaunchIdentity,
+  getCodexLaunchIdentityKind,
+  getWindowsDesktopCodexExecutables,
+  readCodexLaunchFileSha256,
+  resolveGitCommand,
+  resolveRipgrepCommand,
+  type CodexLaunchIdentity,
+} from '../src/commandResolution.js'
 import {
   assertPasswordProtectedBind,
   isLoopbackBindHost,
@@ -56,7 +69,12 @@ import {
   normalizeWindowsSandboxReadiness,
   WindowsSandboxReadinessCache,
 } from '../src/server/windowsSandboxDiagnostics.js'
-import { AppServerMethodCatalog, extractMethodCatalogFromSchema } from '../src/server/appServerMethodCatalog.js'
+import {
+  AppServerMethodCatalog,
+  extractMethodCatalogFromSchema,
+  isAppServerMethodCatalogUnavailableError,
+} from '../src/server/appServerMethodCatalog.js'
+import { getSpawnInvocation } from '../src/utils/commandInvocation.js'
 import {
   AppServerStatusDiagnostics,
   isKnownAppServerThreadActiveFlag,
@@ -67,8 +85,10 @@ import {
   readThreadUnsubscribeStatusCandidates,
 } from '../src/server/appServerStatusDiagnostics.js'
 import {
+  compareSchemaAuditIdentity,
   normalizeAppServerSchemaAuditSummary,
   readAppServerSchemaAuditSummary,
+  type SchemaAuditActiveIdentitySnapshot,
 } from '../src/server/appServerSchemaAuditSummary.js'
 import {
   AppServerRpcCache,
@@ -188,6 +208,11 @@ import {
   handleAppServerServerRequest,
   resolveAppServerPendingServerRequest,
 } from '../src/server/appServerServerRequestHandler.js'
+import {
+  buildPermissionsApprovalResult,
+  projectPermissionsApproval,
+  validatePermissionsApprovalResult,
+} from '../src/permissionsRequestApproval.js'
 import type { FavoriteRecord } from '../src/server/webUiState.js'
 import {
   classifyServerRequestMethod,
@@ -462,6 +487,22 @@ import {
   SessionAttachmentAccessStore,
 } from '../src/server/sessionAttachmentAccess.js'
 import { createServer as createHttpAppServer } from '../src/server/httpServer.js'
+import {
+  BACKEND_UPDATE_APPLY_UNSUPPORTED_MESSAGE,
+  BACKEND_UPDATE_CHECK_PATH,
+  BACKEND_UPDATE_INTENT_HEADER,
+  BACKEND_UPDATE_INTENT_VALUE,
+  BACKEND_UPDATE_STATUS_PATH,
+  BACKEND_UPDATE_UNAVAILABLE_REASON,
+  OFFICIAL_BACKEND_RELEASE_METADATA_URL,
+  captureFrozenBackendIdentity,
+  compareStableSemver,
+  createBackendUpdateController,
+  parseStableSemver,
+  type BackendMetadataTransportResponse,
+  type BackendUpdateStatus,
+  type FrozenBackendIdentity,
+} from '../src/server/backendUpdate.js'
 import { handleWorkspaceMetaRoutes } from '../src/server/workspaceMetaRoutes.js'
 import {
   ProjectRootError,
@@ -520,13 +561,127 @@ import {
 } from '../src/server/localPairingPage.js'
 import { persistAccessPassword, updateLocalAccessConfig } from '../src/server/localAccessConfig.js'
 
+type B4b1OwnerCounts = {
+  resolve: number
+  probe: number
+  spawn: number
+}
+
+type B4b1OwnerHarnessOptions = {
+  command?: string
+  probeStdout?: string
+  probeError?: boolean
+  respondToInitialize?: boolean
+  initializeFailures?: number
+  spawnMutation?: string | null
+  probeMutation?: string | null
+  resolveCommand?: () => string | null
+}
+
+type B4b1OwnerHarness = {
+  owner: AppServerProcess
+  children: FakeAppServerChild[]
+  spawnCalls: Array<{ command: string; args: string[] }>
+  counts: B4b1OwnerCounts
+  setCommand: (command: string) => void
+  setProbeError: (error: boolean) => void
+}
+
+/**
+ * In-process fake app-server child: records the real spawn target/args, the exact stdio lines the
+ * owner wrote and the initialize requests it received, then answers `initialize` with a real
+ * JSON-RPC response so the production start -> warmup/initialize path runs unchanged. It never
+ * boots a real app-server. It is declared ahead of the smoke entry point because that entry block
+ * runs while the remainder of the module body is still suspended on its first top-level await.
+ */
+class FakeAppServerChild extends EventEmitter {
+  readonly pid = 4242
+  readonly stdout = new PassThrough()
+  readonly stderr = new PassThrough()
+  readonly stdin = new PassThrough()
+  readonly writtenLines: string[] = []
+  readonly initializeRequests: Array<{ id: number; method: string; params: unknown }> = []
+  initializeFailuresRemaining = 0
+  killed = false
+  killCount = 0
+
+  private pendingStdin = ''
+  private readonly respondToInitialize: boolean
+
+  constructor(options: { respondToInitialize?: boolean } = {}) {
+    super()
+    this.respondToInitialize = options.respondToInitialize !== false
+    this.stdin.setEncoding('utf8')
+    this.stdin.on('data', (chunk: string) => this.consumeWritten(chunk))
+  }
+
+  kill(): boolean {
+    this.killCount += 1
+    this.killed = true
+    return true
+  }
+
+  emitStdoutLine(payload: Record<string, unknown>): void {
+    this.stdout.write(`${JSON.stringify(payload)}\n`)
+  }
+
+  emitStdoutChunk(chunk: string): void {
+    this.stdout.write(chunk)
+  }
+
+  emitExit(): void {
+    this.emit('exit', 0, null)
+  }
+
+  emitFailure(error: Error): void {
+    this.emit('error', error)
+  }
+
+  private consumeWritten(chunk: string): void {
+    this.pendingStdin += chunk
+    let lineEnd = this.pendingStdin.indexOf('\n')
+    while (lineEnd !== -1) {
+      const line = this.pendingStdin.slice(0, lineEnd).trim()
+      this.pendingStdin = this.pendingStdin.slice(lineEnd + 1)
+      this.handleWrittenLine(line)
+      lineEnd = this.pendingStdin.indexOf('\n')
+    }
+  }
+
+  private handleWrittenLine(line: string): void {
+    if (!line) return
+    this.writtenLines.push(line)
+
+    let payload: { id?: unknown; method?: unknown; params?: unknown }
+    try {
+      payload = JSON.parse(line) as typeof payload
+    } catch {
+      return
+    }
+    if (payload.method !== 'initialize' || typeof payload.id !== 'number') return
+
+    this.initializeRequests.push({ id: payload.id, method: payload.method, params: payload.params })
+    if (this.initializeFailuresRemaining > 0) {
+      this.initializeFailuresRemaining -= 1
+      this.emitStdoutLine({ id: payload.id, error: { code: -32000, message: 'b4b1 initialize rejected' } })
+      return
+    }
+    if (this.respondToInitialize) {
+      this.emitStdoutLine({ id: payload.id, result: { ok: true } })
+    }
+  }
+}
+
 const originalNow = Date.now
 
 try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
   smokeAppServerProcessCleanup()
-  smokeAppServerProcess()
+  await smokeB4b1Corrections()
+  await smokePendingServerRequestTurnTerminalRed()
+  await smokeCodexLaunchIdentityCapture()
+  await smokeAppServerProcess()
   smokeAppServerProcessServerRequests()
   smokeAppServerSessionCleanup()
   smokeAppServerProcessHandlers()
@@ -544,6 +699,7 @@ try {
   await smokeLocalAccessConfig()
   smokeLocalPairingPage()
   await smokeAppServerMethodCatalog()
+  await smokeB4b2CatalogIdentity()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerNotificationListeners()
   smokeNotificationWebSocketBackpressure()
@@ -553,6 +709,7 @@ try {
   await smokeAppServerDiagnosticsReaders()
   smokeAppServerStatusDiagnostics()
   await smokeAppServerSchemaAuditSummary()
+  smokeSchemaAuditIdentityMatch()
   smokeTranscriptionProxyConfig()
   smokeTranscriptionMultipartDefaults()
   await smokeTranscriptionRoute()
@@ -561,6 +718,7 @@ try {
   smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
   await smokeAppServerThreadListAugment()
+  await smokeGuardianInternalThreadListVisibility()
   smokeAppServerThreadReadCache()
   smokeAppServerThreadReadParams()
   smokeAppServerRpcTimeoutPolicy()
@@ -615,6 +773,12 @@ try {
   await smokeStatusRoutes()
   await smokeLocalFileAccessPolicy()
   await smokeLocalFileHttpRateLimit()
+  await smokeBackendUpdateReadOnlyHttp()
+  await smokeBackendUpdateHttpAuthRequired()
+  await smokeBackendUpdateFrozenIdentity()
+  smokeBackendUpdateSemverAndWireContract()
+  await smokeBackendUpdateControllerCheck()
+  await smokeBackendUpdateWiredHttp()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
@@ -773,6 +937,7 @@ function smokeAppServerSessionCleanup(): void {
     rpcCache: {
       clearSharedReads: () => calls.push('rpcCache.clearSharedReads'),
       invalidateThreadList: () => calls.push('rpcCache.invalidateThreadList'),
+      clearModelList: () => calls.push('rpcCache.clearModelList'),
     },
     threadTokenUsage: {
       clear: () => calls.push('threadTokenUsage.clear'),
@@ -785,6 +950,7 @@ function smokeAppServerSessionCleanup(): void {
     'pendingServerRequests.clear',
     'rpcCache.clearSharedReads',
     'rpcCache.invalidateThreadList',
+    'rpcCache.clearModelList',
     'threadTokenUsage.clear',
     'planModeTurns.clearAll',
   ])
@@ -2922,31 +3088,989 @@ async function smokeAppServerMethodCatalog(): Promise<void> {
   assert.equal(notificationMethods.includes('item/agentMessage/delta'), true)
   assert.equal(notificationMethods.includes('fuzzyFileSearch/sessionCompleted'), true)
 
-  let generateCount = 0
-  const catalog = new AppServerMethodCatalog(async (outDir) => {
-    generateCount += 1
+  const legacyDir = await mkdtemp(join(tmpdir(), 'cx-codex-b4b2-legacy-'))
+  try {
+    const legacyLaunchPath = join(legacyDir, 'codex-b4b2-legacy.exe')
+    const legacyBytes = 'b4b2-legacy-launch-bytes\n'
+    await writeFile(legacyLaunchPath, legacyBytes, 'utf8')
+
+    let generateCount = 0
+    const catalog = new AppServerMethodCatalog({
+      getActiveLaunchIdentity: () => createCodexLaunchIdentity({
+        launchPath: legacyLaunchPath,
+        versionRaw: 'codex-cli 0.162.1-b4b2-legacy\n',
+        sha256: createHash('sha256').update(legacyBytes).digest('hex'),
+        identityKind: 'native',
+      }, 1),
+      generateSchemaCommand: async (outDir) => {
+        generateCount += 1
+        await writeFile(join(outDir, 'ClientRequest.json'), JSON.stringify({
+          oneOf: [
+            { properties: { method: { enum: ['thread/start', 'thread/read'] } } },
+          ],
+        }), 'utf8')
+        await writeFile(join(outDir, 'ServerNotification.json'), JSON.stringify({
+          oneOf: [
+            { properties: { method: { enum: ['turn/started', 'turn/completed'] } } },
+          ],
+        }), 'utf8')
+      },
+    })
+
+    const [generatedMethods, generatedNotifications] = await Promise.all([
+      catalog.listMethods(),
+      catalog.listNotificationMethods(),
+    ])
+    assert.deepEqual(generatedMethods, ['thread/read', 'thread/start'])
+    assert.deepEqual(generatedNotifications, ['turn/completed', 'turn/started'])
+    assert.equal(generateCount, 1)
+    assert.deepEqual(await catalog.listMethods(), ['thread/read', 'thread/start'])
+    assert.deepEqual(await catalog.listNotificationMethods(), ['turn/completed', 'turn/started'])
+    assert.equal(generateCount, 1)
+  } finally {
+    await rm(legacyDir, { recursive: true, force: true })
+  }
+}
+
+type B4b2GenerationRecord = {
+  generation: number
+  launchPath: string
+  identityKind: string
+  outDir: string
+  command?: string
+  args?: string[]
+}
+
+type B4b2CatalogFixture = {
+  dir: string
+  cleanup: () => Promise<void>
+  writeLaunchTarget: (name: string, bytes: string) => Promise<{ launchPath: string; sha256: string }>
+  identityFor: (input: {
+    launchPath: string
+    generation: number
+    sha256: string | null
+    versionRaw?: string | null
+    identityKind?: 'native' | 'launcher' | 'unknown'
+    reason?: string
+  }) => CodexLaunchIdentity
+  setActive: (identity: CodexLaunchIdentity | null) => void
+  createCatalog: (input?: { useDefaultGenerationPath?: boolean }) => AppServerMethodCatalog
+  methodsMarker: (identity: CodexLaunchIdentity) => string
+  notificationsMarker: (identity: CodexLaunchIdentity) => string
+  generations: B4b2GenerationRecord[]
+  hashCalls: () => number
+}
+
+/**
+ * Catalog-level fixture: isolated launch-target files, a synthetic active-identity provider at the
+ * catalog unit boundary, marker-bearing synthetic schema JSON (methods and notifications carry
+ * independent markers), and counted hash/generation calls.
+ *
+ * The counting hasher delegates to the real production `readCodexLaunchFileSha256`, so the bytes
+ * sensitivity exercised here is the production one; the injection only observes the call count.
+ */
+async function createB4b2CatalogFixture(input: {
+  onGenerate?: (event: { outDir: string; identity: CodexLaunchIdentity; callIndex: number }) => Promise<void> | void
+  hashLaunchFile?: (launchPath: string) => string | null
+} = {}): Promise<B4b2CatalogFixture> {
+  const dir = await mkdtemp(join(tmpdir(), 'cx-codex-b4b2-catalog-'))
+  let activeIdentity: CodexLaunchIdentity | null = null
+  let hashCalls = 0
+  const generations: B4b2GenerationRecord[] = []
+
+  const methodsMarker = (identity: CodexLaunchIdentity): string =>
+    `b4b2/catalog/methods-g${identity.generation}-${(identity.sha256 ?? 'nosha').slice(0, 8)}`
+  const notificationsMarker = (identity: CodexLaunchIdentity): string =>
+    `b4b2/catalog/notifications-g${identity.generation}-${(identity.sha256 ?? 'nosha').slice(0, 8)}`
+
+  const writeMarkers = async (outDir: string, identity: CodexLaunchIdentity): Promise<void> => {
     await writeFile(join(outDir, 'ClientRequest.json'), JSON.stringify({
-      oneOf: [
-        { properties: { method: { enum: ['thread/start', 'thread/read'] } } },
-      ],
+      oneOf: [{ properties: { method: { enum: [methodsMarker(identity)] } } }],
     }), 'utf8')
     await writeFile(join(outDir, 'ServerNotification.json'), JSON.stringify({
-      oneOf: [
-        { properties: { method: { enum: ['turn/started', 'turn/completed'] } } },
-      ],
+      oneOf: [{ properties: { method: { enum: [notificationsMarker(identity)] } } }],
     }), 'utf8')
+  }
+
+  const runGeneration = async (
+    outDir: string,
+    identity: CodexLaunchIdentity,
+    invocation?: { command: string; args: string[] },
+  ): Promise<void> => {
+    const callIndex = generations.length
+    generations.push({
+      generation: identity.generation,
+      launchPath: identity.launchPath,
+      identityKind: identity.identityKind,
+      outDir,
+      ...(invocation ? { command: invocation.command, args: invocation.args } : {}),
+    })
+    await input.onGenerate?.({ outDir, identity, callIndex })
+    await writeMarkers(outDir, identity)
+  }
+
+  const hashLaunchFile = (launchPath: string): string | null => {
+    hashCalls += 1
+    return input.hashLaunchFile ? input.hashLaunchFile(launchPath) : readCodexLaunchFileSha256(launchPath)
+  }
+
+  return {
+    dir,
+    cleanup: () => rm(dir, { recursive: true, force: true }),
+    writeLaunchTarget: async (name, bytes) => {
+      const launchPath = join(dir, name)
+      await writeFile(launchPath, bytes, 'utf8')
+      return { launchPath, sha256: createHash('sha256').update(bytes).digest('hex') }
+    },
+    identityFor: ({ launchPath, generation, sha256, versionRaw, identityKind, reason }) => createCodexLaunchIdentity({
+      launchPath,
+      versionRaw: versionRaw === undefined ? `codex-cli 0.162.1-b4b2-g${generation}\n` : versionRaw,
+      sha256,
+      identityKind: identityKind ?? 'native',
+      ...(reason ? { reason } : {}),
+    }, generation),
+    setActive: (identity) => {
+      activeIdentity = identity
+    },
+    createCatalog: (catalogInput = {}) => new AppServerMethodCatalog({
+      getActiveLaunchIdentity: () => activeIdentity,
+      hashLaunchFile,
+      ...(catalogInput.useDefaultGenerationPath
+        ? {
+            runSchemaCommand: async (run) => {
+              await runGeneration(run.outDir, run.identity, { command: run.command, args: run.args })
+            },
+          }
+        : {
+            generateSchemaCommand: async (outDir, identity) => {
+              await runGeneration(outDir, identity)
+            },
+          }),
+    }),
+    methodsMarker,
+    notificationsMarker,
+    generations,
+    hashCalls: () => hashCalls,
+  }
+}
+
+/**
+ * B4B2 catalog identity cases. Catalog-level cases use a synthetic active-identity provider at the
+ * catalog unit boundary (a legitimate boundary); the shared-factory integration cases below consume
+ * the real B4B1 owner state (start -> warmup/initialize -> replacement) instead of a fake getter.
+ */
+async function smokeB4b2CatalogIdentity(): Promise<void> {
+  const cases: Array<{ name: string; status: 'passed' | 'failed'; detail?: string }> = []
+  const runCase = async (name: string, run: () => Promise<void>): Promise<void> => {
+    try {
+      await run()
+      cases.push({ name, status: 'passed' })
+    } catch (error) {
+      cases.push({ name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  const expectUnavailable = async (
+    run: () => Promise<unknown>,
+    reason: string,
+    message: string,
+  ): Promise<void> => {
+    await assert.rejects(run(), (error: unknown) => {
+      assert.equal(isAppServerMethodCatalogUnavailableError(error), true, `${message} (explicit unavailable contract)`)
+      assert.equal(
+        isAppServerMethodCatalogUnavailableError(error) ? error.reason : null,
+        reason,
+        `${message} (reason)`,
+      )
+      return true
+    }, message)
+  }
+
+  await runCase('S1 catalog follows the frozen active identity across A -> B', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const targetA = await fixture.writeLaunchTarget('codex-b4b2-a.exe', 'b4b2-launch-a\n')
+      const targetB = await fixture.writeLaunchTarget('codex-b4b2-b.exe', 'b4b2-launch-b\n')
+      const identityA = fixture.identityFor({ launchPath: targetA.launchPath, generation: 1, sha256: targetA.sha256 })
+      const identityB = fixture.identityFor({ launchPath: targetB.launchPath, generation: 2, sha256: targetB.sha256 })
+      fixture.setActive(identityA)
+      const catalog = fixture.createCatalog()
+
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identityA)])
+      assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identityA)])
+      assert.notEqual(fixture.methodsMarker(identityA), fixture.notificationsMarker(identityA))
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1])
+
+      fixture.setActive(identityB)
+      const [methods, notifications] = await Promise.all([
+        catalog.listMethods(),
+        catalog.listNotificationMethods(),
+      ])
+      assert.deepEqual(methods, [fixture.methodsMarker(identityB)], 'a replacement identity must not be served from A cache')
+      assert.deepEqual(notifications, [fixture.notificationsMarker(identityB)])
+      assert.deepEqual(
+        fixture.generations.map((entry) => entry.generation),
+        [1, 2],
+        'exactly one shared generation per identity',
+      )
+      assert.equal(fixture.generations[1].launchPath, targetB.launchPath)
+    } finally {
+      await fixture.cleanup()
+    }
   })
 
-  const [generatedMethods, generatedNotifications] = await Promise.all([
-    catalog.listMethods(),
-    catalog.listNotificationMethods(),
-  ])
-  assert.deepEqual(generatedMethods, ['thread/read', 'thread/start'])
-  assert.deepEqual(generatedNotifications, ['turn/completed', 'turn/started'])
-  assert.equal(generateCount, 1)
-  assert.deepEqual(await catalog.listMethods(), ['thread/read', 'thread/start'])
-  assert.deepEqual(await catalog.listNotificationMethods(), ['turn/completed', 'turn/started'])
-  assert.equal(generateCount, 1)
+  await runCase('S2 catalog hits add no hash, no generation and no re-probe', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-hot.exe', 'b4b2-hot-bytes\n')
+      const identity = fixture.identityFor({ launchPath: target.launchPath, generation: 4, sha256: target.sha256 })
+      fixture.setActive(identity)
+      const catalog = fixture.createCatalog()
+
+      const [methods, notifications] = await Promise.all([catalog.listMethods(), catalog.listNotificationMethods()])
+      assert.deepEqual(methods, [fixture.methodsMarker(identity)])
+      assert.deepEqual(notifications, [fixture.notificationsMarker(identity)])
+      assert.equal(fixture.generations.length, 1)
+      assert.equal(fixture.hashCalls(), 2, 'one generation performs exactly a pre/post fingerprint check')
+
+      for (let index = 0; index < 4; index += 1) {
+        assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity)])
+        assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identity)])
+      }
+      assert.equal(fixture.generations.length, 1)
+      assert.equal(fixture.hashCalls(), 2, 'a cache hit must not touch the launch target bytes')
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  // Correction (green3 oracle error, retained as history): the original S3 asserted both the real
+  // `getSpawnInvocation` result and the unwrapped native argv, so a Windows `.cmd` target failed on
+  // the (correct) `cmd.exe /d /s /c <command>` wrapper. The default production path is now covered
+  // with a **native** target, and the launcher case is a separate unavailable assertion.
+  await runCase('S3 the default generation path spawns the frozen native target with the real invocation', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-default.exe', 'b4b2-default-bytes\n')
+      const identity = fixture.identityFor({
+        launchPath: target.launchPath,
+        generation: 5,
+        sha256: target.sha256,
+      })
+      fixture.setActive(identity)
+      const catalog = fixture.createCatalog({ useDefaultGenerationPath: true })
+
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity)])
+      assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identity)])
+      assert.equal(fixture.generations.length, 1)
+
+      const record = fixture.generations[0]
+      const expected = getSpawnInvocation(target.launchPath, ['app-server', 'generate-json-schema', '--out', record.outDir])
+      assert.equal(record.command, expected.command)
+      assert.deepEqual(record.args, expected.args)
+      assert.equal(record.identityKind, 'native')
+      assert.equal(record.command, target.launchPath, 'a native target is spawned directly, with no shim wrapper')
+      assert.deepEqual(record.args, ['app-server', 'generate-json-schema', '--out', record.outDir])
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S3L launcher-only identity cannot bind the native target: unavailable with zero generation', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-launcher.cmd', 'b4b2-launcher-bytes\n')
+      const identity = fixture.identityFor({
+        launchPath: target.launchPath,
+        generation: 6,
+        sha256: target.sha256,
+        identityKind: 'launcher',
+      })
+      fixture.setActive(identity)
+      const catalog = fixture.createCatalog({ useDefaultGenerationPath: true })
+
+      await expectUnavailable(
+        () => catalog.listMethods(),
+        'incomplete-launch-identity',
+        'a launcher wrapper cannot prove it generated the active native schema',
+      )
+      await expectUnavailable(
+        () => catalog.listNotificationMethods(),
+        'incomplete-launch-identity',
+        'the notifications list follows the same launcher contract',
+      )
+      assert.equal(fixture.generations.length, 0, 'no generator/spawn may run for a launcher-only identity')
+      assert.equal(fixture.hashCalls(), 0, 'no wrapper hash may run for a launcher-only identity')
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S4 a new SHA under the same path/version/generation regenerates', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-sha.exe', 'b4b2-sha-1\n')
+      const identity1 = fixture.identityFor({ launchPath: target.launchPath, generation: 1, sha256: target.sha256 })
+      fixture.setActive(identity1)
+      const catalog = fixture.createCatalog()
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity1)])
+
+      const replaced = await fixture.writeLaunchTarget('codex-b4b2-sha.exe', 'b4b2-sha-2\n')
+      assert.equal(replaced.launchPath, target.launchPath)
+      const identity2 = fixture.identityFor({ launchPath: replaced.launchPath, generation: 1, sha256: replaced.sha256 })
+      fixture.setActive(identity2)
+      const [methods, notifications] = await Promise.all([catalog.listMethods(), catalog.listNotificationMethods()])
+      assert.deepEqual(methods, [fixture.methodsMarker(identity2)])
+      assert.deepEqual(notifications, [fixture.notificationsMarker(identity2)])
+      assert.notEqual(fixture.methodsMarker(identity1), fixture.methodsMarker(identity2))
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 1], 'the SHA is part of the cache key')
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S5 a new generation over the same file/version/SHA regenerates', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-gen.exe', 'b4b2-gen-bytes\n')
+      const identity1 = fixture.identityFor({ launchPath: target.launchPath, generation: 1, sha256: target.sha256 })
+      fixture.setActive(identity1)
+      const catalog = fixture.createCatalog()
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity1)])
+
+      const identity2 = fixture.identityFor({ launchPath: target.launchPath, generation: 2, sha256: target.sha256 })
+      fixture.setActive(identity2)
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity2)])
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 2], 'the generation is part of the cache key')
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S6 a cached active identity keeps serving A while the file on disk changed', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-frozen.exe', 'b4b2-frozen-1\n')
+      const identity = fixture.identityFor({ launchPath: target.launchPath, generation: 1, sha256: target.sha256 })
+      fixture.setActive(identity)
+      const catalog = fixture.createCatalog()
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity)])
+      const hashesAfterGeneration = fixture.hashCalls()
+
+      await fixture.writeLaunchTarget('codex-b4b2-frozen.exe', 'b4b2-frozen-2\n')
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity)], 'the running owner identity still owns the catalog')
+      assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identity)])
+      assert.equal(fixture.hashCalls(), hashesAfterGeneration, 'a hit must not re-hash the changed file')
+      assert.equal(fixture.generations.length, 1)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S7 no cache plus a changed disk fails closed instead of generating from B', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-uncached.exe', 'b4b2-uncached-1\n')
+      const identityA = fixture.identityFor({ launchPath: target.launchPath, generation: 1, sha256: target.sha256 })
+      fixture.setActive(identityA)
+      const catalog = fixture.createCatalog()
+
+      const replaced = await fixture.writeLaunchTarget('codex-b4b2-uncached.exe', 'b4b2-uncached-2\n')
+      assert.notEqual(replaced.sha256, identityA.sha256)
+      await expectUnavailable(
+        () => catalog.listMethods(),
+        'launch-target-changed',
+        'an uncached frozen identity whose file already changed must fail closed',
+      )
+      assert.equal(fixture.generations.length, 0, 'the generator must not run for a target that no longer matches')
+      assert.equal(fixture.hashCalls(), 1)
+      await expectUnavailable(() => catalog.listNotificationMethods(), 'launch-target-changed', 'both lists share the same contract')
+
+      const identityB = fixture.identityFor({ launchPath: replaced.launchPath, generation: 2, sha256: replaced.sha256 })
+      fixture.setActive(identityB)
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identityB)], 'a real replacement is generated under its own identity')
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [2])
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S8 bytes changing inside the generation window are rejected and never cached', async () => {
+    let launchPathForMutation = ''
+    const fixture = await createB4b2CatalogFixture({
+      onGenerate: async () => {
+        await writeFile(launchPathForMutation, 'b4b2-mutated-inside-window\n', 'utf8')
+      },
+    })
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-window.exe', 'b4b2-window-before\n')
+      launchPathForMutation = target.launchPath
+      const identity = fixture.identityFor({ launchPath: target.launchPath, generation: 1, sha256: target.sha256 })
+      fixture.setActive(identity)
+      const catalog = fixture.createCatalog()
+
+      await expectUnavailable(
+        () => catalog.listMethods(),
+        'launch-target-changed',
+        'a fingerprint change inside the window must not be cached',
+      )
+      assert.equal(fixture.generations.length, 1)
+      assert.equal(fixture.hashCalls(), 2)
+
+      await expectUnavailable(
+        () => catalog.listMethods(),
+        'launch-target-changed',
+        'the next read must not generate from the changed bytes either',
+      )
+      assert.equal(fixture.generations.length, 1, 'no generation from the mutated bytes')
+      assert.equal(fixture.hashCalls(), 3, 'only the pre-check ran the second time')
+      assert.deepEqual(await catalog.listNotificationMethods().then(() => 'resolved', () => 'rejected'), 'rejected')
+      assert.equal(fixture.generations.length, 1)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S9 inactive and incomplete identities fail closed without generating', async () => {
+    const fixture = await createB4b2CatalogFixture()
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-unavailable.exe', 'b4b2-unavailable-bytes\n')
+      const catalog = fixture.createCatalog()
+
+      fixture.setActive(null)
+      await expectUnavailable(() => catalog.listMethods(), 'no-active-launch-identity', 'no active identity is unavailable')
+      await expectUnavailable(
+        () => catalog.listNotificationMethods(),
+        'no-active-launch-identity',
+        'notifications follow the same contract',
+      )
+
+      fixture.setActive(fixture.identityFor({
+        launchPath: target.launchPath,
+        generation: 1,
+        sha256: null,
+        versionRaw: null,
+        identityKind: 'unknown',
+        reason: 'version-probe-failed',
+      }))
+      await expectUnavailable(() => catalog.listMethods(), 'incomplete-launch-identity', 'an unknown identity is unavailable')
+
+      fixture.setActive(fixture.identityFor({ launchPath: target.launchPath, generation: 2, sha256: null }))
+      await expectUnavailable(() => catalog.listMethods(), 'incomplete-launch-identity', 'a missing SHA is incomplete')
+
+      fixture.setActive(fixture.identityFor({ launchPath: target.launchPath, generation: 3, sha256: target.sha256, versionRaw: '' }))
+      await expectUnavailable(() => catalog.listMethods(), 'incomplete-launch-identity', 'a missing raw version is incomplete')
+
+      fixture.setActive(fixture.identityFor({ launchPath: '', generation: 4, sha256: target.sha256 }))
+      await expectUnavailable(() => catalog.listMethods(), 'no-active-launch-identity', 'a missing launch path is unavailable')
+
+      assert.deepEqual(fixture.generations, [], 'no unavailable case may start a generation')
+      assert.equal(fixture.hashCalls(), 0)
+      assert.equal(isAppServerMethodCatalogUnavailableError(new Error('plain')), false)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S10 a generator failure only clears its own generation and the retry succeeds', async () => {
+    const fixture = await createB4b2CatalogFixture({
+      onGenerate: ({ callIndex }) => {
+        if (callIndex === 0) {
+          throw new Error('b4b2 generator failed')
+        }
+      },
+    })
+    try {
+      const target = await fixture.writeLaunchTarget('codex-b4b2-retry.exe', 'b4b2-retry-bytes\n')
+      const identity = fixture.identityFor({ launchPath: target.launchPath, generation: 1, sha256: target.sha256 })
+      fixture.setActive(identity)
+      const catalog = fixture.createCatalog()
+
+      await assert.rejects(catalog.listMethods(), /b4b2 generator failed/u, 'the generator error is surfaced')
+      assert.equal(fixture.generations.length, 1)
+
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identity)], 'the same identity may retry legally')
+      assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identity)])
+      assert.equal(fixture.generations.length, 2, 'the retry re-generates instead of reusing a poisoned inflight')
+      // Correction (green3 oracle error, retained as history): the failed generation performs only
+      // its pre-check hash, and the successful retry adds its pre/post pair, so 3 is the legitimate
+      // total. The production check is not doubled to satisfy a hash count.
+      assert.equal(fixture.hashCalls(), 3, 'failed pre-check hash plus the successful pre/post pair')
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S11 a late A success after B is cached cannot overwrite the B catalog', async () => {
+    let releaseA: () => void = () => {}
+    const gateA = new Promise<void>((resolveGate) => {
+      releaseA = resolveGate
+    })
+    const fixture = await createB4b2CatalogFixture({
+      onGenerate: async ({ identity }) => {
+        if (identity.generation === 1) {
+          await gateA
+        }
+      },
+    })
+    try {
+      const targetA = await fixture.writeLaunchTarget('codex-b4b2-late-a.exe', 'b4b2-late-a\n')
+      const targetB = await fixture.writeLaunchTarget('codex-b4b2-late-b.exe', 'b4b2-late-b\n')
+      const identityA = fixture.identityFor({ launchPath: targetA.launchPath, generation: 1, sha256: targetA.sha256 })
+      const identityB = fixture.identityFor({ launchPath: targetB.launchPath, generation: 2, sha256: targetB.sha256 })
+      fixture.setActive(identityA)
+      const catalog = fixture.createCatalog()
+
+      const pendingA = catalog.listMethods()
+      // Keep the original promise for the later expectUnavailable assertion, but attach a noop catch
+      // now so a rejection cannot surface as an unhandled rejection before that assertion runs.
+      void pendingA.catch(() => {})
+      // A bare 0 ms tick can fire before the catalog finishes its awaited filesystem work
+      // (mkdtemp) and enters onGenerate; wait for the generation record it pushes synchronously
+      // at entry instead of guessing a tick count.
+      await waitForCondition(() => fixture.generations.some((entry) => entry.generation === 1), 10_000)
+      assert.equal(fixture.generations.length, 1)
+
+      fixture.setActive(identityB)
+      const [methodsB, notificationsB] = await Promise.all([catalog.listMethods(), catalog.listNotificationMethods()])
+      assert.deepEqual(methodsB, [fixture.methodsMarker(identityB)])
+      assert.deepEqual(notificationsB, [fixture.notificationsMarker(identityB)])
+
+      releaseA()
+      await expectUnavailable(() => pendingA, 'launch-identity-changed', 'the stale A call ends explicitly')
+
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identityB)], 'B keeps its catalog')
+      assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identityB)])
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 2], 'A completion must not add a generation')
+    } finally {
+      releaseA()
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S12 a late A success does not clear a pending B and the third read still shares B', async () => {
+    let releaseA: () => void = () => {}
+    let releaseB: () => void = () => {}
+    const gateA = new Promise<void>((resolveGate) => {
+      releaseA = resolveGate
+    })
+    const gateB = new Promise<void>((resolveGate) => {
+      releaseB = resolveGate
+    })
+    const fixture = await createB4b2CatalogFixture({
+      onGenerate: async ({ identity }) => {
+        if (identity.generation === 1) {
+          await gateA
+        }
+        if (identity.generation === 2) {
+          await gateB
+        }
+      },
+    })
+    try {
+      const targetA = await fixture.writeLaunchTarget('codex-b4b2-race-a.exe', 'b4b2-race-a\n')
+      const targetB = await fixture.writeLaunchTarget('codex-b4b2-race-b.exe', 'b4b2-race-b\n')
+      const identityA = fixture.identityFor({ launchPath: targetA.launchPath, generation: 1, sha256: targetA.sha256 })
+      const identityB = fixture.identityFor({ launchPath: targetB.launchPath, generation: 2, sha256: targetB.sha256 })
+      fixture.setActive(identityA)
+      const catalog = fixture.createCatalog()
+
+      const pendingA = catalog.listMethods()
+      // Original promise stays intact for the expectUnavailable assertion below; the noop catch
+      // only prevents an early unhandled rejection.
+      void pendingA.catch(() => {})
+      await waitForCondition(() => fixture.generations.some((entry) => entry.generation === 1), 10_000)
+
+      fixture.setActive(identityB)
+      const pendingBMethod = catalog.listMethods()
+      const pendingBNotification = catalog.listNotificationMethods()
+      void pendingBMethod.catch(() => {})
+      void pendingBNotification.catch(() => {})
+      await waitForCondition(() => fixture.generations.some((entry) => entry.generation === 2), 10_000)
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 2], 'B gets exactly one generation while A is in flight')
+
+      releaseA()
+      await expectUnavailable(() => pendingA, 'launch-identity-changed', 'A settles as an explicit unavailable')
+
+      assert.equal(pendingBMethod === pendingBNotification, false, 'the two lists return their own promises to their callers')
+      const thirdRead = catalog.listMethods()
+      releaseB()
+      assert.deepEqual(await pendingBMethod, [fixture.methodsMarker(identityB)])
+      assert.deepEqual(await pendingBNotification, [fixture.notificationsMarker(identityB)])
+      assert.deepEqual(await thirdRead, [fixture.methodsMarker(identityB)], 'the third read still shares the single B generation')
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 2], 'A finalization must not enqueue a third generation')
+    } finally {
+      releaseA()
+      releaseB()
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S13 a late A failure does not clear a pending B', async () => {
+    let pendingA: Promise<string[]> | undefined
+    let releaseA: () => void = () => {}
+    let releaseB: () => void = () => {}
+    const gateA = new Promise<void>((resolveGate) => {
+      releaseA = resolveGate
+    })
+    const gateB = new Promise<void>((resolveGate) => {
+      releaseB = resolveGate
+    })
+    const fixture = await createB4b2CatalogFixture({
+      onGenerate: async ({ identity }) => {
+        if (identity.generation === 1) {
+          await gateA
+          throw new Error('b4b2 late-A generation failed')
+        }
+        if (identity.generation === 2) {
+          await gateB
+        }
+      },
+    })
+    try {
+      const targetA = await fixture.writeLaunchTarget('codex-b4b2-fail-a.exe', 'b4b2-fail-a\n')
+      const targetB = await fixture.writeLaunchTarget('codex-b4b2-fail-b.exe', 'b4b2-fail-b\n')
+      const identityA = fixture.identityFor({ launchPath: targetA.launchPath, generation: 1, sha256: targetA.sha256 })
+      const identityB = fixture.identityFor({ launchPath: targetB.launchPath, generation: 2, sha256: targetB.sha256 })
+      fixture.setActive(identityA)
+      const catalog = fixture.createCatalog()
+
+      pendingA = catalog.listMethods()
+      void pendingA.catch(() => {})
+      await waitForCondition(() => fixture.generations.some((entry) => entry.generation === 1), 10_000)
+
+      fixture.setActive(identityB)
+      const pendingBMethod = catalog.listMethods()
+      const pendingBNotification = catalog.listNotificationMethods()
+      void pendingBMethod.catch(() => {})
+      void pendingBNotification.catch(() => {})
+      await waitForCondition(() => fixture.generations.some((entry) => entry.generation === 2), 10_000)
+
+      releaseA()
+      await assert.rejects(pendingA, /b4b2 late-A generation failed/u, 'the stale A failure is surfaced to its caller')
+
+      releaseB()
+      assert.deepEqual(await pendingBMethod, [fixture.methodsMarker(identityB)])
+      assert.deepEqual(await pendingBNotification, [fixture.notificationsMarker(identityB)])
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identityB)])
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 2])
+    } finally {
+      releaseA()
+      releaseB()
+      await pendingA?.catch(() => {})
+      await fixture.cleanup()
+    }
+  })
+
+  await runCase('S14 a late A failure after B is cached keeps the B catalog', async () => {
+    let pendingA: Promise<string[]> | undefined
+    let releaseA: () => void = () => {}
+    const gateA = new Promise<void>((resolveGate) => {
+      releaseA = resolveGate
+    })
+    // Explicit synchronization instead of a 0 ms event-loop tick: the real catalog awaits
+    // filesystem work (mkdtemp) before it reaches onGenerate, so a fixed tick could observe
+    // "0 generations" before A entered its generate path. Resolve on entering A's generation 1.
+    let markGenerationAEntered: () => void = () => {}
+    const generationAEntered = new Promise<void>((resolveEntered) => {
+      markGenerationAEntered = resolveEntered
+    })
+    const fixture = await createB4b2CatalogFixture({
+      onGenerate: async ({ identity }) => {
+        if (identity.generation === 1) {
+          markGenerationAEntered()
+          await gateA
+          throw new Error('b4b2 late-A cached-generation failure')
+        }
+      },
+    })
+    try {
+      const targetA = await fixture.writeLaunchTarget('codex-b4b2-latefail-a.exe', 'b4b2-latefail-a\n')
+      const targetB = await fixture.writeLaunchTarget('codex-b4b2-latefail-b.exe', 'b4b2-latefail-b\n')
+      const identityA = fixture.identityFor({ launchPath: targetA.launchPath, generation: 1, sha256: targetA.sha256 })
+      const identityB = fixture.identityFor({ launchPath: targetB.launchPath, generation: 2, sha256: targetB.sha256 })
+      fixture.setActive(identityA)
+      const catalog = fixture.createCatalog()
+
+      pendingA = catalog.listMethods()
+      void pendingA.catch(() => {})
+      let entryTimeout: ReturnType<typeof setTimeout> | undefined
+      const entryTimeoutSignal = new Promise<never>((_resolve, rejectTimeout) => {
+        entryTimeout = setTimeout(
+          () => rejectTimeout(new Error('S14: generation 1 never entered its generate path within 10s')),
+          10_000,
+        )
+      })
+      // If A settles before generation 1 is entered, fail with the real cause instead of a bare
+      // timeout: surface the original rejection, or an explicit unexpected-success error.
+      const settledBeforeEntry = pendingA.then(
+        () => Promise.reject(new Error('S14: pendingA settled successfully before generation 1 was entered')),
+        (error: unknown) => Promise.reject(error instanceof Error ? error : new Error(String(error))),
+      )
+      try {
+        await Promise.race([generationAEntered, settledBeforeEntry, entryTimeoutSignal])
+      } finally {
+        if (entryTimeout !== undefined) clearTimeout(entryTimeout)
+      }
+      assert.equal(fixture.generations.length, 1)
+
+      fixture.setActive(identityB)
+      const [methodsB, notificationsB] = await Promise.all([catalog.listMethods(), catalog.listNotificationMethods()])
+      assert.deepEqual(methodsB, [fixture.methodsMarker(identityB)])
+      assert.deepEqual(notificationsB, [fixture.notificationsMarker(identityB)])
+
+      releaseA()
+      await assert.rejects(pendingA, /b4b2 late-A cached-generation failure/u, 'the stale A failure is surfaced')
+
+      assert.deepEqual(await catalog.listMethods(), [fixture.methodsMarker(identityB)], 'B keeps its catalog')
+      assert.deepEqual(await catalog.listNotificationMethods(), [fixture.notificationsMarker(identityB)])
+      assert.deepEqual(fixture.generations.map((entry) => entry.generation), [1, 2], 'a late A failure adds no generation')
+    } finally {
+      releaseA()
+      await pendingA?.catch(() => {})
+      await fixture.cleanup()
+    }
+  })
+
+  await withB4b1SyntheticHome(async (home) => {
+    const launchDir = join(home, 'launch')
+    await mkdir(launchDir, { recursive: true })
+    const pathA = join(launchDir, 'codex-b4b2-owner-a.exe')
+    const pathB = join(launchDir, 'codex-b4b2-owner-b.exe')
+    const bytesA = 'b4b2-owner-binary-a\n'
+    const bytesB = 'b4b2-owner-binary-b\n'
+    await writeFile(pathA, bytesA, 'utf8')
+    await writeFile(pathB, bytesB, 'utf8')
+    const shaOf = (value: string) => createHash('sha256').update(value).digest('hex')
+    const rawVersion = 'codex-cli 0.162.1-b4b2-owner'
+    const harness = createB4b1OwnerHarness({ command: pathA, probeStdout: `${rawVersion}\n` })
+
+    type SharedScope = typeof globalThis & {
+      [CODEX_BRIDGE_SHARED_STATE_KEY]?: { appServer: AppServerProcess; methodCatalog: AppServerMethodCatalog }
+    }
+    const globalScope = {} as SharedScope
+    const seenOwners: AppServerProcess[] = []
+    const runs: Array<{ command: string; args: string[]; outDir: string; identity: CodexLaunchIdentity }> = []
+    let hashCalls = 0
+    const ownerMethodsMarker = (identity: CodexLaunchIdentity) => `b4b2/owner/methods-g${identity.generation}`
+    const ownerNotificationsMarker = (identity: CodexLaunchIdentity) => `b4b2/owner/notifications-g${identity.generation}`
+    const writeOwnerMarkers = async (outDir: string, identity: CodexLaunchIdentity): Promise<void> => {
+      await writeFile(join(outDir, 'ClientRequest.json'), JSON.stringify({
+        oneOf: [{ properties: { method: { enum: [ownerMethodsMarker(identity)] } } }],
+      }), 'utf8')
+      await writeFile(join(outDir, 'ServerNotification.json'), JSON.stringify({
+        oneOf: [{ properties: { method: { enum: [ownerNotificationsMarker(identity)] } } }],
+      }), 'utf8')
+    }
+
+    const state = getCodexBridgeSharedState<AppServerProcess, AppServerMethodCatalog>({
+      globalScope,
+      createAppServer: () => harness.owner,
+      createMethodCatalog: (appServer) => {
+        seenOwners.push(appServer)
+        return new AppServerMethodCatalog({
+          getActiveLaunchIdentity: () => appServer.getActiveLaunchIdentity(),
+          hashLaunchFile: (launchPath) => {
+            hashCalls += 1
+            return readCodexLaunchFileSha256(launchPath)
+          },
+          runSchemaCommand: async (run) => {
+            runs.push({ command: run.command, args: run.args, outDir: run.outDir, identity: run.identity })
+            await writeOwnerMarkers(run.outDir, run.identity)
+          },
+        })
+      },
+    })
+
+    const callMeta = async (name: 'methods' | 'notifications'): Promise<{ status: number; data: unknown }> => {
+      const response = createRouteTestResponse()
+      const handled = await handleWorkspaceMetaRoutes(
+        { method: 'GET' } as never,
+        response.response as never,
+        new URL(`http://127.0.0.1/codex-api/meta/${name}`),
+        {
+          methodCatalog: state.methodCatalog,
+          readJsonBody: async () => undefined,
+          homeDirectory: () => home,
+        },
+      )
+      assert.equal(handled, true)
+      return {
+        status: (response.response as { statusCode: number }).statusCode,
+        data: (JSON.parse(response.body) as { data: unknown }).data,
+      }
+    }
+    const expectMetaUnavailable = async (name: 'methods' | 'notifications', reason: string): Promise<void> => {
+      await assert.rejects(callMeta(name), (error: unknown) => {
+        assert.equal(isAppServerMethodCatalogUnavailableError(error), true, `${name} must fail closed through the meta route`)
+        assert.equal(isAppServerMethodCatalogUnavailableError(error) ? error.reason : null, reason)
+        return true
+      })
+    }
+
+    await runCase('F1 the shared factory passes the same real owner and creates it once', async () => {
+      const again = getCodexBridgeSharedState<AppServerProcess, AppServerMethodCatalog>({
+        globalScope,
+        createAppServer: () => {
+          throw new Error('b4b2: the shared factory must not create a second owner')
+        },
+        createMethodCatalog: () => {
+          throw new Error('b4b2: the shared factory must not create a second catalog')
+        },
+      })
+      assert.equal(again, state)
+      assert.equal(again.appServer, harness.owner)
+      assert.equal(seenOwners.length, 1)
+      assert.equal(seenOwners[0], harness.owner, 'the catalog factory must receive the already created owner')
+      assert.equal(globalScope[CODEX_BRIDGE_SHARED_STATE_KEY], state)
+    })
+
+    await runCase('F2 an inactive real owner fails closed and starts no generation', async () => {
+      assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+      await expectMetaUnavailable('methods', 'no-active-launch-identity')
+      await expectUnavailableState(state.methodCatalog, 'no-active-launch-identity')
+      assert.deepEqual(runs, [])
+      assert.equal(hashCalls, 0)
+      assert.equal(harness.counts.spawn, 0)
+    })
+
+    await runCase('F3 a warmed real owner generates once for both meta lists', async () => {
+      await harness.owner.warmup()
+      const identity = harness.owner.getActiveLaunchIdentity()
+      assert.ok(identity, 'the warmed owner publishes its launch identity')
+      assert.equal(identity.generation, 1)
+      assert.equal(identity.launchPath, pathA)
+      assert.equal(identity.sha256, shaOf(bytesA))
+      assert.equal(identity.identityKind, 'native')
+
+      const [methods, notifications] = await Promise.all([callMeta('methods'), callMeta('notifications')])
+      assert.equal(methods.status, 200)
+      assert.equal(notifications.status, 200)
+      assert.deepEqual(methods.data, [ownerMethodsMarker(identity)])
+      assert.deepEqual(notifications.data, [ownerNotificationsMarker(identity)])
+      assert.notEqual(ownerMethodsMarker(identity), ownerNotificationsMarker(identity))
+
+      assert.equal(runs.length, 1, 'both meta lists must share exactly one generation')
+      assert.equal(runs[0].identity.launchPath, pathA)
+      assert.equal(runs[0].identity.generation, 1)
+      const expected = getSpawnInvocation(pathA, ['app-server', 'generate-json-schema', '--out', runs[0].outDir])
+      assert.equal(runs[0].command, expected.command)
+      assert.deepEqual(runs[0].args, expected.args)
+      assert.equal(hashCalls, 2)
+    })
+
+    await runCase('F4 meta hits and health reads add no resolve, probe, hash or generation', async () => {
+      const countsBefore = { ...harness.counts }
+      const hashesBefore = hashCalls
+      const [methods, notifications, methodsAgain] = await Promise.all([
+        callMeta('methods'),
+        callMeta('notifications'),
+        callMeta('methods'),
+      ])
+      const identity = harness.owner.getActiveLaunchIdentity()
+      assert.ok(identity)
+      assert.deepEqual(methods.data, [ownerMethodsMarker(identity)])
+      assert.deepEqual(notifications.data, [ownerNotificationsMarker(identity)])
+      assert.deepEqual(methodsAgain.data, [ownerMethodsMarker(identity)])
+      for (let index = 0; index < 3; index += 1) {
+        harness.owner.getStatus()
+      }
+      assert.equal(runs.length, 1)
+      assert.equal(hashCalls, hashesBefore)
+      assert.deepEqual(harness.counts, countsBefore)
+      assert.deepEqual(readActiveLaunchIdentity(harness.owner.getStatus()), harness.owner.getActiveLaunchIdentity())
+    })
+
+    await runCase('F5 a new install/PATH candidate cannot re-attribute the running A catalog', async () => {
+      harness.setCommand(pathB)
+      const resolveBefore = harness.counts.resolve
+      const methods = await callMeta('methods')
+      const identity = harness.owner.getActiveLaunchIdentity()
+      assert.ok(identity)
+      assert.equal(identity.generation, 1)
+      assert.equal(identity.launchPath, pathA)
+      assert.equal(identity.sha256, shaOf(bytesA))
+      assert.deepEqual(methods.data, [ownerMethodsMarker(identity)], 'the catalog keeps generating for the running A target')
+      assert.equal(harness.counts.resolve, resolveBefore, 'the catalog never re-resolves the launch command')
+      assert.equal(runs.length, 1)
+      assert.equal(hashCalls, 2)
+    })
+
+    await runCase('F6 a real replacement publishes B and both meta lists generate once with B markers', async () => {
+      harness.children[0].emitExit()
+      assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+      await harness.owner.warmup()
+      const identityB = harness.owner.getActiveLaunchIdentity()
+      assert.ok(identityB, 'the replacement child publishes its own identity')
+      assert.equal(identityB.generation, 2)
+      assert.equal(identityB.launchPath, pathB)
+      assert.equal(identityB.sha256, shaOf(bytesB))
+
+      const [methods, notifications] = await Promise.all([callMeta('methods'), callMeta('notifications')])
+      assert.deepEqual(methods.data, [ownerMethodsMarker(identityB)])
+      assert.deepEqual(notifications.data, [ownerNotificationsMarker(identityB)])
+      assert.equal(runs.length, 2, 'exactly one new generation for the replacement identity')
+      assert.equal(runs[1].identity.generation, 2)
+      assert.equal(runs[1].identity.launchPath, pathB)
+      const expected = getSpawnInvocation(pathB, ['app-server', 'generate-json-schema', '--out', runs[1].outDir])
+      assert.equal(runs[1].command, expected.command)
+      assert.deepEqual(runs[1].args, expected.args)
+      assert.equal(hashCalls, 4)
+    })
+
+    await runCase('F7 disposing the real owner fails closed instead of serving the cached catalog', async () => {
+      harness.owner.dispose()
+      assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+      await expectMetaUnavailable('methods', 'no-active-launch-identity')
+      await expectMetaUnavailable('notifications', 'no-active-launch-identity')
+      await expectUnavailableState(state.methodCatalog, 'no-active-launch-identity')
+      assert.equal(runs.length, 2)
+      assert.equal(hashCalls, 4)
+      assert.equal(harness.owner.getStatus().running, false)
+    })
+
+    await runCase('F8 a failed handshake stays unavailable and the retry reuses the retained child', async () => {
+      const retryHarness = createB4b1OwnerHarness({
+        command: pathA,
+        probeStdout: `${rawVersion}\n`,
+        initializeFailures: 1,
+      })
+      const retryScope = {} as SharedScope
+      const retryRuns: string[] = []
+      const retryState = getCodexBridgeSharedState<AppServerProcess, AppServerMethodCatalog>({
+        globalScope: retryScope,
+        createAppServer: () => retryHarness.owner,
+        createMethodCatalog: (appServer) => new AppServerMethodCatalog({
+          getActiveLaunchIdentity: () => appServer.getActiveLaunchIdentity(),
+          runSchemaCommand: async (run) => {
+            retryRuns.push(run.identity.launchPath)
+            await writeOwnerMarkers(run.outDir, run.identity)
+          },
+        }),
+      })
+
+      await assert.rejects(retryHarness.owner.warmup(), (error: unknown) => error instanceof Error)
+      assert.equal(retryHarness.owner.getActiveLaunchIdentity(), null)
+      await expectUnavailableState(retryState.methodCatalog, 'no-active-launch-identity')
+      assert.deepEqual(retryRuns, [])
+
+      await retryHarness.owner.warmup()
+      const identity = retryHarness.owner.getActiveLaunchIdentity()
+      assert.ok(identity)
+      assert.equal(identity.generation, 1)
+      assert.equal(identity.launchPath, pathA)
+      assert.deepEqual(await retryState.methodCatalog.listMethods(), [ownerMethodsMarker(identity)])
+      assert.deepEqual(retryRuns, [pathA])
+      assert.deepEqual(retryHarness.counts, { resolve: 1, probe: 1, spawn: 1 })
+      retryHarness.owner.dispose()
+    })
+  })
+
+  const failures = cases.filter((entry) => entry.status === 'failed')
+  console.log(JSON.stringify({ b4b2CatalogCases: cases }))
+  if (failures.length > 0) {
+    throw new Error(`b4b2 catalog cases failed (${failures.length}/${cases.length}): ${failures.map((entry) => entry.name).join(', ')}`)
+  }
 }
 
 function smokeAppServerStatusDiagnostics(): void {
@@ -3137,6 +4261,224 @@ async function smokeAppServerSchemaAuditSummary(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+
+  // B4C: synthetic generatedBy identity + raw-version preservation. This was the original runtime
+  // RED — normalizeAppServerSchemaAuditSummary dropped generatedBy entirely. The normalized object now
+  // legitimately carries extra validated provenance (selectionSource/verification/generation/
+  // baseline/generated), so the oracle projects exactly the four supplied identity fields and
+  // deep-compares them. That keeps every original field assertion, including the raw CRLF version
+  // stdout, without weakening the test.
+  const syntheticGeneratedByInput = {
+    generatedBy: {
+      launchPath: 'C:/b4c-synthetic-only/codex.exe',
+      versionRaw: 'codex-cli sentinel\r\n',
+      sha256: 'a'.repeat(64),
+      identityKind: 'native',
+    },
+  }
+  const syntheticNormalized = normalizeAppServerSchemaAuditSummary(syntheticGeneratedByInput)
+  const syntheticNormalizedGeneratedBy = asRecord(syntheticNormalized.generatedBy)
+  assert.deepEqual(
+    {
+      launchPath: syntheticNormalizedGeneratedBy?.launchPath,
+      versionRaw: syntheticNormalizedGeneratedBy?.versionRaw,
+      sha256: syntheticNormalizedGeneratedBy?.sha256,
+      identityKind: syntheticNormalizedGeneratedBy?.identityKind,
+    },
+    syntheticGeneratedByInput.generatedBy,
+  )
+  assert.equal(
+    syntheticNormalized.generatedBy?.versionRaw,
+    'codex-cli sentinel\r\n',
+    'raw CRLF version stdout must survive normalization untrimmed',
+  )
+  assert.equal(syntheticNormalized.generatedBy?.verification.status, 'unknown')
+  assert.equal(syntheticNormalized.generatedBy?.generation.status, 'unknown')
+
+  // An old summary without provenance stays null/unknown and is never invented.
+  const legacyNormalized = normalizeAppServerSchemaAuditSummary({
+    generatedAtIso: '2026-08-07T22:06:55.8568574Z',
+    reviewStatus: 'drift-recorded',
+  })
+  assert.equal(legacyNormalized.generatedBy, null)
+  assert.equal(legacyNormalized.contentDiff, null)
+
+  // A matched label cannot substitute for a valid, consistent child exit.
+  for (const [entry, expected] of [
+    [{ status: 'matched', exitCode: 1 }, { status: 'unknown', exitCode: 1 }],
+    [{ status: 'matched', exitCode: 0.5 }, { status: 'unknown', exitCode: null }],
+    [{ status: 'matched' }, { status: 'unknown', exitCode: null }],
+  ] as const) {
+    assert.deepEqual(normalizeAppServerSchemaAuditSummary({
+      contentDiff: { status: 'complete', typescript: entry, json: { status: 'matched', exitCode: 0 } },
+    }).contentDiff?.typescript, expected)
+  }
+}
+
+// B4C: pure identity-comparison matrix. `compareSchemaAuditIdentity` takes only an already-loaded
+// summary provenance and one frozen active snapshot — it has no probe/hash/generator seam — so these
+// cases exercise the decision table directly.
+function smokeSchemaAuditIdentityMatch(): void {
+  const B4C_ROOT = process.platform === 'win32' ? 'C:/b4c-identity' : '/opt/b4c-identity'
+  const B4C_WIN_ROOT = 'c:\B4C-IDENTITY'
+
+  type ActiveIdentityOverrides = {
+    generation?: number
+    launchPath?: string
+    versionRaw?: string | null
+    sha256?: string | null
+    identityKind?: string
+  }
+
+  const buildSummary = (generatedByOverrides: Record<string, unknown> = {}): unknown => ({
+    available: true,
+    reviewStatus: 'baseline-matched',
+    generatedBy: {
+      launchPath: `${B4C_ROOT}/codex.exe`,
+      versionRaw: 'codex-cli 0.162.1\n',
+      sha256: 'a'.repeat(64),
+      identityKind: 'native',
+      generation: { status: 'complete' },
+      // B4C: the stricter contract only trusts a completed generation when the audit itself verified
+      // the frozen target, so the trusted fixture must carry a verified status.
+      verification: { status: 'verified' },
+      ...generatedByOverrides,
+    },
+  })
+
+  const buildActive = (
+    identityOverrides: ActiveIdentityOverrides = {},
+    statusOverrides: { running?: boolean; initialized?: boolean } = {},
+  ): SchemaAuditActiveIdentitySnapshot => ({
+    running: statusOverrides.running ?? true,
+    initialized: statusOverrides.initialized ?? true,
+    activeLaunchIdentity: {
+      generation: 7,
+      launchPath: `${B4C_ROOT}/codex.exe`,
+      versionRaw: 'codex-cli 0.162.1\n',
+      sha256: 'a'.repeat(64),
+      identityKind: 'native',
+      ...identityOverrides,
+    },
+  })
+
+  // A/A native matched.
+  assert.deepEqual(compareSchemaAuditIdentity(buildSummary(), buildActive()), {
+    status: 'matched',
+    reason: 'identity-matched',
+    comparedAgainstGeneration: 7,
+  })
+
+  // SHA case difference must not flip a real match (PowerShell uppercase vs Node lowercase).
+  assert.equal(compareSchemaAuditIdentity(
+    buildSummary({ sha256: 'A'.repeat(64) }),
+    buildActive({ sha256: 'a'.repeat(64) }),
+  ).status, 'matched')
+
+  // The same target reached through different separators/case is still the same target on Windows.
+  if (process.platform === 'win32') {
+    assert.equal(compareSchemaAuditIdentity(
+      buildSummary({ launchPath: 'c:\\B4C-IDENTITY\\codex.exe' }),
+      buildActive({ launchPath: `${B4C_ROOT}/codex.exe` }),
+    ).status, 'matched')
+  }
+
+  // Path / version / SHA each mismatch, and same-version-different-SHA is still a mismatch.
+  assert.deepEqual(compareSchemaAuditIdentity(
+    buildSummary({ launchPath: `${B4C_ROOT}/other.exe` }),
+    buildActive(),
+  ), { status: 'mismatch', reason: 'launch-path-mismatch', comparedAgainstGeneration: 7 })
+  assert.deepEqual(compareSchemaAuditIdentity(
+    buildSummary({ versionRaw: 'codex-cli 0.163.0\n' }),
+    buildActive(),
+  ), { status: 'mismatch', reason: 'version-mismatch', comparedAgainstGeneration: 7 })
+  assert.deepEqual(compareSchemaAuditIdentity(
+    buildSummary(),
+    buildActive({ sha256: 'b'.repeat(64) }),
+  ), { status: 'mismatch', reason: 'sha256-mismatch', comparedAgainstGeneration: 7 })
+
+  // available/reviewStatus are orthogonal: unavailable/drift wording never decides the identity.
+  assert.equal(compareSchemaAuditIdentity(
+    { available: false, reviewStatus: 'drift-recorded', generatedBy: asRecord(buildSummary())?.generatedBy },
+    buildActive(),
+  ).status, 'matched')
+  assert.equal(compareSchemaAuditIdentity(
+    { available: true, reviewStatus: 'baseline-matched' },
+    buildActive(),
+  ).reason, 'summary-generated-by-missing')
+
+  // Unknown family.
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ sha256: null }), buildActive()).reason, 'summary-generated-by-incomplete')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ versionRaw: null }), buildActive()).reason, 'summary-generated-by-incomplete')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ identityKind: 'launcher' }), buildActive()).reason, 'summary-generated-by-not-native')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ sha256: 'not-64-hex' }), buildActive()).reason, 'summary-sha-not-64-hex')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ generation: { status: 'changed' } }), buildActive()).reason, 'summary-generation-not-complete')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ generation: { status: 'failed' } }), buildActive()).reason, 'summary-generation-not-complete')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({}, { running: false })).reason, 'active-server-not-running')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), { running: true, initialized: true }).reason, 'no-active-launch-identity')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), null).reason, 'no-active-server-status')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ identityKind: 'launcher' })).reason, 'active-identity-not-complete-native')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ sha256: 'short' })).reason, 'active-identity-not-complete-native')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ versionRaw: null })).reason, 'active-identity-not-complete-native')
+
+  // B4C: stricter-contract regressions. Each one pins a partially-filled provenance to `unknown`
+  // instead of letting the old fixture expectation (or an orthogonal content verdict) leak a match.
+  // A completed generation is only trusted when the audit verified it: failed/changed/launcher-only never match.
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ verification: { status: 'failed' } }), buildActive()).reason, 'summary-verification-not-verified')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ verification: { status: 'changed' } }), buildActive()).status, 'unknown')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ verification: { status: 'launcher-only' } }), buildActive()).reason, 'summary-verification-not-verified')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ verification: { status: 'launcher-only' } }), buildActive()).comparedAgainstGeneration, 7)
+  // A relative recorded target names no frozen target, not even when both sides spell it identically.
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ launchPath: 'b4c-identity/codex.exe' }), buildActive()).reason, 'summary-generated-by-incomplete')
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ launchPath: 'b4c-identity/codex.exe' }), buildActive({ launchPath: 'b4c-identity/codex.exe' })).status, 'unknown')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ launchPath: 'b4c-identity/codex.exe' })).reason, 'active-identity-not-complete-native')
+  // Raw version stdout is judged on blankness only, on both sides.
+  assert.equal(compareSchemaAuditIdentity(buildSummary({ versionRaw: '   ' }), buildActive()).reason, 'summary-generated-by-incomplete')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ versionRaw: '' })).reason, 'active-identity-not-complete-native')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ versionRaw: '   ' })).reason, 'active-identity-not-complete-native')
+  // Raw CRLF version stdout stays byte-exact on both sides; CRLF vs LF is a real mismatch.
+  assert.equal(compareSchemaAuditIdentity(
+    buildSummary({ versionRaw: 'codex-cli 0.162.1\r\n' }),
+    buildActive({ versionRaw: 'codex-cli 0.162.1\r\n' }),
+  ).status, 'matched')
+  assert.equal(compareSchemaAuditIdentity(
+    buildSummary({ versionRaw: 'codex-cli 0.162.1\r\n' }),
+    buildActive({ versionRaw: 'codex-cli 0.162.1\n' }),
+  ).reason, 'version-mismatch')
+
+  // comparedAgainstGeneration is the frozen active generation, and null when it is unknown. An absent,
+  // zero, negative or fractional generation is not a completed generation, so the comparison stays
+  // `unknown` with that null generation — never the old, wrong `matched`.
+  const withoutGeneration = compareSchemaAuditIdentity(buildSummary(), {
+    running: true,
+    activeLaunchIdentity: {
+      launchPath: `${B4C_ROOT}/codex.exe`,
+      versionRaw: 'codex-cli 0.162.1\n',
+      sha256: 'a'.repeat(64),
+      identityKind: 'native',
+    },
+  })
+  assert.deepEqual(withoutGeneration, {
+    status: 'unknown',
+    reason: 'active-generation-missing-or-invalid',
+    comparedAgainstGeneration: null,
+  })
+  assert.deepEqual(compareSchemaAuditIdentity(buildSummary(), buildActive({ generation: 0 })), {
+    status: 'unknown',
+    reason: 'active-generation-missing-or-invalid',
+    comparedAgainstGeneration: null,
+  })
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ generation: 1.5 })).reason, 'active-generation-missing-or-invalid')
+  assert.equal(compareSchemaAuditIdentity(buildSummary(), buildActive({ generation: -3 })).status, 'unknown')
+
+  // Purity: the comparison never mutates its inputs (and reads no path/hash/generator).
+  const summaryInput = buildSummary()
+  const activeInput = buildActive()
+  const summaryBefore = JSON.stringify(summaryInput)
+  const activeBefore = JSON.stringify(activeInput)
+  compareSchemaAuditIdentity(summaryInput, activeInput)
+  assert.equal(JSON.stringify(summaryInput), summaryBefore)
+  assert.equal(JSON.stringify(activeInput), activeBefore)
 }
 
 function smokeAppServerRpcResult(): void {
@@ -3556,6 +4898,336 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     }),
   }) as { data: Array<{ id: string }> }
   assert.deepEqual(archivedFilterResult.data.map((thread) => thread.id), ['active-thread'])
+}
+
+async function smokeGuardianInternalThreadListVisibility(): Promise<void> {
+  const visibilityRow = (
+    id: string,
+    source: unknown,
+    flags: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    id,
+    preview: 'Visibility row ' + id,
+    createdAt: 1,
+    updatedAt: 1,
+    path: null,
+    source,
+    ...flags,
+  })
+  const visibilityRowWithoutSource = (id: string): Record<string, unknown> => {
+    const row = visibilityRow(id, undefined)
+    delete row.source
+    return row
+  }
+
+  // An explicit sourceKinds query (diagnostics / sub-agent lookups) keeps its own contract:
+  // only the default normal list (sourceKinds omitted) is subject to normal-list visibility.
+  const explicitSourceKindsResult = {
+    data: [visibilityRow('explicit-subagent-review', { subAgent: 'review' })],
+    marker: true,
+  }
+  assert.deepEqual(await new AppServerThreadListAugmenter({ nowMs: () => 5_000 }).augmentThreadListRpcResult({
+    params: { sourceKinds: ['subAgentReview'] },
+    result: explicitSourceKindsResult,
+    readSupplementalThreadIds: async () => [],
+    readThreadById: async () => { throw new Error('explicit sourceKinds must not read supplements') },
+  }), explicitSourceKindsResult)
+
+  // Archived / cursor pages never take local supplements, but they are still pages of the default
+  // normal list, so structured internal rows must be filtered out of their raw data as well.
+  // Both read callbacks are counted rather than thrown: the augmenter catches read errors, so a
+  // throwing stub could silently swallow a read that really happened.
+  const pagedVisibilityAugmenter = new AppServerThreadListAugmenter({ nowMs: () => 5_000 })
+  const archivedSupplementCalls: string[] = []
+  const archivedThreadReadIds: string[] = []
+  const archivedPage = await pagedVisibilityAugmenter.augmentThreadListRpcResult({
+    params: { archived: true },
+    result: {
+      data: [
+        visibilityRow('page-archived-cli', 'cli'),
+        visibilityRow('page-archived-guardian-other', { subAgent: { other: 'guardian' } }),
+        visibilityRow('page-archived-spawn', { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }),
+        visibilityRow('page-archived-internal', { internal: 'guardian' }),
+      ],
+      nextCursor: 'archived-next-page',
+      marker: true,
+    },
+    readSupplementalThreadIds: async () => {
+      archivedSupplementCalls.push('archived')
+      return ['page-archived-pin']
+    },
+    readThreadById: async (threadId) => {
+      archivedThreadReadIds.push(threadId)
+      return { thread: visibilityRow(threadId, 'cli') }
+    },
+  }) as { data: Array<{ id: string }>; nextCursor: string | null; marker: boolean }
+  assert.deepEqual(archivedSupplementCalls, [])
+  assert.deepEqual(archivedThreadReadIds, [])
+  assert.deepEqual(archivedPage.data.map((row) => row.id), ['page-archived-cli', 'page-archived-spawn'])
+  assert.equal(archivedPage.nextCursor, 'archived-next-page')
+  assert.equal(archivedPage.marker, true)
+
+  const cursorSupplementCalls: string[] = []
+  const cursorThreadReadIds: string[] = []
+  const cursorPage = await pagedVisibilityAugmenter.augmentThreadListRpcResult({
+    params: { archived: false, cursor: 'next-page' },
+    result: {
+      data: [
+        visibilityRow('page-cursor-cli', 'cli'),
+        visibilityRow('page-cursor-internal-memory', { internal: 'memory_consolidation' }),
+        visibilityRow('page-cursor-worker', { subAgent: { other: 'worker' } }),
+        visibilityRow('page-cursor-ephemeral', 'cli', { ephemeral: true }),
+      ],
+      nextCursor: 'cursor-next-page',
+    },
+    readSupplementalThreadIds: async () => {
+      cursorSupplementCalls.push('cursor')
+      return ['page-cursor-pin']
+    },
+    readThreadById: async (threadId) => {
+      cursorThreadReadIds.push(threadId)
+      return { thread: visibilityRow(threadId, 'cli') }
+    },
+  }) as { data: Array<{ id: string }>; nextCursor: string | null }
+  assert.deepEqual(cursorSupplementCalls, [])
+  assert.deepEqual(cursorThreadReadIds, [])
+  assert.deepEqual(cursorPage.data.map((row) => row.id), ['page-cursor-cli', 'page-cursor-worker'])
+  assert.equal(cursorPage.nextCursor, 'cursor-next-page')
+
+  // A page that needs no filtering still returns the very same result object.
+  const identityAugmenter = new AppServerThreadListAugmenter({ nowMs: () => 5_250 })
+  const identityResult = {
+    data: [
+      visibilityRow('identity-cli', 'cli', { name: 'Guardian review' }),
+      visibilityRow('identity-spawn', { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }),
+    ],
+    marker: true,
+  }
+  const identitySupplementCalls: string[] = []
+  const identityThreadReadIds: string[] = []
+  const identityReadCallbacks = {
+    readSupplementalThreadIds: async (): Promise<string[]> => {
+      identitySupplementCalls.push('identity')
+      return ['identity-pin-a']
+    },
+    readThreadById: async (threadId: string): Promise<unknown> => {
+      identityThreadReadIds.push(threadId)
+      return { thread: visibilityRow(threadId, 'cli') }
+    },
+  }
+  assert.equal(await identityAugmenter.augmentThreadListRpcResult({
+    params: { archived: true },
+    result: identityResult,
+    ...identityReadCallbacks,
+  }), identityResult)
+  assert.equal(await identityAugmenter.augmentThreadListRpcResult({
+    params: { archived: false, cursor: 'next-page' },
+    result: identityResult,
+    ...identityReadCallbacks,
+  }), identityResult)
+  assert.deepEqual(identitySupplementCalls, [])
+  assert.deepEqual(identityThreadReadIds, [])
+
+  // An empty sourceKinds array is the same default normal list, so it filters raw rows too.
+  const emptySourceKindsResult = await new AppServerThreadListAugmenter({ nowMs: () => 5_500 })
+    .augmentThreadListRpcResult({
+      params: { sourceKinds: [] },
+      result: {
+        data: [
+          visibilityRow('esk-cli', 'cli'),
+          visibilityRow('esk-guardian-other', { subAgent: { other: 'guardian' } }),
+          visibilityRow('esk-spawn', { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }),
+        ],
+      },
+      readSupplementalThreadIds: async () => [],
+      readThreadById: async (threadId) => {
+        throw new Error(`empty sourceKinds pages must not read supplements: ${threadId}`)
+      },
+    }) as { data: Array<{ id: string }> }
+  assert.deepEqual(emptySourceKindsResult.data.map((row) => row.id), ['esk-cli', 'esk-spawn'])
+
+  // Normal list raw data: structured internal rows must not reach the client, while normal,
+  // worker, thread_spawn, unknown and future rows keep their order.
+  const normalListData = [
+    visibilityRow('nl-cli', 'cli'),
+    visibilityRow('nl-guardian-other', { subAgent: { other: 'guardian' } }),
+    visibilityRow('nl-guardian-legacy-lowercase', { subagent: { other: 'guardian' } }),
+    visibilityRow('nl-subagent-review', { subAgent: 'review' }),
+    visibilityRow('nl-subagent-compact', { subAgent: 'compact' }),
+    visibilityRow('nl-subagent-memory-consolidation', { subAgent: 'memory_consolidation' }),
+    visibilityRow('nl-guardian-direct-value', { subAgent: 'guardian' }),
+    visibilityRow('nl-internal-guardian', { internal: 'guardian' }),
+    visibilityRow('nl-internal-memory-consolidation', { internal: 'memory_consolidation' }),
+    visibilityRow('nl-internal-unknown', { internal: 'future_internal' }),
+    visibilityRow('nl-ephemeral-true', 'cli', { ephemeral: true }),
+    visibilityRow('nl-side-conversation-true', 'cli', { sideConversation: true }),
+    visibilityRow('nl-ephemeral-false', 'cli', { ephemeral: false }),
+    visibilityRow('nl-thread-spawn', { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }),
+    visibilityRow('nl-worker', { subAgent: { other: 'worker' } }),
+    visibilityRow('nl-guardian-worker', { subAgent: { other: 'guardian-worker' } }),
+    visibilityRow('nl-unknown-source', 'unknown'),
+    visibilityRow('nl-future-source', { futureSource: { enabled: true } }),
+    visibilityRowWithoutSource('nl-no-source'),
+    visibilityRow('nl-cli-titled-guardian-review', 'cli', { name: 'Guardian review' }),
+    // Strict boolean boundary: only literal true hides, and an explicit true still hides a spawn.
+    visibilityRow('nl-ephemeral-string-true', 'cli', { ephemeral: 'true' }),
+    visibilityRow('nl-side-conversation-number-one', 'cli', { sideConversation: 1 }),
+    visibilityRow('nl-spawn-ephemeral-true', { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } }, { ephemeral: true }),
+    // Exact enum only: untrimmed spellings are unrecognized values and stay visible.
+    visibilityRow('nl-guardian-padded-value', { subAgent: ' guardian ' }),
+    visibilityRow('nl-guardian-padded-other', { subAgent: { other: 'guardian ' } }),
+  ]
+  const normalListReadIds: string[] = []
+  const normalListResult = await new AppServerThreadListAugmenter({ nowMs: () => 6_000 })
+    .augmentThreadListRpcResult({
+      params: {},
+      result: { data: normalListData },
+      readSupplementalThreadIds: async () => [],
+      readThreadById: async (threadId) => {
+        normalListReadIds.push(threadId)
+        throw new Error('the normal list must not read supplements here')
+      },
+    }) as { data: Array<{ id: string }> }
+  assert.deepEqual(normalListReadIds, [])
+  assert.deepEqual(normalListResult.data.map((row) => row.id), [
+    'nl-cli',
+    'nl-internal-unknown',
+    'nl-ephemeral-false',
+    'nl-thread-spawn',
+    'nl-worker',
+    'nl-guardian-worker',
+    'nl-unknown-source',
+    'nl-future-source',
+    'nl-no-source',
+    'nl-cli-titled-guardian-review',
+    'nl-ephemeral-string-true',
+    'nl-side-conversation-number-one',
+    'nl-guardian-padded-value',
+    'nl-guardian-padded-other',
+  ])
+
+  // Supplemental pins: internal rows are read but neither appended nor listed as supplements.
+  const supplementalSources: Record<string, unknown> = {
+    'pin-internal-guardian': { subAgent: { other: 'guardian' } },
+    'pin-cli-normal': 'cli',
+    'pin-internal-memory-consolidation': { internal: 'memory_consolidation' },
+  }
+  const supplementalReadIds: string[] = []
+  const readSupplementalThread = async (threadId: string): Promise<unknown> => {
+    supplementalReadIds.push(threadId)
+    return { thread: visibilityRow(threadId, supplementalSources[threadId]) }
+  }
+  const supplemented = await new AppServerThreadListAugmenter({
+    nowMs: () => 7_000,
+    maxReads: 4,
+  }).augmentThreadListRpcResult({
+    params: {},
+    result: { data: [visibilityRow('nl-base-cli', 'cli')] },
+    readSupplementalThreadIds: async () => [
+      'pin-internal-guardian',
+      'pin-cli-normal',
+      'pin-internal-memory-consolidation',
+    ],
+    readThreadById: readSupplementalThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(supplementalReadIds, [
+    'pin-internal-guardian',
+    'pin-cli-normal',
+    'pin-internal-memory-consolidation',
+  ])
+  assert.deepEqual(supplemented.data.map((row) => row.id), ['nl-base-cli', 'pin-cli-normal'])
+  assert.deepEqual(supplemented.supplementalThreadIds, ['pin-cli-normal'])
+
+  // Two-way cache behaviour on one augmenter: the diagnostic view and the ordinary normal list share
+  // the same bounded raw-summary cache, and the ordinary predicate is applied at output, so neither
+  // direction may poison the cache for the other. Reads are counted to prove cache hits.
+  const diagnosticFirstAugmenter = new AppServerThreadListAugmenter({
+    ttlMs: 10_000,
+    maxReads: 2,
+    nowMs: () => 8_000,
+  })
+  const diagnosticFirstReadIds: string[] = []
+  const readDiagnosticFirstThread = async (threadId: string): Promise<unknown> => {
+    diagnosticFirstReadIds.push(threadId)
+    return { thread: visibilityRow(threadId, { subAgent: { other: 'guardian' } }) }
+  }
+  const diagnosticFirstBase = [visibilityRow('cache-two-way-base', 'cli')]
+
+  // 1) diagnostic -> ordinary -> diagnostic
+  const diagnosticPass = await diagnosticFirstAugmenter.augmentThreadListRpcResult({
+    params: { sourceKinds: ['subAgentReview'] },
+    result: { data: diagnosticFirstBase },
+    readSupplementalThreadIds: async () => ['pin-two-way-internal'],
+    readThreadById: readDiagnosticFirstThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(diagnosticFirstReadIds, ['pin-two-way-internal'])
+  assert.deepEqual(diagnosticPass.data.map((row) => row.id), ['cache-two-way-base', 'pin-two-way-internal'])
+  assert.deepEqual(diagnosticPass.supplementalThreadIds, ['pin-two-way-internal'])
+
+  const diagnosticThenOrdinary = await diagnosticFirstAugmenter.augmentThreadListRpcResult({
+    params: {},
+    result: { data: diagnosticFirstBase },
+    readSupplementalThreadIds: async () => ['pin-two-way-internal'],
+    readThreadById: readDiagnosticFirstThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(diagnosticFirstReadIds, ['pin-two-way-internal'])
+  assert.deepEqual(diagnosticThenOrdinary.data.map((row) => row.id), ['cache-two-way-base'])
+  assert.deepEqual(diagnosticThenOrdinary.supplementalThreadIds ?? [], [])
+
+  const diagnosticAgain = await diagnosticFirstAugmenter.augmentThreadListRpcResult({
+    params: { sourceKinds: ['subAgentReview'] },
+    result: { data: diagnosticFirstBase },
+    readSupplementalThreadIds: async () => ['pin-two-way-internal'],
+    readThreadById: readDiagnosticFirstThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(diagnosticFirstReadIds, ['pin-two-way-internal'])
+  assert.deepEqual(diagnosticAgain.data.map((row) => row.id), ['cache-two-way-base', 'pin-two-way-internal'])
+  assert.deepEqual(diagnosticAgain.supplementalThreadIds, ['pin-two-way-internal'])
+
+  // 2) ordinary -> diagnostic, on a second augmenter: the ordinary pass must not cache a null just
+  //    because the supplemental row is hidden from the ordinary list.
+  const ordinaryFirstAugmenter = new AppServerThreadListAugmenter({
+    ttlMs: 10_000,
+    maxReads: 2,
+    nowMs: () => 8_500,
+  })
+  const ordinaryFirstReadIds: string[] = []
+  const readOrdinaryFirstThread = async (threadId: string): Promise<unknown> => {
+    ordinaryFirstReadIds.push(threadId)
+    return { thread: visibilityRow(threadId, { internal: 'memory_consolidation' }) }
+  }
+  const ordinaryFirstBase = [visibilityRow('cache-ordinary-base', 'cli')]
+
+  const ordinaryHidden = await ordinaryFirstAugmenter.augmentThreadListRpcResult({
+    params: {},
+    result: { data: ordinaryFirstBase },
+    readSupplementalThreadIds: async () => ['pin-two-way-hidden'],
+    readThreadById: readOrdinaryFirstThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(ordinaryFirstReadIds, ['pin-two-way-hidden'])
+  assert.deepEqual(ordinaryHidden.data.map((row) => row.id), ['cache-ordinary-base'])
+  assert.deepEqual(ordinaryHidden.supplementalThreadIds ?? [], [])
+
+  const ordinaryThenDiagnostic = await ordinaryFirstAugmenter.augmentThreadListRpcResult({
+    params: { sourceKinds: ['subAgentReview'] },
+    result: { data: ordinaryFirstBase },
+    readSupplementalThreadIds: async () => ['pin-two-way-hidden'],
+    readThreadById: readOrdinaryFirstThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(ordinaryFirstReadIds, ['pin-two-way-hidden'])
+  assert.deepEqual(ordinaryThenDiagnostic.data.map((row) => row.id), ['cache-ordinary-base', 'pin-two-way-hidden'])
+  assert.deepEqual(ordinaryThenDiagnostic.supplementalThreadIds, ['pin-two-way-hidden'])
+
+  // A cached hidden supplemental row also stays out of a later ordinary refresh of the same augmenter.
+  const cachedHiddenHit = await ordinaryFirstAugmenter.augmentThreadListRpcResult({
+    params: {},
+    result: { data: ordinaryFirstBase },
+    readSupplementalThreadIds: async () => ['pin-two-way-hidden'],
+    readThreadById: readOrdinaryFirstThread,
+  }) as { data: Array<{ id: string }>; supplementalThreadIds: string[] }
+  assert.deepEqual(ordinaryFirstReadIds, ['pin-two-way-hidden'])
+  assert.deepEqual(cachedHiddenHit.data.map((row) => row.id), ['cache-ordinary-base'])
+  assert.deepEqual(cachedHiddenHit.supplementalThreadIds ?? [], [])
 }
 
 function smokeAppServerThreadReadCache(): void {
@@ -4286,6 +5958,343 @@ async function smokeAppServerRpcCache(): Promise<void> {
   }), { models: ['gpt-5'] })
   assert.deepEqual(cache.readModelList(modelKey, true), { value: { models: ['gpt-5'] }, stale: false })
 
+  const b4aModelCache = new AppServerRpcCache({ threadListCachePath: '' })
+  const b4aModelKey = getShareableRpcKey('model/list', {}) ?? ''
+  assert.notEqual(b4aModelKey, '', 'B4A: model/list must have an existing shareable key')
+  const b4aModelsA = { data: [{ id: 'b4a-model-from-a' }], nextCursor: null }
+  const b4aModelsB = { data: [{ id: 'b4a-model-from-b' }], nextCursor: null }
+  b4aModelCache.writeModelList(b4aModelKey, b4aModelsA)
+  assert.deepEqual(b4aModelCache.readModelList(b4aModelKey, true), {
+    value: b4aModelsA,
+    stale: false,
+  }, 'B4A: the synthetic pre-cleanup model cache must contain A')
+
+  clearAppServerSessionStores({
+    pendingServerRequests: { clear: () => {} },
+    rpcCache: b4aModelCache,
+    threadTokenUsage: { clear: () => {} },
+    planModeTurns: { clearAll: () => {} },
+  })
+  let b4aEnqueueBCalls = 0
+  const b4aAfterCleanup = await b4aModelCache.executeShareableRead(
+    'model/list', {}, b4aModelKey, async (method, params) => {
+      assert.equal(method, 'model/list')
+      assert.deepEqual(params, {})
+      b4aEnqueueBCalls += 1
+      return b4aModelsB
+    },
+  )
+  assert.deepEqual(b4aAfterCleanup, b4aModelsB,
+    'B4A: model/list after session cleanup must fetch B instead of returning cached A')
+  assert.equal(b4aEnqueueBCalls, 1, 'B4A: cleanup must force exactly one new model/list fetch')
+  assert.deepEqual(b4aModelCache.readModelList(b4aModelKey, true), {
+    value: b4aModelsB,
+    stale: false,
+  }, 'B4A: after cleanup only B may remain in the model cache')
+
+  let b4a1Now = 10_000_000
+  Date.now = () => b4a1Now
+  const b4a1Key = getShareableRpcKey('model/list', {}) ?? ''
+  const b4a1OtherKey = getShareableRpcKey('model/list', { cursor: 'b4a1-other' }) ?? ''
+  const b4a1PendingParams = { cursor: 'b4a1-pending' }
+  const b4a1PendingKey = getShareableRpcKey('model/list', b4a1PendingParams) ?? ''
+  const b4a1Models = (id: string): { data: Array<{ id: string }>; nextCursor: null } => ({
+    data: [{ id }],
+    nextCursor: null,
+  })
+  const b4a1SessionCleanup = (rpcCache: AppServerRpcCache): void => {
+    clearAppServerSessionStores({
+      pendingServerRequests: { clear: () => {} },
+      rpcCache,
+      threadTokenUsage: { clear: () => {} },
+      planModeTurns: { clearAll: () => {} },
+    })
+  }
+
+  const b4a1MultiKeyCache = new AppServerRpcCache({ threadListCachePath: '' })
+  b4a1MultiKeyCache.writeModelList(b4a1Key, b4a1Models('multi-a'))
+  b4a1MultiKeyCache.writeModelList(b4a1OtherKey, b4a1Models('multi-b'))
+  let b4a1PendingEnqueueCalls = 0
+  let releaseB4a1Pending = (): void => {}
+  const b4a1PendingGate = new Promise<void>((resolve) => {
+    releaseB4a1Pending = resolve
+  })
+  const b4a1PendingRead = b4a1MultiKeyCache.executeShareableRead(
+    'model/list',
+    b4a1PendingParams,
+    b4a1PendingKey,
+    async (method, params) => {
+      assert.equal(method, 'model/list')
+      assert.deepEqual(params, b4a1PendingParams)
+      b4a1PendingEnqueueCalls += 1
+      await b4a1PendingGate
+      return b4a1Models('pending-old')
+    },
+  )
+  await Promise.resolve()
+  assert.equal(b4a1MultiKeyCache.getSharedRead(b4a1PendingKey), b4a1PendingRead)
+
+  b4a1SessionCleanup(b4a1MultiKeyCache)
+  assert.equal(b4a1MultiKeyCache.readModelList(b4a1Key, true), null,
+    'B4A1: session cleanup must clear the cached model/list params key')
+  assert.equal(b4a1MultiKeyCache.readModelList(b4a1OtherKey, true), null,
+    'B4A1: session cleanup must clear every model/list params key')
+  assert.equal(b4a1MultiKeyCache.getSharedRead(b4a1PendingKey), null,
+    'B4A1: session cleanup must drop the model/list in-flight read')
+
+  let b4a1PostCleanupEnqueueCalls = 0
+  assert.deepEqual(
+    await b4a1MultiKeyCache.executeShareableRead('model/list', b4a1PendingParams, b4a1PendingKey, async () => {
+      b4a1PostCleanupEnqueueCalls += 1
+      return b4a1Models('pending-new')
+    }),
+    b4a1Models('pending-new'),
+    'B4A1: model/list after session cleanup must fetch the new value instead of reusing the pre-cleanup read',
+  )
+  assert.equal(b4a1PostCleanupEnqueueCalls, 1)
+  let b4a1FreshHitEnqueueCalls = 0
+  assert.deepEqual(
+    await b4a1MultiKeyCache.executeShareableRead('model/list', b4a1PendingParams, b4a1PendingKey, async () => {
+      b4a1FreshHitEnqueueCalls += 1
+      return b4a1Models('should-not-run')
+    }),
+    b4a1Models('pending-new'),
+  )
+  assert.equal(b4a1FreshHitEnqueueCalls, 0, 'B4A1: a same-generation fresh model/list hit must stay a cache hit')
+
+  releaseB4a1Pending()
+  assert.deepEqual(await b4a1PendingRead, b4a1Models('pending-old'))
+  assert.deepEqual(b4a1MultiKeyCache.readModelList(b4a1PendingKey, true), {
+    value: b4a1Models('pending-new'),
+    stale: false,
+  }, 'B4A1: a late pre-cleanup model read must not overwrite the new generation cache')
+
+  const b4a1LateCache = new AppServerRpcCache({ threadListCachePath: '' })
+  let releaseB4a1LateA = (): void => {}
+  const b4a1LateAGate = new Promise<void>((resolve) => {
+    releaseB4a1LateA = resolve
+  })
+  const b4a1LateARead = b4a1LateCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    await b4a1LateAGate
+    return b4a1Models('late-a')
+  })
+  await Promise.resolve()
+  b4a1SessionCleanup(b4a1LateCache)
+
+  let b4a1LateBEnqueueCalls = 0
+  let releaseB4a1LateB = (): void => {}
+  const b4a1LateBGate = new Promise<void>((resolve) => {
+    releaseB4a1LateB = resolve
+  })
+  const b4a1LateBRead = b4a1LateCache.executeShareableRead('model/list', {}, b4a1Key, async (method, params) => {
+    assert.equal(method, 'model/list')
+    assert.deepEqual(params, {})
+    b4a1LateBEnqueueCalls += 1
+    await b4a1LateBGate
+    return b4a1Models('late-b')
+  })
+  await Promise.resolve()
+  assert.equal(b4a1LateBEnqueueCalls, 1)
+  assert.equal(b4a1LateCache.getSharedRead(b4a1Key), b4a1LateBRead)
+
+  releaseB4a1LateA()
+  assert.deepEqual(await b4a1LateARead, b4a1Models('late-a'),
+    'B4A1: the pre-cleanup caller keeps its own settled value')
+  assert.equal(b4a1LateCache.getSharedRead(b4a1Key), b4a1LateBRead,
+    'B4A1: a late pre-cleanup finally must not drop the new shared read')
+  const b4a1LateThirdRead = b4a1LateCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    throw new Error('B4A1: a pending same-generation model/list read must be shared')
+  })
+  assert.equal(b4a1LateThirdRead, b4a1LateBRead)
+  assert.equal(b4a1LateBEnqueueCalls, 1)
+  releaseB4a1LateB()
+  assert.deepEqual(await b4a1LateBRead, b4a1Models('late-b'))
+  assert.deepEqual(b4a1LateCache.readModelList(b4a1Key, true), {
+    value: b4a1Models('late-b'),
+    stale: false,
+  }, 'B4A1: only the current generation may write the model cache')
+
+  const b4a1FailCache = new AppServerRpcCache({ threadListCachePath: '' })
+  let failB4a1LateA = (_error: Error): void => {}
+  const b4a1LateAFailGate = new Promise<void>((_resolve, reject) => {
+    failB4a1LateA = reject
+  })
+  const b4a1LateAFailRead = b4a1FailCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    await b4a1LateAFailGate
+    return b4a1Models('failed-late-a')
+  })
+  await Promise.resolve()
+  b4a1SessionCleanup(b4a1FailCache)
+
+  let b4a1FailBEnqueueCalls = 0
+  let releaseB4a1FailB = (): void => {}
+  const b4a1FailBGate = new Promise<void>((resolve) => {
+    releaseB4a1FailB = resolve
+  })
+  const b4a1FailBRead = b4a1FailCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    b4a1FailBEnqueueCalls += 1
+    await b4a1FailBGate
+    return b4a1Models('fail-b')
+  })
+  await Promise.resolve()
+  assert.equal(b4a1FailBEnqueueCalls, 1)
+  failB4a1LateA(new Error('B4A1: synthetic pre-cleanup model/list read failure'))
+  const b4a1LateAOutcome = await b4a1LateAFailRead.then(
+    (value) => value,
+    (error: unknown) => error,
+  )
+  assert.ok(b4a1LateAOutcome instanceof Error)
+  assert.equal(b4a1FailCache.getSharedRead(b4a1Key), b4a1FailBRead,
+    'B4A1: a late pre-cleanup failure must not drop the new shared read')
+  const b4a1FailThirdRead = b4a1FailCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    throw new Error('B4A1: the new read must stay shared after a late pre-cleanup failure')
+  })
+  assert.equal(b4a1FailThirdRead, b4a1FailBRead)
+  assert.equal(b4a1FailBEnqueueCalls, 1)
+  releaseB4a1FailB()
+  assert.deepEqual(await b4a1FailBRead, b4a1Models('fail-b'))
+  assert.deepEqual(b4a1FailCache.readModelList(b4a1Key, true), {
+    value: b4a1Models('fail-b'),
+    stale: false,
+  })
+
+  const b4a1StaleCache = new AppServerRpcCache({ threadListCachePath: '' })
+  b4a1StaleCache.writeModelList(b4a1Key, b4a1Models('stale-a'))
+  b4a1Now += 11 * 60_000
+  assert.deepEqual(b4a1StaleCache.readModelList(b4a1Key, true), {
+    value: b4a1Models('stale-a'),
+    stale: true,
+  })
+  let releaseB4a1StaleRefresh = (): void => {}
+  const b4a1StaleRefreshGate = new Promise<void>((resolve) => {
+    releaseB4a1StaleRefresh = resolve
+  })
+  let b4a1StaleRefreshCalls = 0
+  assert.deepEqual(
+    await b4a1StaleCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+      b4a1StaleRefreshCalls += 1
+      await b4a1StaleRefreshGate
+      return b4a1Models('stale-a-refreshed')
+    }),
+    b4a1Models('stale-a'),
+    'B4A1: a stale model/list read must return the stale value immediately',
+  )
+  assert.equal(b4a1StaleRefreshCalls, 1)
+  const b4a1StaleRefreshPromise = b4a1StaleCache.getSharedRead(b4a1Key)
+  assert.ok(b4a1StaleRefreshPromise)
+  assert.deepEqual(
+    await b4a1StaleCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+      throw new Error('B4A1: the active model/list refresh must be reused')
+    }),
+    b4a1Models('stale-a'),
+  )
+  assert.equal(b4a1StaleRefreshCalls, 1, 'B4A1: at most one background model/list refresh per stale read')
+
+  b4a1SessionCleanup(b4a1StaleCache)
+  let b4a1StaleBEnqueueCalls = 0
+  assert.deepEqual(
+    await b4a1StaleCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+      b4a1StaleBEnqueueCalls += 1
+      return b4a1Models('stale-b')
+    }),
+    b4a1Models('stale-b'),
+  )
+  assert.equal(b4a1StaleBEnqueueCalls, 1)
+  releaseB4a1StaleRefresh()
+  await b4a1StaleRefreshPromise
+  assert.deepEqual(b4a1StaleCache.readModelList(b4a1Key, true), {
+    value: b4a1Models('stale-b'),
+    stale: false,
+  }, 'B4A1: a late background refresh from the previous generation must not overwrite the new cache')
+
+  const b4a1StaleFailCache = new AppServerRpcCache({ threadListCachePath: '' })
+  b4a1StaleFailCache.writeModelList(b4a1Key, b4a1Models('stale-fail-a'))
+  b4a1Now += 11 * 60_000
+  let failB4a1StaleRefresh = (_error: Error): void => {}
+  const b4a1StaleFailGate = new Promise<void>((_resolve, reject) => {
+    failB4a1StaleRefresh = reject
+  })
+  let b4a1StaleFailRefreshCalls = 0
+  assert.deepEqual(
+    await b4a1StaleFailCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+      b4a1StaleFailRefreshCalls += 1
+      await b4a1StaleFailGate
+      return b4a1Models('stale-fail-refreshed')
+    }),
+    b4a1Models('stale-fail-a'),
+  )
+  assert.equal(b4a1StaleFailRefreshCalls, 1)
+  const b4a1StaleFailRefreshPromise = b4a1StaleFailCache.getSharedRead(b4a1Key)
+  assert.ok(b4a1StaleFailRefreshPromise)
+  b4a1SessionCleanup(b4a1StaleFailCache)
+
+  let b4a1StaleFailBEnqueueCalls = 0
+  let releaseB4a1StaleFailB = (): void => {}
+  const b4a1StaleFailBGate = new Promise<void>((resolve) => {
+    releaseB4a1StaleFailB = resolve
+  })
+  const b4a1StaleFailBRead = b4a1StaleFailCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    b4a1StaleFailBEnqueueCalls += 1
+    await b4a1StaleFailBGate
+    return b4a1Models('stale-fail-b')
+  })
+  await Promise.resolve()
+  assert.equal(b4a1StaleFailBEnqueueCalls, 1)
+  failB4a1StaleRefresh(new Error('B4A1: synthetic stale model/list refresh failure'))
+  assert.equal(await b4a1StaleFailRefreshPromise, null,
+    'B4A1: a failed background model/list refresh must settle to null')
+  assert.equal(b4a1StaleFailCache.getSharedRead(b4a1Key), b4a1StaleFailBRead,
+    'B4A1: a late failed refresh must not drop the new shared read')
+  const b4a1StaleFailThirdRead = b4a1StaleFailCache.executeShareableRead('model/list', {}, b4a1Key, async () => {
+    throw new Error('B4A1: the new read must stay shared after a stale refresh failure')
+  })
+  assert.equal(b4a1StaleFailThirdRead, b4a1StaleFailBRead)
+  assert.equal(b4a1StaleFailBEnqueueCalls, 1)
+  releaseB4a1StaleFailB()
+  assert.deepEqual(await b4a1StaleFailBRead, b4a1Models('stale-fail-b'))
+  assert.deepEqual(b4a1StaleFailCache.readModelList(b4a1Key, true), {
+    value: b4a1Models('stale-fail-b'),
+    stale: false,
+  })
+
+  const b4a1ThreadCacheDir = await mkdtemp(join(tmpdir(), 'cx-codex-b4a1-thread-cache-'))
+  try {
+    const b4a1ThreadCachePath = join(b4a1ThreadCacheDir, 'thread-list-cache.json')
+    const b4a1ThreadCache = new AppServerRpcCache({ threadListCachePath: b4a1ThreadCachePath })
+    b4a1ThreadCache.writeThreadList(key, { rows: ['pre-cleanup'] })
+    await b4a1ThreadCache.waitForPendingThreadListCacheWrites()
+    b4a1SessionCleanup(b4a1ThreadCache)
+    assert.equal(b4a1ThreadCache.readThreadList(key, false), null)
+    assert.deepEqual(b4a1ThreadCache.readThreadList(key, true), {
+      value: { rows: ['pre-cleanup'] },
+      stale: true,
+    }, 'B4A1: session cleanup must keep the thread/list invalidation contract for the old value')
+    let b4a1ThreadRefreshCalls = 0
+    const b4a1ThreadStaleRead = b4a1ThreadCache.executeShareableRead('thread/list', {}, key, async () => {
+      b4a1ThreadRefreshCalls += 1
+      return { rows: ['post-cleanup'] }
+    })
+    const b4a1ThreadRefreshPromise = b4a1ThreadCache.getSharedRead(key)
+    assert.ok(b4a1ThreadRefreshPromise)
+    assert.deepEqual(await b4a1ThreadStaleRead, { rows: ['pre-cleanup'] })
+    assert.equal(b4a1ThreadRefreshCalls, 1)
+    await b4a1ThreadRefreshPromise
+    await b4a1ThreadCache.waitForPendingThreadListCacheWrites()
+    assert.deepEqual(b4a1ThreadCache.readThreadList(key, true), {
+      value: { rows: ['post-cleanup'] },
+      stale: false,
+    }, 'B4A1: a same-generation thread/list refresh after cleanup must be cacheable')
+    const b4a1ReloadedThreadCache = new AppServerRpcCache({ threadListCachePath: b4a1ThreadCachePath })
+    assert.deepEqual(b4a1ReloadedThreadCache.readThreadList(key, true), {
+      value: { rows: ['post-cleanup'] },
+      stale: false,
+    }, 'B4A1: the refreshed thread/list snapshot must still reload from disk')
+  } finally {
+    await rm(b4a1ThreadCacheDir, { recursive: true, force: true })
+  }
+
+  Date.now = () => now
+
   const readParams = { threadId: 'thread-a', includeTurns: false }
   const readKey = getShareableRpcKey('thread/read', readParams) ?? ''
   let sharedReadCalls = 0
@@ -4717,11 +6726,19 @@ function smokeServerRequestPolicy(): void {
     fileChange: 'ask' as const,
     mcpTools: 'ask' as const,
   }
+  // P1a: the master switch is OFF here while the legacy per-item fields keep the old
+  // automatic-allow value, so this fixture pins the single-switch tightening.
   const allowSessionPermissions = {
     allowAllPermissionRequests: false,
     commandExecution: 'allowForSession' as const,
     fileChange: 'allowForSession' as const,
     mcpTools: 'allowForSession' as const,
+  }
+  const masterOnAskPermissions = {
+    allowAllPermissionRequests: true,
+    commandExecution: 'ask' as const,
+    fileChange: 'ask' as const,
+    mcpTools: 'ask' as const,
   }
 
   const mcpParams = {
@@ -4749,8 +6766,43 @@ function smokeServerRequestPolicy(): void {
   assert.equal(isMcpToolPermissionRequest('mcpServer/elicitation/request', connectorMcpParams), true)
   assert.equal(isMcpToolPermissionRequest('elicitation/create', { params: { message: 'Choose a value' } }), false)
 
+  // P1a RED: with the master switch OFF, a legacy allowForSession field must no longer
+  // auto approve anything. Only a literal master === true (and only for the request kinds
+  // the existing recognizers already support) may auto approve.
   assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, askPermissions), false)
-  assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, allowSessionPermissions), true)
+  assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, allowSessionPermissions), false)
+  assert.equal(shouldAutoApproveServerRequest('item/fileChange/requestApproval', {}, allowSessionPermissions), false)
+  assert.equal(shouldAutoApproveServerRequest('mcpserver/elicitation/request', mcpParams, allowSessionPermissions), false)
+  assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, masterOnAskPermissions), true)
+  assert.equal(shouldAutoApproveServerRequest('item/fileChange/requestApproval', {}, masterOnAskPermissions), true)
+  assert.equal(shouldAutoApproveServerRequest('mcpserver/elicitation/request', mcpParams, masterOnAskPermissions), true)
+  for (const [label, method, params] of [
+    ['command', 'item/commandExecution/requestApproval', {}],
+    ['file change', 'item/fileChange/requestApproval', {}],
+    ['recognized MCP tool', 'mcpserver/elicitation/request', mcpParams],
+  ] as const) {
+    const masterOffDecision = evaluateServerRequestPolicy({
+      method,
+      params,
+      permissions: allowSessionPermissions,
+      isPlanModeRequest: false,
+    })
+    assert.deepEqual(masterOffDecision, { kind: 'queue' },
+      `P1a: master OFF must queue the ${label} request even with a legacy allowForSession field`)
+    assert.equal(isImmediateServerRequestPolicyDecision(masterOffDecision), false,
+      `P1a: a master OFF ${label} queue must not be an immediate policy decision`)
+    const masterOnDecision = evaluateServerRequestPolicy({
+      method,
+      params,
+      permissions: masterOnAskPermissions,
+      isPlanModeRequest: false,
+    })
+    assert.deepEqual(masterOnDecision, {
+      kind: 'auto-approve',
+      result: buildAutoApprovalResult(method, params),
+    }, `P1a: master ON must auto approve the ${label} request even with legacy ask fields`)
+    assert.equal(isImmediateServerRequestPolicyDecision(masterOnDecision), true)
+  }
   assert.deepEqual(buildAutoApprovalResult('item/commandExecution/requestApproval', {}), { decision: 'acceptForSession' })
   assert.deepEqual(buildAutoApprovalResult('mcpserver/elicitation/request', mcpParams), { action: 'accept', content: {} })
   assert.deepEqual(buildAutoApprovalResult('mcpServer/elicitation/request', connectorMcpParams), {
@@ -4769,6 +6821,107 @@ function smokeServerRequestPolicy(): void {
   })
   assert.equal(planDeclined.kind, 'plan-decline')
   assert.equal(isImmediateServerRequestPolicyDecision(planDeclined), true)
+  // P1a: plan mode keeps its precedence in both master states.
+  for (const [label, method, params] of [
+    ['file change', 'item/fileChange/requestApproval', {}],
+    ['recognized MCP tool', 'mcpserver/elicitation/request', mcpParams],
+  ] as const) {
+    const planDeclinedMasterOn = evaluateServerRequestPolicy({
+      method,
+      params,
+      permissions: masterOnAskPermissions,
+      isPlanModeRequest: true,
+    })
+    assert.deepEqual(planDeclinedMasterOn, {
+      kind: 'plan-decline',
+      result: buildPlanModeDeclineResult(method, params),
+    }, `P1a: master ON must not override the plan-mode decline for the ${label} request`)
+    assert.equal(isImmediateServerRequestPolicyDecision(planDeclinedMasterOn), true)
+  }
+  const b3aPermissionsPlanDecision = evaluateServerRequestPolicy({
+    method: 'item/permissions/requestApproval',
+    params: {
+      threadId: 'thread-b3a-policy-fixture',
+      turnId: 'turn-b3a-policy-fixture',
+      itemId: 'item-b3a-policy-fixture',
+      startedAtMs: Date.parse('2026-10-15T00:00:02.000Z'),
+      cwd: 'E:\\b3a-example',
+      reason: 'B3A synthetic read permission request',
+      permissions: {
+        network: null,
+        fileSystem: {
+          read: ['E:\\b3a-example\\input.txt'],
+          write: null,
+        },
+      },
+    },
+    permissions: allowSessionPermissions,
+    isPlanModeRequest: true,
+  })
+  assert.deepEqual(b3aPermissionsPlanDecision, {
+    kind: 'plan-decline',
+    result: { permissions: {}, scope: 'turn' },
+  }, 'B3A: plan mode must decline a permissions request with an empty turn grant')
+  assert.equal(isImmediateServerRequestPolicyDecision(b3aPermissionsPlanDecision), true,
+    'B3A: a plan-mode permissions decline must be an immediate policy decision')
+
+  const b3bPermissionsParams = {
+    threadId: 'thread-b3b-policy-fixture',
+    turnId: 'turn-b3b-policy-fixture',
+    itemId: 'item-b3b-policy-fixture',
+    startedAtMs: Date.parse('2026-10-15T00:00:03.000Z'),
+    cwd: 'relative/b3b-example',
+    reason: 'B3B synthetic write permission request',
+    permissions: {
+      network: { enabled: true },
+      fileSystem: {
+        write: ['other-host/share/output.txt'],
+        entries: [{ path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'deny' }],
+      },
+    },
+  }
+  const allowAllPermissions = {
+    allowAllPermissionRequests: true,
+    commandExecution: 'allowForSession' as const,
+    fileChange: 'allowForSession' as const,
+    mcpTools: 'allowForSession' as const,
+  }
+  for (const [label, settings] of [
+    ['ask', askPermissions],
+    ['allowForSession', allowSessionPermissions],
+    ['allowAll', allowAllPermissions],
+    ['master-on/ask', masterOnAskPermissions],
+  ] as const) {
+    assert.equal(
+      shouldAutoApproveServerRequest('item/permissions/requestApproval', b3bPermissionsParams, settings),
+      false,
+      `B3B: the dedicated permissions method must stay out of automatic approval (${label})`,
+    )
+    const decision = evaluateServerRequestPolicy({
+      method: 'item/permissions/requestApproval',
+      params: b3bPermissionsParams,
+      permissions: settings,
+      isPlanModeRequest: false,
+    })
+    assert.deepEqual(decision, { kind: 'queue' },
+      `B3B: a non-plan permissions request must always queue for an explicit turn decision (${label})`)
+    assert.equal(isImmediateServerRequestPolicyDecision(decision), false)
+  }
+  const b3bPermissionsPlanDecision = evaluateServerRequestPolicy({
+    method: 'item/permissions/requestApproval',
+    params: b3bPermissionsParams,
+    permissions: allowAllPermissions,
+    isPlanModeRequest: true,
+  })
+  assert.deepEqual(b3bPermissionsPlanDecision, {
+    kind: 'plan-decline',
+    result: { permissions: {}, scope: 'turn' },
+  }, 'B3B: plan mode must decline the permissions request with an empty turn grant')
+  assert.deepEqual(
+    buildPlanModeDeclineResult('item/permissions/requestApproval', b3bPermissionsParams),
+    { permissions: {}, scope: 'turn' },
+  )
+
   const queued = evaluateServerRequestPolicy({
     method: 'mcpserver/elicitation/request',
     params: mcpParams,
@@ -4777,22 +6930,48 @@ function smokeServerRequestPolicy(): void {
   })
   assert.equal(queued.kind, 'queue')
   assert.equal(isImmediateServerRequestPolicyDecision(queued), false)
+  // P1a: the automatic-approval fixture now sets the master switch explicitly ON; a legacy
+  // allowForSession field alone is not enough (the master OFF queue case is asserted above).
   const autoApproved = evaluateServerRequestPolicy({
     method: 'mcpserver/elicitation/request',
     params: mcpParams,
-    permissions: allowSessionPermissions,
+    permissions: masterOnAskPermissions,
     isPlanModeRequest: false,
   })
   assert.equal(autoApproved.kind, 'auto-approve')
   assert.equal(isImmediateServerRequestPolicyDecision(autoApproved), true)
-  const unsupported = evaluateServerRequestPolicy({
-    method: 'item/tool/call',
-    params: {},
-    permissions: allowSessionPermissions,
-    isPlanModeRequest: false,
-  })
-  assert.equal(unsupported.kind, 'reject-unsupported')
-  assert.equal(isImmediateServerRequestPolicyDecision(unsupported), true)
+  // P1a: an unrecognized request queues in both master states.
+  for (const [label, settings] of [
+    ['master OFF', allowSessionPermissions],
+    ['master ON', masterOnAskPermissions],
+  ] as const) {
+    const unknownRequest = evaluateServerRequestPolicy({
+      method: 'mcp/custom/request',
+      params: { threadId: 'thread-unknown-policy-fixture', turnId: 'turn-unknown-policy-fixture' },
+      permissions: settings,
+      isPlanModeRequest: false,
+    })
+    assert.deepEqual(unknownRequest, { kind: 'queue' },
+      `P1a: an unrecognized request must queue (${label})`)
+    assert.equal(isImmediateServerRequestPolicyDecision(unknownRequest), false)
+  }
+  // P1a: the unsupported tool call stays rejected in both master states.
+  for (const [label, settings] of [
+    ['master OFF', allowSessionPermissions],
+    ['master ON', masterOnAskPermissions],
+  ] as const) {
+    const unsupported = evaluateServerRequestPolicy({
+      method: 'item/tool/call',
+      params: {},
+      permissions: settings,
+      isPlanModeRequest: false,
+    })
+    assert.deepEqual(unsupported, {
+      kind: 'reject-unsupported',
+      result: buildUnsupportedServerRequestResult('item/tool/call'),
+    }, `P1a: an unsupported tool call must stay rejected (${label})`)
+    assert.equal(isImmediateServerRequestPolicyDecision(unsupported), true)
+  }
   assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
 }
 
@@ -4840,6 +7019,9 @@ function smokeAppServerServerRequestHandler(): void {
   const createResolveDependencies = (
     overrides: Partial<Parameters<typeof resolveAppServerPendingServerRequest>[2]> = {},
   ) => ({
+    getPendingServerRequest: (requestId: number) => (
+      pendingStore.list().find((row) => row.id === requestId) ?? null
+    ),
     consumePendingServerRequest: (requestId: number) => pendingStore.consume(requestId),
     sendServerRequestReply: (requestId: number, reply: unknown) => {
       replies.push({ requestId, reply })
@@ -4856,8 +7038,10 @@ function smokeAppServerServerRequestHandler(): void {
     'item/commandExecution/requestApproval',
     { threadId: 'thread-auto', turnId: 'turn-auto' },
     createDependencies({
+      // P1a: automatic approval requires the master switch explicitly ON.
       permissions: {
         ...askPermissions,
+        allowAllPermissionRequests: true,
         commandExecution: 'allowForSession',
       },
     }),
@@ -4931,6 +7115,436 @@ function smokeAppServerServerRequestHandler(): void {
     })),
     /No pending server request found for id 13/,
   )
+
+  // P1a: with the master switch OFF, a legacy per-item allowForSession must record the request,
+  // announce it normally and send no automatic reply. The request stays manually resolvable.
+  handleAppServerServerRequest(
+    14,
+    'item/commandExecution/requestApproval',
+    { threadId: 'thread-master-off', turnId: 'turn-master-off' },
+    createDependencies({
+      permissions: {
+        ...askPermissions,
+        commandExecution: 'allowForSession',
+        fileChange: 'allowForSession',
+        mcpTools: 'allowForSession',
+      },
+    }),
+  )
+  assert.equal(pendingStore.count, 1, 'P1a: master OFF must keep the command request pending')
+  assert.equal(replies.length, 0, 'P1a: master OFF must not send an automatic reply')
+  const masterOffQueued = notifications.shift()
+  assert.equal(masterOffQueued?.method, 'server/request')
+  assert.deepEqual(masterOffQueued?.params, pendingStore.list()[0])
+  assert.equal((masterOffQueued?.params as { id: number }).id, 14)
+  assert.equal(
+    (masterOffQueued?.params as { method: string }).method,
+    'item/commandExecution/requestApproval',
+  )
+  assert.equal(
+    (masterOffQueued?.params as { params: { threadId: string } }).params.threadId,
+    'thread-master-off',
+  )
+
+  resolveAppServerPendingServerRequest(14, { result: { decision: 'accept' } }, createResolveDependencies())
+  assert.equal(pendingStore.count, 0, 'P1a: the master OFF request must still resolve manually')
+  assert.deepEqual(replies.shift(), {
+    requestId: 14,
+    reply: { result: { decision: 'accept' } },
+  })
+  const masterOffResolved = notifications.shift()
+  assert.equal(masterOffResolved?.method, 'server/request/resolved')
+  assert.deepEqual(masterOffResolved?.params, {
+    id: 14,
+    method: 'item/commandExecution/requestApproval',
+    threadId: 'thread-master-off',
+    mode: 'manual',
+    resolvedAtIso: (masterOffResolved?.params as { resolvedAtIso: string }).resolvedAtIso,
+  })
+  assert.equal(replies.length, 0)
+  assert.equal(notifications.length, 0)
+
+  // B3B: the dedicated permissions approval is validated against the stored request and
+  // its result is rebuilt from that request, never forwarded from the client object.
+  const permissionsEntries = [
+    { path: { type: 'path', path: 'src/app.ts' }, access: 'read' },
+    { path: { type: 'glob_pattern', pattern: '**/*.ts' }, access: 'write' },
+    { path: { type: 'special', value: { kind: 'project_roots', subpath: 'src' } }, access: 'none' },
+    { path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'deny' },
+  ]
+  const permissionsApprovalParams = {
+    threadId: 'thread-permissions',
+    turnId: 'turn-permissions',
+    itemId: 'item-permissions',
+    environmentId: 'env-b3b-remote',
+    startedAtMs: 1_700_000_000_000,
+    cwd: 'relative/workspace',
+    reason: 'B3B synthetic permission request',
+    permissions: {
+      network: { enabled: true },
+      fileSystem: {
+        read: ['relative/input.txt', 'relative/second.txt'],
+        write: ['other-host/share/output.txt'],
+        globScanMaxDepth: 2,
+        entries: permissionsEntries,
+      },
+    },
+  }
+  const fullPermissionsGrant = {
+    network: { enabled: true },
+    fileSystem: {
+      read: ['relative/input.txt', 'relative/second.txt'],
+      write: ['other-host/share/output.txt'],
+      globScanMaxDepth: 2,
+      entries: permissionsEntries,
+    },
+  }
+  const queuePermissionsRequest = (requestId: number, params: unknown = permissionsApprovalParams): void => {
+    assert.equal(pendingStore.count, 0)
+    handleAppServerServerRequest(requestId, 'item/permissions/requestApproval', params, createDependencies())
+    assert.equal(pendingStore.count, 1)
+    assert.equal(notifications.shift()?.method, 'server/request')
+    assert.equal(replies.length, 0)
+  }
+  const resolvePermissionsRequest = (requestId: number, result: unknown): unknown => {
+    resolveAppServerPendingServerRequest(requestId, { result }, createResolveDependencies())
+    assert.equal(pendingStore.count, 0)
+    // An earlier `assert.deepEqual(replies, [])` narrows the captured array reference to
+    // never[]; restore the declared element type for the assertions below.
+    const sent = (replies as Array<{ requestId: number; reply: unknown }>).shift()
+    assert.equal(sent?.requestId, requestId)
+    assert.equal(notifications.shift()?.method, 'server/request/resolved')
+    return sent?.reply
+  }
+  const assertPermissionsReplyRejected = (
+    requestId: number,
+    label: string,
+    reply: { result?: unknown; error?: { code: number; message: string } },
+  ): void => {
+    assert.throws(
+      () => resolveAppServerPendingServerRequest(requestId, reply, createResolveDependencies()),
+      /Invalid permissions approval reply/,
+      `B3B: ${label} must be rejected`,
+    )
+    assert.equal(pendingStore.count, 1, `B3B: ${label} must keep the pending request`)
+    assert.equal(replies.length, 0, `B3B: ${label} must not reply`)
+    assert.equal(notifications.length, 0, `B3B: ${label} must not emit resolved`)
+  }
+
+  queuePermissionsRequest(21)
+  const permissionsView = projectPermissionsApproval(permissionsApprovalParams)
+  assert.equal(permissionsView.canApprove, true)
+  assert.equal(permissionsView.unavailableReason, '')
+  assert.deepEqual(permissionsView.grant, fullPermissionsGrant,
+    'B3B: the view must expose the recognized request profile unchanged')
+
+  // The two renderer-facing actions round-trip through the same helper contract.
+  assert.deepEqual(buildPermissionsApprovalResult(permissionsView, 'deny'), {
+    permissions: {},
+    scope: 'turn',
+  })
+  assert.deepEqual(buildPermissionsApprovalResult(permissionsView, 'allow-turn'), {
+    permissions: fullPermissionsGrant,
+    scope: 'turn',
+  })
+  assert.deepEqual(
+    validatePermissionsApprovalResult(permissionsApprovalParams, buildPermissionsApprovalResult(permissionsView, 'allow-turn')),
+    { permissions: fullPermissionsGrant, scope: 'turn' },
+  )
+  assert.deepEqual(
+    validatePermissionsApprovalResult(permissionsApprovalParams, { permissions: {} }),
+    { permissions: {}, scope: 'turn' },
+  )
+  assert.throws(
+    () => buildPermissionsApprovalResult(
+      { canApprove: false, unavailableReason: '无法识别', rows: [], grant: null },
+      'allow-turn',
+    ),
+    /not fully recognized/,
+  )
+  const unknownPermissionsParams = {
+    ...permissionsApprovalParams,
+    permissions: { ...permissionsApprovalParams.permissions, additionalPermissions: { network: true } },
+  }
+  const unknownPermissionsView = projectPermissionsApproval(unknownPermissionsParams)
+  assert.equal(unknownPermissionsView.canApprove, false)
+  assert.equal(unknownPermissionsView.grant, null)
+  assert.deepEqual(buildPermissionsApprovalResult(unknownPermissionsView, 'deny'), {
+    permissions: {},
+    scope: 'turn',
+  })
+  assert.deepEqual(validatePermissionsApprovalResult(unknownPermissionsParams, { permissions: {} }), {
+    permissions: {},
+    scope: 'turn',
+  })
+  assert.throws(
+    () => validatePermissionsApprovalResult(
+      unknownPermissionsParams,
+      buildPermissionsApprovalResult(permissionsView, 'allow-turn'),
+    ),
+    /exact components/,
+    'B3B: an unrecognized request accepts only the empty grant',
+  )
+
+  const rejectedPermissionsResults: Array<{ label: string; result: unknown }> = [
+    { label: 'bare empty result', result: {} },
+    { label: 'legacy session decision', result: { decision: 'acceptForSession' } },
+    { label: 'legacy decline decision', result: { decision: 'decline' } },
+    { label: 'scope session', result: { permissions: {}, scope: 'session' } },
+    { label: 'scope always', result: { permissions: {}, scope: 'always' } },
+    { label: 'strict auto review flag', result: { permissions: {}, scope: 'turn', strictAutoReview: true } },
+    { label: 'unknown result field', result: { permissions: {}, scope: 'turn', extra: 1 } },
+    { label: 'missing permissions field', result: { scope: 'turn' } },
+    { label: 'non-object permissions', result: { permissions: null, scope: 'turn' } },
+    { label: 'unknown permission component', result: { permissions: { session: {} }, scope: 'turn' } },
+    {
+      label: 'expanded read path',
+      result: { permissions: { fileSystem: { ...fullPermissionsGrant.fileSystem, read: ['relative/input.txt', 'relative/second.txt', 'relative/extra.txt'] } }, scope: 'turn' },
+    },
+    {
+      label: 'expanded write path',
+      result: { permissions: { fileSystem: { ...fullPermissionsGrant.fileSystem, write: ['other-host/share/output.txt', 'other-host/share/other.txt'] } }, scope: 'turn' },
+    },
+    {
+      label: 'expanded glob depth',
+      result: { permissions: { fileSystem: { ...fullPermissionsGrant.fileSystem, globScanMaxDepth: 3 } }, scope: 'turn' },
+    },
+    {
+      label: 'reordered path list',
+      result: { permissions: { fileSystem: { ...fullPermissionsGrant.fileSystem, read: ['relative/second.txt', 'relative/input.txt'] } }, scope: 'turn' },
+    },
+    {
+      label: 'added special root entry',
+      result: {
+        permissions: {
+          fileSystem: {
+            ...fullPermissionsGrant.fileSystem,
+            entries: [...permissionsEntries, { path: { type: 'special', value: { kind: 'root' } }, access: 'write' }],
+          },
+        },
+        scope: 'turn',
+      },
+    },
+    {
+      label: 'deleted deny restriction entry',
+      result: {
+        permissions: {
+          fileSystem: { ...fullPermissionsGrant.fileSystem, entries: permissionsEntries.slice(0, 3) },
+        },
+        scope: 'turn',
+      },
+    },
+    {
+      label: 'renamed none restriction to read',
+      result: {
+        permissions: {
+          fileSystem: {
+            ...fullPermissionsGrant.fileSystem,
+            entries: [
+              permissionsEntries[0],
+              permissionsEntries[1],
+              { ...permissionsEntries[2], access: 'read' },
+              permissionsEntries[3],
+            ],
+          },
+        },
+        scope: 'turn',
+      },
+    },
+    {
+      label: 'network grant without the requested component',
+      result: { permissions: { network: { enabled: true }, fileSystem: { read: ['relative/input.txt'] } }, scope: 'turn' },
+    },
+  ]
+  for (const row of rejectedPermissionsResults) {
+    assertPermissionsReplyRejected(21, row.label, { result: row.result })
+  }
+  assertPermissionsReplyRejected(21, 'error reply envelope', {
+    error: { code: -32000, message: 'client rejected' },
+  })
+  assert.equal(pendingStore.count, 1,
+    'B3B: rejected permissions replies must never consume the pending request')
+
+  assert.deepEqual(resolvePermissionsRequest(21, { permissions: {}, scope: 'turn' }), {
+    result: { permissions: {}, scope: 'turn' },
+  }, 'B3B: an explicit deny must send the empty turn grant')
+  assert.throws(
+    () => resolveAppServerPendingServerRequest(21, { result: { permissions: {}, scope: 'turn' } }, createResolveDependencies()),
+    /No pending server request found for id 21/,
+    'B3B: a repeated response must not be sent again',
+  )
+  assert.equal(replies.length, 0)
+
+  queuePermissionsRequest(22)
+  assert.deepEqual(resolvePermissionsRequest(22, { permissions: fullPermissionsGrant, scope: 'turn' }), {
+    result: { permissions: fullPermissionsGrant, scope: 'turn' },
+  }, 'B3B: a complete recognized grant must be rebuilt from the original request')
+
+  queuePermissionsRequest(23)
+  assert.deepEqual(resolvePermissionsRequest(23, { permissions: { fileSystem: fullPermissionsGrant.fileSystem }, scope: 'turn' }), {
+    result: { permissions: { fileSystem: fullPermissionsGrant.fileSystem }, scope: 'turn' },
+  }, 'B3B: a single complete component grant must be accepted')
+
+  queuePermissionsRequest(24)
+  assert.deepEqual(resolvePermissionsRequest(24, { permissions: {} }), {
+    result: { permissions: {}, scope: 'turn' },
+  }, 'B3B: an omitted scope defaults to turn and is normalized')
+
+  queuePermissionsRequest(25)
+  assert.deepEqual(resolvePermissionsRequest(25, {
+    scope: 'turn',
+    permissions: {
+      fileSystem: {
+        entries: permissionsEntries,
+        globScanMaxDepth: 2,
+        write: ['other-host/share/output.txt'],
+        read: ['relative/input.txt', 'relative/second.txt'],
+      },
+      network: { enabled: true },
+    },
+  }), {
+    result: { permissions: fullPermissionsGrant, scope: 'turn' },
+  }, 'B3B: client field order must not reject an equal request')
+
+  const fileSystemOnlyParams = {
+    ...permissionsApprovalParams,
+    itemId: 'item-permissions-fs-only',
+    permissions: { fileSystem: permissionsApprovalParams.permissions.fileSystem },
+  }
+  queuePermissionsRequest(26, fileSystemOnlyParams)
+  assertPermissionsReplyRejected(26, 'network component absent from the request', {
+    result: { permissions: { network: { enabled: true } }, scope: 'turn' },
+  })
+  assert.deepEqual(resolvePermissionsRequest(26, { permissions: { fileSystem: fullPermissionsGrant.fileSystem } }), {
+    result: { permissions: { fileSystem: fullPermissionsGrant.fileSystem }, scope: 'turn' },
+  })
+
+  queuePermissionsRequest(27)
+  assert.throws(
+    () => resolveAppServerPendingServerRequest(
+      27,
+      { result: { permissions: {}, scope: 'turn' } },
+      createResolveDependencies({
+        sendServerRequestReply: () => {
+          throw new Error('B3B handler synchronous send failure')
+        },
+      }),
+    ),
+    /B3B handler synchronous send failure/,
+  )
+  assert.equal(pendingStore.count, 1, 'B3B: a throwing synchronous send must keep the pending request')
+  assert.equal(replies.length, 0, 'B3B: a throwing synchronous send must not reply')
+  assert.equal(notifications.length, 0, 'B3B: a throwing synchronous send must not emit resolved')
+  assert.deepEqual(resolvePermissionsRequest(27, { permissions: {}, scope: 'turn' }), {
+    result: { permissions: {}, scope: 'turn' },
+  }, 'B3B: the same request may be retried once after a failed send')
+
+  // B3B2: every path union variant validates its own members, and prototype-name special
+  // kinds never throw. Both stay dedicated, visible and deny-only.
+  const b3b2OuterKeyCases: Array<{
+    label: string
+    entry: unknown
+    expectedScopeRow: string
+    expectedDetail: RegExp
+  }> = [
+    {
+      label: 'path member followAliases',
+      entry: { path: { type: 'path', path: 'relative/input.txt', followAliases: true }, access: 'read' },
+      expectedScopeRow: 'path:relative/input.txt · access:read',
+      expectedDetail: /范围项 path 包含未知字段 followAliases/,
+    },
+    {
+      label: 'path member futureRestriction',
+      entry: {
+        path: { type: 'path', path: 'relative/input.txt', futureRestriction: { access: 'deny', path: '/synthetic/future' } },
+        access: 'read',
+      },
+      expectedScopeRow: 'path:relative/input.txt · access:read',
+      expectedDetail: /范围项 path 包含未知字段 futureRestriction/,
+    },
+    {
+      label: 'path member access',
+      entry: { path: { type: 'path', path: 'relative/input.txt', access: 'write' }, access: 'read' },
+      expectedScopeRow: 'path:relative/input.txt · access:read',
+      expectedDetail: /范围项 path 包含未知字段 access/,
+    },
+    {
+      label: 'glob_pattern member futureRestriction',
+      entry: {
+        path: { type: 'glob_pattern', pattern: '**/*.ts', futureRestriction: { access: 'deny' } },
+        access: 'write',
+      },
+      expectedScopeRow: 'glob_pattern:**/*.ts · access:write',
+      expectedDetail: /范围项 path 包含未知字段 futureRestriction/,
+    },
+    {
+      label: 'special member futureRestriction',
+      entry: {
+        path: { type: 'special', value: { kind: 'root' }, futureRestriction: { access: 'deny' } },
+        access: 'read',
+      },
+      expectedScopeRow: 'special:root · access:read',
+      expectedDetail: /范围项 path 包含未知字段 futureRestriction/,
+    },
+  ]
+  const b3b2PrototypeKindCases = ['toString', 'constructor', '__proto__'].map((kind) => ({
+    label: `special prototype-name kind ${kind}`,
+    entry: { path: { type: 'special', value: { kind } }, access: 'read' },
+    expectedScopeRow: 'path:无法识别 · access:read',
+    expectedDetail: /范围项 special 类型无法识别/,
+  }))
+  let b3b2RequestId = 61
+  for (const row of [...b3b2OuterKeyCases, ...b3b2PrototypeKindCases]) {
+    const params = {
+      ...permissionsApprovalParams,
+      itemId: `item-b3b2-${String(b3b2RequestId)}`,
+      permissions: { fileSystem: { entries: [row.entry] } },
+    }
+    const view = projectPermissionsApproval(params)
+    assert.equal(view.canApprove, false, `B3B2: ${row.label} must stay deny-only`)
+    assert.equal(view.grant, null, `B3B2: ${row.label} must not build a grant`)
+    assert.equal(String(view.unavailableReason).length > 0, true,
+      `B3B2: ${row.label} must explain why it cannot be approved`)
+    assert.equal(view.rows.at(-1)?.label, '未识别项', `B3B2: ${row.label} must name the unknown member`)
+    assert.match(String(view.rows.at(-1)?.value), row.expectedDetail)
+    assert.equal(
+      view.rows.find((candidate) => candidate.label === '范围项')?.value,
+      row.expectedScopeRow,
+      `B3B2: ${row.label} must keep the raw recognized scope visible`,
+    )
+    assert.equal(
+      view.rows.some((candidate) => candidate.value.includes('relative/workspace')),
+      true,
+      `B3B2: ${row.label} must keep the recognized context`,
+    )
+    assert.deepEqual(buildPermissionsApprovalResult(view, 'deny'), { permissions: {}, scope: 'turn' })
+    assert.throws(
+      () => buildPermissionsApprovalResult(view, 'allow-turn'),
+      /not fully recognized/,
+      `B3B2: ${row.label} must not approve`,
+    )
+    assert.deepEqual(validatePermissionsApprovalResult(params, { permissions: {} }), {
+      permissions: {},
+      scope: 'turn',
+    })
+    assert.throws(
+      () => validatePermissionsApprovalResult(params, {
+        permissions: { fileSystem: { entries: [row.entry] } },
+        scope: 'turn',
+      }),
+      /exact components/,
+      `B3B2: ${row.label} must reject a grant built from the unknown structure`,
+    )
+
+    queuePermissionsRequest(b3b2RequestId, params)
+    assertPermissionsReplyRejected(b3b2RequestId, row.label, {
+      result: { permissions: { fileSystem: { read: ['relative/input.txt'] } }, scope: 'turn' },
+    })
+    assert.deepEqual(resolvePermissionsRequest(b3b2RequestId, { permissions: {} }), {
+      result: { permissions: {}, scope: 'turn' },
+    }, `B3B2: ${row.label} must still be rejectable through the real handler`)
+    b3b2RequestId += 1
+  }
 }
 
 async function smokeCommandRunner(): Promise<void> {
@@ -5856,6 +8470,8 @@ async function smokeCodexBridgeRouteHandlers(): Promise<void> {
       listEventsAfter: () => ({ notifications: [] }),
       listUncertainRequests: () => [],
       getLatestRequestByClientMessageId: () => null,
+      readAssistantIdentity: () => null,
+      writeAssistantIdentity: () => { throw new Error('unexpected assistant write') },
     },
     threadSearchIndexStore: {
       clear: () => {},
@@ -5908,12 +8524,25 @@ async function smokeCodexBridgeRouteHandlers(): Promise<void> {
     dependencies as never,
   )
 
-  assert.equal(replayHandlers.length, 19)
+  assert.equal(replayHandlers.length, 20)
   assert.equal(await runCodexBridgeRouteHandlers(replayHandlers), true)
   assert.deepEqual(replayCalls, [{ afterSeq: 5, limit: 2 }])
   assert.deepEqual(JSON.parse(replayResponse.body), {
     data: { notifications: [], latestSeq: 9, oldestSeq: 1 },
   })
+
+  const assistantResponse = createRouteTestResponse()
+  const assistantHandlers = createCodexBridgeRouteHandlers(
+    { method: 'GET' } as never,
+    assistantResponse.response as never,
+    new URL('/codex-api/assistant', 'http://localhost'),
+    dependencies as never,
+  )
+  assert.equal(await runCodexBridgeRouteHandlers(assistantHandlers), true)
+  const assistantState = JSON.parse(assistantResponse.body)
+  assert.equal(assistantState.data, null)
+  assert.deepEqual(assistantState.capabilities, { conversation: false, dispatch: false, backgroundExecution: false })
+  assert.ok(Array.isArray(assistantState.allowedWorkspaces))
 
   const unmatchedResponse = createRouteTestResponse()
   const unmatchedHandlers = createCodexBridgeRouteHandlers(
@@ -5969,16 +8598,23 @@ function smokeCodexBridgeSharedState(): void {
   }
   let appServerCreateCount = 0
   let methodCatalogCreateCount = 0
+  const seenAppServers: Array<{ id: number }> = []
 
   const first = getCodexBridgeSharedState({
     globalScope,
     createAppServer: () => ({ id: ++appServerCreateCount }),
-    createMethodCatalog: () => ({ id: ++methodCatalogCreateCount }),
+    createMethodCatalog: (appServer) => {
+      seenAppServers.push(appServer)
+      return { id: ++methodCatalogCreateCount }
+    },
   })
   const second = getCodexBridgeSharedState({
     globalScope,
     createAppServer: () => ({ id: ++appServerCreateCount }),
-    createMethodCatalog: () => ({ id: ++methodCatalogCreateCount }),
+    createMethodCatalog: (appServer) => {
+      seenAppServers.push(appServer)
+      return { id: ++methodCatalogCreateCount }
+    },
   })
 
   assert.equal(first, second)
@@ -5988,39 +8624,865 @@ function smokeCodexBridgeSharedState(): void {
   })
   assert.equal(appServerCreateCount, 1)
   assert.equal(methodCatalogCreateCount, 1)
+  assert.equal(seenAppServers.length, 1)
+  assert.equal(seenAppServers[0], first.appServer, 'the catalog factory must receive the already created owner')
   assert.equal(globalScope[CODEX_BRIDGE_SHARED_STATE_KEY], first)
 }
 
-function smokeAppServerProcess(): void {
-  const appServer = new AppServerProcess()
-  const initialStatus = appServer.getStatus()
+function readActiveLaunchIdentity(status: AppServerHealth): CodexLaunchIdentity | undefined {
+  return (status as AppServerHealth & { activeLaunchIdentity?: CodexLaunchIdentity }).activeLaunchIdentity
+}
 
-  assert.equal(initialStatus.running, false)
-  assert.equal(initialStatus.initialized, false)
-  assert.equal(initialStatus.stopping, false)
-  assert.equal(initialStatus.pid, null)
-  assert.equal(initialStatus.pendingRpcCount, 0)
-  assert.equal(initialStatus.queuedRpcCount, 0)
-  assert.equal(initialStatus.pendingServerRequestCount, 0)
-  assert.equal(initialStatus.activePlanModeTurnCount, 0)
-  assert.equal(appServer.getStartedAtMs(), 0)
-  assert.deepEqual(appServer.listPendingServerRequests(), [])
-  assert.deepEqual(appServer.listPendingServerRequestsForThread('thread-1'), [])
-  assert.equal(appServer.getThreadTokenUsage('thread-1'), null)
+function createB4b1OwnerHarness(options: B4b1OwnerHarnessOptions = {}): B4b1OwnerHarness {
+  const children: FakeAppServerChild[] = []
+  const spawnCalls: Array<{ command: string; args: string[] }> = []
+  const counts: B4b1OwnerCounts = { resolve: 0, probe: 0, spawn: 0 }
+  let command = options.command ?? ''
+  let probeError = options.probeError ?? false
+  let spawnMutation = options.spawnMutation ?? null
+  const probeMutation = options.probeMutation ?? null
+  const probeStdout = options.probeStdout ?? ''
+  const respondToInitialize = options.respondToInitialize !== false
 
-  appServer.markPlanModeTurn('thread-1', 'turn-1')
-  assert.equal(appServer.getActivePlanModeTurnCount(), 1)
-  assert.equal(appServer.getStatus().activePlanModeTurnCount, 1)
-
-  appServer.clearPlanModeTurn('thread-1', 'turn-1')
-  assert.equal(appServer.getActivePlanModeTurnCount(), 0)
-
-  const unsubscribe = appServer.onNotification(() => {
-    throw new Error('unexpected notification')
+  const owner = new AppServerProcess({
+    resolveCodexCommand: () => {
+      counts.resolve += 1
+      return options.resolveCommand ? options.resolveCommand() : command
+    },
+    probeCodexVersion: () => {
+      counts.probe += 1
+      if (probeMutation !== null) {
+        writeFileSync(command, probeMutation, 'utf8')
+      }
+      return { status: probeError ? 1 : 0, stdout: probeStdout, error: probeError }
+    },
+    spawnProcess: (spawnCommand, args) => {
+      counts.spawn += 1
+      spawnCalls.push({ command: spawnCommand, args })
+      if (spawnMutation !== null) {
+        writeFileSync(command, spawnMutation, 'utf8')
+      }
+      const child = new FakeAppServerChild({ respondToInitialize })
+      child.initializeFailuresRemaining = options.initializeFailures ?? 0
+      children.push(child)
+      return child as unknown as ChildProcessWithoutNullStreams
+    },
   })
-  unsubscribe()
-  appServer.dispose()
-  assert.equal(appServer.getStatus().running, false)
+
+  return {
+    owner,
+    children,
+    spawnCalls,
+    counts,
+    setCommand: (value) => {
+      command = value
+    },
+    setProbeError: (value) => {
+      probeError = value
+    },
+  }
+}
+
+function advanceEventLoop(): Promise<void> {
+  return new Promise((resolveTick) => setTimeout(resolveTick, 0))
+}
+
+/** Asserts the explicit unavailable contract of a real catalog instance. */
+async function expectUnavailableState(methodCatalog: AppServerMethodCatalog, reason: string): Promise<void> {
+  await assert.rejects(methodCatalog.listMethods(), (error: unknown) => {
+    assert.equal(isAppServerMethodCatalogUnavailableError(error), true, 'the catalog must fail closed')
+    assert.equal(isAppServerMethodCatalogUnavailableError(error) ? error.reason : null, reason)
+    return true
+  })
+  await assert.rejects(methodCatalog.listNotificationMethods(), (error: unknown) => {
+    assert.equal(isAppServerMethodCatalogUnavailableError(error), true, 'the notifications list must fail closed too')
+    assert.equal(isAppServerMethodCatalogUnavailableError(error) ? error.reason : null, reason)
+    return true
+  })
+}
+
+/**
+ * Task-owned correction cases. Each case runs against its own synthetic home and synthetic child
+ * and is reported individually, so a review-required defect is observable as a real runtime
+ * failure before the matching minimal fix lands. Synthetic business children only; no real
+ * app-server, no network, no real CODEX_HOME.
+ */
+async function withB4b1SyntheticHome(run: (home: string) => Promise<void>): Promise<void> {
+  const originalCodexHome = process.env.CODEX_HOME
+  const home = await mkdtemp(fileURLToPath(new URL('./b4b1-owner-home-', import.meta.url)))
+  process.env.CODEX_HOME = home
+  try {
+    await run(home)
+  } finally {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME
+    } else {
+      process.env.CODEX_HOME = originalCodexHome
+    }
+  }
+}
+
+/**
+ * RED: a terminal turn/completed must release the pending server requests of exactly that
+ * thread/turn, automatically, before the original terminal notification is delivered, and without
+ * writing a reply. Nonterminal or unidentifiable notifications must leave the single pending store
+ * untouched, a duplicate terminal must be idempotent and a late manual reply must be rejected.
+ * Synthetic child only; no real app-server, no network, no real CODEX_HOME.
+ */
+async function smokePendingServerRequestTurnTerminalRed(): Promise<void> {
+  await withB4b1SyntheticHome(async (home) => {
+    const launchDir = join(home, 'launch')
+    await mkdir(launchDir, { recursive: true })
+    const commandPath = join(launchDir, 'codex-terminal-red.exe')
+    await writeFile(commandPath, 'codex-terminal-red-bytes\n', 'utf8')
+
+    const harness = createB4b1OwnerHarness({ command: commandPath, probeStdout: 'codex-cli 0.162.1\n' })
+    const owner = harness.owner
+    try {
+      owner.setWebBridgeSettings({
+        permissions: {
+          allowAllPermissionRequests: false,
+          commandExecution: 'ask',
+          fileChange: 'ask',
+          mcpTools: 'ask',
+        },
+      })
+      await owner.warmup()
+      const child = harness.children[0]
+      assert.ok(child, 'the synthetic child must exist after warmup')
+
+      const notifications: Array<{ method: string; params: unknown }> = []
+      owner.onNotification((notification) => notifications.push(notification))
+
+      for (const request of [
+        { id: 0, threadId: 'threadA', turnId: 'turn1' },
+        { id: 1, threadId: 'threadA', turnId: 'turn2' },
+        { id: 2, threadId: 'threadB', turnId: 'turn1' },
+      ]) {
+        child.emitStdoutLine({
+          id: request.id,
+          method: 'item/permissions/requestApproval',
+          params: {
+            threadId: request.threadId,
+            turnId: request.turnId,
+            itemId: `item-${String(request.id)}`,
+            startedAtMs: 1_700_000_000_000,
+            cwd: 'E:/terminal-red',
+            reason: 'RED synthetic write permission request',
+            permissions: {
+              network: null,
+              fileSystem: { read: null, write: ['E:/terminal-red/output.txt'] },
+            },
+          },
+        })
+      }
+
+      const pendingIds = () => owner.listPendingServerRequests().map((row) => row.id)
+      const resolvedNotifications = () => notifications.filter((row) => row.method === 'server/request/resolved')
+      assert.deepEqual(pendingIds(), [0, 1, 2], 'all three seeded permissions requests must be pending')
+
+      const seeded = owner.listPendingServerRequests()
+      const id0 = seeded[0]
+      const id1 = seeded[1]
+      const id2 = seeded[2]
+      assert.equal(id0?.id, 0, 'the first seeded request must be id 0')
+      assert.equal(id0?.method, 'item/permissions/requestApproval')
+      const baselineWrittenLines = child.writtenLines.slice()
+      const assertQueuePreserved = (label: string) => {
+        assert.deepEqual(pendingIds(), [0, 1, 2], label)
+        assert.equal(resolvedNotifications().length, 0, `${label}: no resolution may be emitted`)
+        assert.deepEqual(child.writtenLines, baselineWrittenLines, `${label}: no reply may be written`)
+      }
+
+      // nonterminal or unidentifiable notifications must preserve the whole queue
+      child.emitStdoutLine({ method: 'turn/completed', params: { threadId: 'threadA', turn: { id: 'turn1', status: 'inProgress', items: [], error: null } } })
+      assertQueuePreserved('an inProgress turn must not release pending requests')
+      child.emitStdoutLine({ method: 'turn/completed', params: { threadId: 'threadA', turn: { id: 'turn1', status: 'failed', items: [], error: { willRetry: true } } } })
+      assertQueuePreserved('a retryable failed turn must not release pending requests')
+      child.emitStdoutLine({ method: 'turn/completed', params: { turn: { id: 'turn1', status: 'completed', items: [], error: null } } })
+      assertQueuePreserved('a turn/completed without threadId must not release pending requests')
+      child.emitStdoutLine({ method: 'turn/completed', params: { threadId: 'threadA', turn: { status: 'completed', items: [], error: null } } })
+      assertQueuePreserved('a turn/completed without turn.id must not release pending requests')
+      child.emitStdoutLine({ method: 'turn/completed', params: {} })
+      assertQueuePreserved('a bare turn/completed must not release pending requests')
+      child.emitStdoutLine({ method: 'turn/interrupt', params: { threadId: 'threadA', turnId: 'turn1' } })
+      assertQueuePreserved('a bare turn/interrupt must not release pending requests')
+      child.emitStdoutLine({ method: 'error', params: { threadId: 'threadA', turnId: 'turn1', willRetry: false } })
+      assertQueuePreserved('an error notification alone is not a terminal turn')
+      child.emitStdoutLine({ method: 'turn/completed', params: { threadId: 'threadA', turnId: 'turn2', turn: { id: 'turn1', status: 'completed', error: null } } })
+      assertQueuePreserved('conflicting turn ids must not release either turn')
+
+      // the actual terminal notification for threadA/turn1 may release only id 0
+      child.emitStdoutLine({
+        method: 'turn/completed',
+        params: { threadId: 'threadA', turn: { id: 'turn1', status: 'interrupted', items: [], error: null } },
+      })
+      assert.deepEqual(pendingIds(), [1, 2],
+        'an interrupted terminal must release only the pending requests of its own thread/turn')
+      assert.deepEqual(owner.listPendingServerRequests()[0], id1, 'the threadA/turn2 request object must stay unchanged')
+      assert.deepEqual(owner.listPendingServerRequests()[1], id2, 'the threadB/turn1 request object must stay unchanged')
+
+      const automaticResolutions = resolvedNotifications()
+      assert.equal(automaticResolutions.length, 1, 'the interrupted terminal must resolve exactly one request')
+      const automatic = (automaticResolutions[0]?.params ?? {}) as {
+        id?: number
+        method?: string
+        threadId?: string
+        mode?: string
+      }
+      assert.equal(automatic.id, 0, 'the released id must be the interrupted turn request')
+      assert.equal(automatic.method, 'item/permissions/requestApproval')
+      assert.equal(automatic.threadId, 'threadA')
+      assert.equal(automatic.mode, 'automatic', 'a terminal release must be an automatic resolution')
+      const terminalIndex = notifications.findIndex((row) => (
+        row.method === 'turn/completed'
+        && (row.params as { turn?: { status?: string } }).turn?.status === 'interrupted'
+      ))
+      assert.ok(terminalIndex >= 0, 'the original terminal turn/completed must still be delivered')
+      assert.ok(notifications.indexOf(automaticResolutions[0]) < terminalIndex,
+        'the automatic resolution must be emitted before the original terminal notification')
+      assert.deepEqual(child.writtenLines, baselineWrittenLines,
+        'an automatic terminal resolution must not write a reply to the runtime')
+
+      // a duplicate terminal must be idempotent
+      child.emitStdoutLine({
+        method: 'turn/completed',
+        params: { threadId: 'threadA', turn: { id: 'turn1', status: 'interrupted', items: [], error: null } },
+      })
+      assert.equal(resolvedNotifications().length, 1, 'a duplicate terminal must not resolve a second time')
+      assert.deepEqual(pendingIds(), [1, 2])
+
+      // a late manual reply for the released request must reject and write nothing
+      await assert.rejects(
+        owner.respondToServerRequest({ id: 0, result: { permissions: {}, scope: 'turn' } }),
+        /No pending server request found for id 0/,
+      )
+      assert.deepEqual(child.writtenLines, baselineWrittenLines,
+        'a late reply for a released request must not be written to the runtime')
+
+      // completed and non-retryable failed terminals release their own turn only
+      child.emitStdoutLine({ method: 'turn/completed', params: { threadId: 'threadA', turn: { id: 'turn2', status: 'completed', items: [], error: null } } })
+      assert.deepEqual(pendingIds(), [2], 'a completed turn must release only its own turn requests')
+      child.emitStdoutLine({ method: 'turn/completed', params: { threadId: 'threadB', turn: { id: 'turn1', status: 'failed', items: [], error: { willRetry: false } } } })
+      assert.deepEqual(pendingIds(), [], 'a non-retryable failed turn must release its own request')
+      assert.equal(resolvedNotifications().length, 3, 'each terminal turn must resolve its own request exactly once')
+      assert.deepEqual(child.writtenLines, baselineWrittenLines, 'no terminal resolution may write a reply')
+    } finally {
+      owner.dispose()
+    }
+  })
+}
+
+async function smokeB4b1Corrections(): Promise<void> {
+  const cases: Array<{ name: string; status: 'passed' | 'failed'; detail?: string }> = []
+  const runCase = async (name: string, run: () => Promise<void>): Promise<void> => {
+    try {
+      await run()
+      cases.push({ name, status: 'passed' })
+    } catch (error) {
+      cases.push({ name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  await runCase('raw-version-stdout-preserved', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-correction-raw-'))
+    try {
+      const target = join(tempDir, 'codex-correction-raw.exe')
+      const bytes = 'b4b1-correction-raw-bytes\n'
+      await writeFile(target, bytes, 'utf8')
+      const core = captureCodexLaunchIdentity(target, {
+        probeVersion: () => ({ status: 0, stdout: 'codex-cli correction-raw\n', error: false }),
+      })
+      assert.equal(core.versionRaw, 'codex-cli correction-raw\n', 'raw probe stdout must survive exactly')
+      assert.equal(core.sha256, createHash('sha256').update(bytes).digest('hex'))
+      assert.equal(core.identityKind, 'native')
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  await runCase('default-probe-real-transport-native', async () => {
+    const core = captureCodexLaunchIdentity(process.execPath, {})
+    assert.equal(core.launchPath, process.execPath)
+    assert.equal(core.identityKind, 'native')
+    assert.equal(core.sha256, readCodexLaunchFileSha256(process.execPath))
+    assert.match(core.versionRaw ?? '', /^v\d+\.\d+\.\d+/u)
+    assert.equal(core.versionRaw?.endsWith('\n'), true, 'real bounded --version stdout must keep its newline')
+  })
+
+  await runCase('default-probe-real-transport-windows-shim', async () => {
+    if (process.platform !== 'win32') return
+    const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-correction-shim-'))
+    try {
+      const shim = join(tempDir, 'codex-correction-shim.cmd')
+      const shimText = '@echo off\r\necho codex-cli correction-shim-probe\r\n'
+      await writeFile(shim, shimText, 'utf8')
+      const core = captureCodexLaunchIdentity(shim, {})
+      assert.equal(core.identityKind, 'launcher')
+      assert.equal(core.launchPath, shim)
+      assert.equal(core.sha256, createHash('sha256').update(shimText).digest('hex'))
+      assert.equal(core.versionRaw?.trim(), 'codex-cli correction-shim-probe')
+      assert.equal(core.versionRaw?.endsWith('\n'), true, 'cmd shim --version stdout must keep its newline')
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  await runCase('changed-during-version-probe-is-unknown', async () => {
+    await withB4b1SyntheticHome(async (home) => {
+      const target = join(home, 'codex-correction-changing.exe')
+      await writeFile(target, 'b4b1-correction-before-probe\n', 'utf8')
+      const harness = createB4b1OwnerHarness({
+        command: target,
+        probeStdout: 'codex-cli correction-changing\n',
+        probeMutation: 'b4b1-correction-after-probe\n',
+      })
+      try {
+        await harness.owner.warmup()
+        const status = harness.owner.getStatus()
+        assert.equal(status.initialized, true, 'the existing handshake contract must be preserved')
+        const identity = readActiveLaunchIdentity(status)
+        assert.ok(identity)
+        assert.equal(identity.launchPath, target)
+        assert.equal(identity.identityKind, 'unknown', 'a probe-window byte change must not publish a mixed identity')
+        assert.equal(identity.versionRaw, null)
+        assert.equal(identity.sha256, null)
+        assert.equal(identity.reason, 'identity-changed-during-version-probe')
+        assert.equal(harness.children.length, 1, 'identity failure must not restart or block the handshake')
+      } finally {
+        harness.owner.dispose()
+      }
+    })
+  })
+
+  await runCase('public-rpc-dispose-rejects-without-replacement', async () => {
+    await withB4b1SyntheticHome(async (home) => {
+      const target = join(home, 'codex-correction-rpc.exe')
+      await writeFile(target, 'b4b1-correction-rpc-bytes\n', 'utf8')
+      const harness = createB4b1OwnerHarness({ command: target, probeStdout: 'codex-cli correction-rpc\n' })
+      let settled = false
+      const staleOutcome = harness.owner.rpc('model/list', {}).then(
+        () => { settled = true; return 'fulfilled' as const },
+        () => { settled = true; return 'rejected' as const },
+      )
+      try {
+        assert.equal(harness.children.length, 1, 'the public rpc must start the first real child synchronously')
+        harness.owner.dispose()
+        const deadline = Date.now() + 3_000
+        while (!settled && harness.children.length <= 1 && Date.now() < deadline) {
+          await advanceEventLoop()
+        }
+        assert.equal(harness.children.length, 1, 'the stale rpc must not start a replacement child after dispose')
+        assert.equal(settled, true, 'the disposed public rpc must settle instead of staying pending')
+        assert.equal(await staleOutcome, 'rejected', 'the original public rpc must reject after dispose')
+        assert.deepEqual(harness.counts, { resolve: 1, probe: 1, spawn: 1 })
+        const businessLines = harness.children
+          .flatMap((child) => child.writtenLines)
+          .filter((line) => line.includes('model/list'))
+        assert.deepEqual(businessLines, [], 'no business rpc may reach a replacement without its own initialize')
+        assert.equal(harness.owner.getStatus().running, false)
+        assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+      } finally {
+        harness.owner.dispose()
+      }
+    })
+  })
+
+  await runCase('initialized-public-rpc-dispose-rejects-without-replacement', async () => {
+    await withB4b1SyntheticHome(async (home) => {
+      const target = join(home, 'codex-correction-rpc-initialized.exe')
+      await writeFile(target, 'b4b1-correction-rpc-initialized-bytes\n', 'utf8')
+      const harness = createB4b1OwnerHarness({
+        command: target,
+        probeStdout: 'codex-cli correction-rpc-initialized\n',
+      })
+      try {
+        await harness.owner.warmup()
+        assert.equal(harness.owner.getStatus().initialized, true)
+        const countsBeforeRpc = { ...harness.counts }
+        let settled = false
+        const staleOutcome = harness.owner.rpc('model/list', {}).then(
+          () => { settled = true; return 'fulfilled' as const },
+          () => { settled = true; return 'rejected' as const },
+        )
+        harness.owner.dispose()
+        const deadline = Date.now() + 3_000
+        while (!settled && harness.children.length <= 1 && Date.now() < deadline) {
+          await advanceEventLoop()
+        }
+        assert.equal(
+          harness.children.length,
+          1,
+          'The public continuation must not create a replacement after an initialized owner is disposed',
+        )
+        assert.equal(settled, true, 'the disposed public rpc must settle instead of staying pending')
+        assert.equal(await staleOutcome, 'rejected', 'the original public rpc must reject after dispose')
+        assert.deepEqual(harness.counts, countsBeforeRpc, 'the stale rpc must not resolve/probe/hash/spawn again')
+        const businessLines = harness.children
+          .flatMap((child) => child.writtenLines)
+          .filter((line) => line.includes('model/list'))
+        assert.deepEqual(businessLines, [], 'no business rpc may be written after dispose')
+        assert.equal(harness.owner.getStatus().running, false)
+        assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+      } finally {
+        harness.owner.dispose()
+      }
+    })
+  })
+
+  await runCase('dispose-inside-initialize-window-rejects', async () => {
+    await withB4b1SyntheticHome(async (home) => {
+      const target = join(home, 'codex-correction-window.exe')
+      await writeFile(target, 'b4b1-correction-window-bytes\n', 'utf8')
+      const harness = createB4b1OwnerHarness({
+        command: target,
+        probeStdout: 'codex-cli correction-window\n',
+        respondToInitialize: false,
+      })
+      const pendingWarmup = harness.owner.warmup()
+      harness.owner.dispose()
+      try {
+        await assert.rejects(
+          pendingWarmup,
+          (error: unknown) => error instanceof Error,
+          'an abandoned initialization must reject instead of fulfilling',
+        )
+        assert.equal(harness.children.length, 1)
+        assert.deepEqual(harness.children[0].writtenLines, [], 'nothing may be written into the abandoned child')
+        assert.equal(harness.owner.getStatus().running, false)
+        assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+      } finally {
+        harness.owner.dispose()
+      }
+    })
+  })
+
+  await runCase('late-a-stdout-notification-ignored', async () => {
+    await withB4b1SyntheticHome(async (home) => {
+      const pathA = join(home, 'codex-correction-a.exe')
+      const pathB = join(home, 'codex-correction-b.exe')
+      await writeFile(pathA, 'b4b1-correction-a-bytes\n', 'utf8')
+      await writeFile(pathB, 'b4b1-correction-b-bytes\n', 'utf8')
+      const harness = createB4b1OwnerHarness({ command: pathA, probeStdout: 'codex-cli correction-shared\n' })
+      const seen: Array<{ method: string; params: unknown }> = []
+      let stop = () => {}
+      try {
+        await harness.owner.warmup()
+        const childA = harness.children[0]
+        childA.emitExit()
+        harness.setCommand(pathB)
+        await harness.owner.warmup()
+        const childB = harness.children[1]
+        assert.equal(harness.children.length, 2)
+        stop = harness.owner.onNotification((notification) => {
+          seen.push(notification)
+        })
+        const notification = {
+          method: 'thread/name/updated',
+          params: { threadId: 'b4b1-correction-thread', name: 'b4b1-correction-stale-marker' },
+        }
+        const line = `${JSON.stringify(notification)}\n`
+        childA.emitStdoutChunk(line)
+        await advanceEventLoop()
+        const afterStaleA = [...seen]
+        const beforeB = seen.length
+        childB.emitStdoutChunk(line)
+        await advanceEventLoop()
+        const fromCurrentB = seen.slice(beforeB)
+        assert.deepEqual(fromCurrentB, [notification], 'the current child notification must reach the owner listener')
+        assert.deepEqual(afterStaleA, [], 'the exited child stdout must not notify listeners owned by the current child')
+      } finally {
+        stop()
+        harness.owner.dispose()
+      }
+    })
+  })
+
+  const failures = cases.filter((entry) => entry.status === 'failed')
+  console.log(JSON.stringify({ b4b1CorrectionCases: cases }))
+  if (failures.length > 0) {
+    throw new Error(
+      `b4b1 correction cases failed (${failures.length}/${cases.length}): `
+      + failures.map((entry) => `${entry.name} => ${entry.detail ?? 'unknown'}`).join(' | '),
+    )
+  }
+}
+
+async function smokeCodexLaunchIdentityCapture(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-launch-identity-'))
+  try {
+    const nativePath = join(tempDir, 'codex-b4b1-native.exe')
+    const relativePath = join(tempDir, 'codex-b4b1-relative.exe')
+    const pathOnlyName = 'codexb4b1pathonly'
+    // PATH 解析在 POSIX 上不带 .exe 后缀；固定 .exe 会让 Linux CI 找不到文件
+    const pathOnlyPath = join(tempDir, `${pathOnlyName}${process.platform === 'win32' ? '.exe' : ''}`)
+    const launcherPath = join(tempDir, 'codex-b4b1-launcher.cmd')
+    const nativeBytes = 'b4b1-native-bytes\n'
+    const relativeBytes = 'b4b1-relative-bytes\n'
+    const pathOnlyBytes = 'b4b1-path-only-bytes\n'
+    const launcherBytes = 'b4b1-launcher-bytes\n'
+    await writeFile(nativePath, nativeBytes, 'utf8')
+    await writeFile(relativePath, relativeBytes, 'utf8')
+    await writeFile(pathOnlyPath, pathOnlyBytes, 'utf8')
+    await writeFile(launcherPath, launcherBytes, 'utf8')
+
+    const shaOf = (value: string) => createHash('sha256').update(value).digest('hex')
+    const okProbe = () => ({ status: 0, stdout: 'codex-b4b1 0.162.1\n', error: false })
+
+    // absolute native target: version probe and real file hash are bound to the captured path
+    assert.deepEqual(captureCodexLaunchIdentity(nativePath, { probeVersion: okProbe }), {
+      launchPath: nativePath,
+      versionRaw: 'codex-b4b1 0.162.1\n',
+      sha256: shaOf(nativeBytes),
+      identityKind: 'native',
+    })
+
+    // a relative candidate is fixed to an absolute target and never left relative
+    const relativeCore = captureCodexLaunchIdentity('./codex-b4b1-relative.exe', {
+      cwd: tempDir,
+      probeVersion: okProbe,
+    })
+    assert.equal(relativeCore.launchPath, relativePath)
+    assert.equal(isAbsolute(relativeCore.launchPath), true)
+    assert.equal(relativeCore.sha256, shaOf(relativeBytes))
+    assert.equal(relativeCore.identityKind, 'native')
+
+    // a PATH-only bare candidate is fixed to the absolute first match on the provided PATH
+    const pathOnlyCore = captureCodexLaunchIdentity(pathOnlyName, {
+      pathValue: tempDir,
+      probeVersion: okProbe,
+    })
+    assert.equal(pathOnlyCore.launchPath, pathOnlyPath)
+    assert.equal(pathOnlyCore.sha256, shaOf(pathOnlyBytes))
+
+    // native and cmd/script launchers are distinguished; the launcher hash is the launcher file
+    const launcherCore = captureCodexLaunchIdentity(launcherPath, { probeVersion: okProbe })
+    assert.equal(launcherCore.identityKind, 'launcher')
+    assert.equal(launcherCore.sha256, shaOf(launcherBytes))
+    assert.equal(getCodexLaunchIdentityKind(launcherPath), 'launcher')
+    assert.equal(getCodexLaunchIdentityKind(nativePath), 'native')
+
+    // an unresolvable bare candidate degrades to unknown instead of inventing a target
+    const unresolvedCore = captureCodexLaunchIdentity('codexb4b1missing', {
+      cwd: tempDir,
+      pathValue: tempDir,
+      probeVersion: okProbe,
+    })
+    assert.deepEqual(unresolvedCore, {
+      launchPath: join(tempDir, 'codexb4b1missing'),
+      versionRaw: null,
+      sha256: null,
+      identityKind: 'unknown',
+      reason: 'unresolved-launch-path',
+    })
+    assert.equal(isAbsolute(unresolvedCore.launchPath), true)
+
+    // a failed version probe nulls both untrusted fields and marks the identity unknown
+    assert.deepEqual(
+      captureCodexLaunchIdentity(nativePath, {
+        probeVersion: () => ({ status: 1, stdout: 'boom', error: true }),
+      }),
+      {
+        launchPath: nativePath,
+        versionRaw: null,
+        sha256: null,
+        identityKind: 'unknown',
+        reason: 'version-probe-failed',
+      },
+    )
+
+    // a failed hash nulls both untrusted fields and marks the identity unknown
+    assert.deepEqual(
+      captureCodexLaunchIdentity(join(tempDir, 'codex-b4b1-missing.exe'), { probeVersion: okProbe }),
+      {
+        launchPath: join(tempDir, 'codex-b4b1-missing.exe'),
+        versionRaw: null,
+        sha256: null,
+        identityKind: 'unknown',
+        reason: 'hash-failed',
+      },
+    )
+
+    // the production hash helper matches an independent computation, and the frozen identity
+    // keeps a real generation
+    assert.equal(readCodexLaunchFileSha256(nativePath), shaOf(nativeBytes))
+    assert.equal(readCodexLaunchFileSha256(join(tempDir, 'codex-b4b1-missing.exe')), null)
+    const frozen = createCodexLaunchIdentity(
+      captureCodexLaunchIdentity(nativePath, { probeVersion: okProbe }),
+      7,
+    )
+    assert.equal(frozen.generation, 7)
+    assert.equal(Object.isFrozen(frozen), true)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeAppServerProcess(): Promise<void> {
+  const originalCodexHome = process.env.CODEX_HOME
+  const b4b1Home = await mkdtemp(fileURLToPath(new URL('./b4b1-owner-home-', import.meta.url)))
+  process.env.CODEX_HOME = b4b1Home
+  try {
+    // the first owner is constructed only after the synthetic CODEX_HOME is in place
+    const appServer = new AppServerProcess()
+    const initialStatus = appServer.getStatus()
+
+    assert.equal(initialStatus.running, false)
+    assert.equal(initialStatus.initialized, false)
+    assert.equal(initialStatus.stopping, false)
+    assert.equal(initialStatus.pid, null)
+    assert.equal(initialStatus.pendingRpcCount, 0)
+    assert.equal(initialStatus.queuedRpcCount, 0)
+    assert.equal(initialStatus.pendingServerRequestCount, 0)
+    assert.equal(initialStatus.activePlanModeTurnCount, 0)
+    assert.equal(appServer.getStartedAtMs(), 0)
+    assert.equal(appServer.getActiveLaunchIdentity(), null)
+    assert.equal(readActiveLaunchIdentity(initialStatus), undefined)
+    assert.deepEqual(appServer.listPendingServerRequests(), [])
+    assert.deepEqual(appServer.listPendingServerRequestsForThread('thread-1'), [])
+    assert.equal(appServer.getThreadTokenUsage('thread-1'), null)
+
+    appServer.markPlanModeTurn('thread-1', 'turn-1')
+    assert.equal(appServer.getActivePlanModeTurnCount(), 1)
+    assert.equal(appServer.getStatus().activePlanModeTurnCount, 1)
+
+    appServer.clearPlanModeTurn('thread-1', 'turn-1')
+    assert.equal(appServer.getActivePlanModeTurnCount(), 0)
+
+    const unsubscribe = appServer.onNotification(() => {
+      throw new Error('unexpected notification')
+    })
+    unsubscribe()
+    appServer.dispose()
+    assert.equal(appServer.getStatus().running, false)
+    appServer.dispose()
+    assert.equal(appServer.getStatus().running, false)
+
+    const packageVersion = (JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as {
+      version: string
+    }).version
+    const shaOf = (value: string) => createHash('sha256').update(value).digest('hex')
+    const rawVersion = 'codex-cli 0.162.1-b4b1'
+
+    const launchDir = join(b4b1Home, 'launch')
+    await mkdir(launchDir, { recursive: true })
+    const pathA = join(launchDir, 'codex-b4b1-a.exe')
+    const pathB = join(launchDir, 'codex-b4b1-b.exe')
+    const pathLauncher = join(launchDir, 'codex-b4b1-launcher.cmd')
+    const bytesA = 'b4b1-owner-binary-a\n'
+    const bytesB = 'b4b1-owner-binary-b\n'
+    const bytesLauncher = 'b4b1-owner-launcher-bytes\n'
+    await writeFile(pathA, bytesA, 'utf8')
+    await writeFile(pathB, bytesB, 'utf8')
+    await writeFile(pathLauncher, bytesLauncher, 'utf8')
+
+    // S1: real start -> warmup/initialize over the fake child; the identity is published only
+    // after the handshake actually succeeded
+    const harness = createB4b1OwnerHarness({ command: pathA, probeStdout: `${rawVersion}\n` })
+    assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+    assert.equal(readActiveLaunchIdentity(harness.owner.getStatus()), undefined)
+    await harness.owner.warmup()
+
+    const status = harness.owner.getStatus()
+    assert.equal(status.running, true)
+    assert.equal(status.initialized, true)
+    assert.equal(status.pid, 4242)
+    assert.equal(status.command, pathA)
+    assert.deepEqual(status.launchPolicy, {
+      approvalPolicy: 'on-request',
+      sandboxMode: 'workspace-write',
+      legacyHighTrust: false,
+    })
+    assert.deepEqual(status.restartProtection, { blockingRequestCount: 0 })
+    assert.equal(harness.children.length, 1)
+    assert.equal(harness.spawnCalls.length, 1)
+    assert.equal(harness.spawnCalls[0].command, pathA)
+    assert.deepEqual(harness.counts, { resolve: 1, probe: 1, spawn: 1 })
+
+    const initializeRequest = harness.children[0].initializeRequests[0]
+    assert.equal(initializeRequest.method, 'initialize')
+    assert.deepEqual(initializeRequest.params, {
+      clientInfo: { name: 'codex-web-local', title: 'CX-Codex', version: packageVersion },
+      capabilities: { experimentalApi: true },
+    })
+    assert.equal(harness.children[0].writtenLines.at(-1), '{"method":"initialized"}')
+
+    const identity = readActiveLaunchIdentity(status)
+    assert.ok(identity, 'active launch identity must be published after the initialize handshake')
+    assert.equal(identity.generation, 1)
+    assert.equal(identity.launchPath, pathA)
+    assert.equal(identity.versionRaw, `${rawVersion}\n`)
+    assert.equal(identity.sha256, shaOf(bytesA))
+    assert.equal(identity.identityKind, 'native')
+    assert.deepEqual(identity, harness.owner.getActiveLaunchIdentity())
+
+    // repeated status/health reads never re-resolve, re-probe or re-hash
+    for (let index = 0; index < 3; index += 1) {
+      assert.deepEqual(readActiveLaunchIdentity(harness.owner.getStatus()), identity)
+    }
+    assert.deepEqual(harness.counts, { resolve: 1, probe: 1, spawn: 1 })
+
+    // the health snapshot is a copy: mutating it cannot reach the owner
+    const forgedStatus = harness.owner.getStatus()
+    assert.ok(forgedStatus.activeLaunchIdentity)
+    forgedStatus.activeLaunchIdentity.launchPath = 'tampered'
+    forgedStatus.activeLaunchIdentity.sha256 = 'tampered'
+    assert.equal(harness.owner.getActiveLaunchIdentity()?.launchPath, pathA)
+    assert.equal(harness.owner.getActiveLaunchIdentity()?.sha256, shaOf(bytesA))
+
+    // S2: switching the resolved candidate while A runs cannot rewrite the frozen identity
+    harness.setCommand(pathB)
+    assert.deepEqual(readActiveLaunchIdentity(harness.owner.getStatus()), identity)
+    assert.deepEqual(harness.counts, { resolve: 1, probe: 1, spawn: 1 })
+
+    // S3: changing the bytes at A's path while A is active cannot rewrite the captured hash
+    await writeFile(pathA, 'b4b1-owner-binary-a-rewritten\n', 'utf8')
+    assert.deepEqual(readActiveLaunchIdentity(harness.owner.getStatus()), identity)
+    assert.equal(harness.owner.getActiveLaunchIdentity()?.sha256, shaOf(bytesA))
+    await writeFile(pathA, bytesA, 'utf8')
+
+    // S4: only a real child replacement allocates a new generation and captures a new identity
+    harness.children[0].emitExit()
+    assert.equal(harness.owner.getActiveLaunchIdentity(), null)
+    assert.equal(readActiveLaunchIdentity(harness.owner.getStatus()), undefined)
+    assert.equal(harness.owner.getStatus().running, false)
+    assert.equal(harness.owner.getStatus().initialized, false)
+
+    await harness.owner.warmup()
+    assert.equal(harness.children.length, 2)
+    assert.equal(harness.spawnCalls[1].command, pathB)
+    const identityB = readActiveLaunchIdentity(harness.owner.getStatus())
+    assert.ok(identityB, 'the replacement child publishes its own identity')
+    assert.equal(identityB.generation, 2)
+    assert.equal(identityB.launchPath, pathB)
+    assert.equal(identityB.sha256, shaOf(bytesB))
+    assert.equal(identityB.versionRaw, `${rawVersion}\n`)
+
+    // S5: stale stdout/error/exit from the replaced child cannot clear or pollute the current child
+    harness.children[0].emitStdoutLine({ method: 'turn/completed', params: { threadId: 'b4b1-stale' } })
+    harness.children[0].emitFailure(new Error('b4b1 stale process error'))
+    harness.children[0].emitExit()
+    const statusAfterStale = harness.owner.getStatus()
+    assert.equal(statusAfterStale.running, true)
+    assert.equal(statusAfterStale.initialized, true)
+    assert.deepEqual(readActiveLaunchIdentity(statusAfterStale), identityB)
+    harness.owner.dispose()
+    harness.owner.dispose()
+    assert.equal(harness.owner.getStatus().running, false)
+    assert.equal(readActiveLaunchIdentity(harness.owner.getStatus()), undefined)
+
+    // S6: a failed handshake publishes no identity and keeps the retained child's frozen identity;
+    // the retry reuses that child without re-resolving, re-probing or re-spawning
+    const retryHarness = createB4b1OwnerHarness({
+      command: pathA,
+      probeStdout: `${rawVersion}\n`,
+      initializeFailures: 1,
+    })
+    await assert.rejects(retryHarness.owner.warmup(), (error: unknown) => error instanceof Error)
+    assert.equal(retryHarness.owner.getStatus().running, true)
+    assert.equal(retryHarness.owner.getStatus().initialized, false)
+    assert.equal(retryHarness.owner.getActiveLaunchIdentity(), null)
+    assert.equal(readActiveLaunchIdentity(retryHarness.owner.getStatus()), undefined)
+    assert.deepEqual(retryHarness.counts, { resolve: 1, probe: 1, spawn: 1 })
+
+    await retryHarness.owner.warmup()
+    assert.deepEqual(retryHarness.counts, { resolve: 1, probe: 1, spawn: 1 })
+    assert.equal(retryHarness.children.length, 1)
+    assert.equal(retryHarness.children[0].initializeRequests.length, 2)
+    assert.equal(retryHarness.children[0].writtenLines.at(-1), '{"method":"initialized"}')
+    const retriedIdentity = readActiveLaunchIdentity(retryHarness.owner.getStatus())
+    assert.ok(retriedIdentity)
+    assert.equal(retriedIdentity.generation, 1)
+    assert.equal(retriedIdentity.launchPath, pathA)
+    assert.equal(retriedIdentity.sha256, shaOf(bytesA))
+    retryHarness.owner.dispose()
+
+    // S7: an identity probe failure still publishes a real generation and an unknown identity
+    // after a successful handshake
+    const unknownHarness = createB4b1OwnerHarness({ command: pathLauncher, probeError: true })
+    await unknownHarness.owner.warmup()
+    const unknownStatus = unknownHarness.owner.getStatus()
+    assert.equal(unknownStatus.initialized, true)
+    const unknownIdentity = readActiveLaunchIdentity(unknownStatus)
+    assert.ok(unknownIdentity)
+    assert.equal(unknownIdentity.generation, 1)
+    assert.equal(unknownIdentity.launchPath, pathLauncher)
+    assert.equal(unknownIdentity.versionRaw, null)
+    assert.equal(unknownIdentity.sha256, null)
+    assert.equal(unknownIdentity.identityKind, 'unknown')
+    assert.equal(unknownIdentity.reason, 'version-probe-failed')
+    unknownHarness.owner.dispose()
+
+    // S8: a cmd launcher is reported as a launcher, and the captured target keeps the original
+    // Windows shim spawn semantics
+    const launcherHarness = createB4b1OwnerHarness({ command: pathLauncher, probeStdout: 'codex-b4b1 9.9.9\n' })
+    await launcherHarness.owner.warmup()
+    const launcherIdentity = readActiveLaunchIdentity(launcherHarness.owner.getStatus())
+    assert.ok(launcherIdentity)
+    assert.equal(launcherIdentity.identityKind, 'launcher')
+    assert.equal(launcherIdentity.launchPath, pathLauncher)
+    assert.equal(launcherIdentity.sha256, shaOf(bytesLauncher))
+    assert.equal(launcherIdentity.versionRaw, 'codex-b4b1 9.9.9\n')
+    if (process.platform === 'win32') {
+      assert.equal(launcherHarness.spawnCalls[0].command, 'cmd.exe')
+      assert.equal(launcherHarness.spawnCalls[0].args[3].startsWith(pathLauncher), true)
+    } else {
+      assert.equal(launcherHarness.spawnCalls[0].command, pathLauncher)
+    }
+    launcherHarness.owner.dispose()
+
+    // S9: a fingerprint change inside the capture-and-launch window is reported as unknown while
+    // keeping the fixed launch path and the real generation
+    const fingerprintPath = join(launchDir, 'codex-b4b1-fingerprint.exe')
+    await writeFile(fingerprintPath, 'b4b1-fingerprint-before\n', 'utf8')
+    const fingerprintHarness = createB4b1OwnerHarness({
+      command: fingerprintPath,
+      probeStdout: `${rawVersion}\n`,
+      spawnMutation: 'b4b1-fingerprint-after\n',
+    })
+    await fingerprintHarness.owner.warmup()
+    const fingerprintIdentity = readActiveLaunchIdentity(fingerprintHarness.owner.getStatus())
+    assert.ok(fingerprintIdentity)
+    assert.equal(fingerprintIdentity.generation, 1)
+    assert.equal(fingerprintIdentity.launchPath, fingerprintPath)
+    assert.equal(fingerprintIdentity.identityKind, 'unknown')
+    assert.equal(fingerprintIdentity.versionRaw, null)
+    assert.equal(fingerprintIdentity.sha256, null)
+    assert.equal(fingerprintIdentity.reason, 'launch-window-fingerprint-changed')
+    fingerprintHarness.owner.dispose()
+
+    // S10: disposing inside the initialize window neither writes to the abandoned child nor
+    // pollutes a later owner
+    const abandonedHarness = createB4b1OwnerHarness({
+      command: pathA,
+      probeStdout: `${rawVersion}\n`,
+      respondToInitialize: false,
+    })
+    const abandonedWarmup = abandonedHarness.owner.warmup()
+    abandonedHarness.owner.dispose()
+    await assert.rejects(abandonedWarmup, (error: unknown) => error instanceof Error, 'an abandoned initialization must reject')
+    assert.equal(abandonedHarness.children.length, 1)
+    assert.deepEqual(abandonedHarness.children[0].writtenLines, [])
+    assert.equal(abandonedHarness.children[0].initializeRequests.length, 0)
+    assert.equal(abandonedHarness.owner.getStatus().running, false)
+    assert.equal(abandonedHarness.owner.getStatus().initialized, false)
+    assert.equal(abandonedHarness.owner.getActiveLaunchIdentity(), null)
+
+    // S11: a start failure (no codex command) publishes nothing and spawns nothing
+    const missingHarness = createB4b1OwnerHarness({ resolveCommand: () => null })
+    await assert.rejects(missingHarness.owner.warmup(), (error: unknown) => error instanceof Error)
+    assert.equal(missingHarness.counts.spawn, 0)
+    assert.equal(missingHarness.owner.getStatus().running, false)
+    assert.equal(missingHarness.owner.getActiveLaunchIdentity(), null)
+    assert.equal(readActiveLaunchIdentity(missingHarness.owner.getStatus()), undefined)
+    missingHarness.owner.dispose()
+  } finally {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME
+    } else {
+      process.env.CODEX_HOME = originalCodexHome
+    }
+  }
 }
 
 function smokeAppServerProcessServerRequests(): void {
@@ -6081,6 +9543,117 @@ function smokeAppServerProcessServerRequests(): void {
   })
   assert.equal(notifications.shift()?.method, 'server/request/resolved')
   assert.deepEqual(unsupportedWarnings, [])
+
+  // B3B1 RED: the dedicated permissions approval must never be consumed before a
+  // synchronous send succeeded, and it must never inherit the legacy session action.
+  const b3bPermissionsParams = {
+    threadId: 'thread-b3b-permissions',
+    turnId: 'turn-b3b-permissions',
+    itemId: 'item-b3b-permissions',
+    startedAtMs: 1_700_000_000_000,
+    cwd: 'E:/b3b-example',
+    reason: 'B3B1 synthetic read permission request',
+    permissions: {
+      network: null,
+      fileSystem: { read: ['E:/b3b-example/input.txt'], write: null },
+    },
+  }
+  runtime.handleServerRequest(41, 'item/permissions/requestApproval', b3bPermissionsParams, dependencies)
+  assert.equal(runtime.pendingCount, 1)
+  assert.equal(notifications.shift()?.method, 'server/request')
+  assert.deepEqual(replies, [])
+
+  const throwingSendDependencies = {
+    ...dependencies,
+    sendServerRequestReply: () => {
+      throw new Error('B3B1 injected synchronous send failure')
+    },
+  }
+  assert.throws(
+    () => runtime.resolvePendingServerRequest(
+      41,
+      { result: { permissions: {}, scope: 'turn' } },
+      throwingSendDependencies,
+    ),
+    /B3B1 injected synchronous send failure/,
+  )
+  assert.equal(runtime.pendingCount, 1,
+    'B3B1: a throwing synchronous send must keep the pending request')
+  assert.equal(replies.length, 0,
+    'B3B1: a throwing synchronous send must not reply')
+  assert.equal(notifications.length, 0,
+    'B3B1: a throwing synchronous send must not emit resolved')
+  const retainedRows = runtime.listPendingServerRequests()
+  assert.deepEqual(retainedRows.map((row) => row.id), [41],
+    'B3B1: the original request id must stay in the single store')
+  assert.deepEqual(retainedRows[0]?.params, b3bPermissionsParams,
+    'B3B1: the original request object must stay in the single store')
+
+  // B3B: invalid and legacy replies must neither be sent nor consume the pending request,
+  // even with allowAllPermissionRequests enabled.
+  const allowAllDependencies = {
+    ...dependencies,
+    permissions: {
+      allowAllPermissionRequests: true,
+      commandExecution: 'allowForSession' as const,
+      fileChange: 'allowForSession' as const,
+      mcpTools: 'allowForSession' as const,
+    },
+  }
+  const allowAllRuntime = new AppServerProcessServerRequests()
+  allowAllRuntime.handleServerRequest(51, 'item/permissions/requestApproval', b3bPermissionsParams, allowAllDependencies)
+  assert.equal(allowAllRuntime.pendingCount, 1,
+    'B3B: allowAllPermissionRequests must not auto-approve the dedicated permissions request')
+  assert.equal(replies.length, 0)
+  assert.equal(notifications.shift()?.method, 'server/request')
+
+  assert.throws(
+    () => runtime.resolvePendingServerRequest(41, { result: {} }, dependencies),
+    /Invalid permissions approval reply for request 41/,
+  )
+  assert.throws(
+    () => runtime.resolvePendingServerRequest(41, { result: { decision: 'acceptForSession' } }, dependencies),
+    /Invalid permissions approval reply for request 41/,
+  )
+  assert.throws(
+    () => runtime.resolvePendingServerRequest(41, { error: { code: -32000, message: 'client rejected' } }, dependencies),
+    /Invalid permissions approval reply for request 41/,
+  )
+  assert.equal(runtime.pendingCount, 1, 'B3B: invalid permissions replies must keep the pending request')
+  assert.equal(replies.length, 0, 'B3B: invalid permissions replies must not send')
+  assert.equal(notifications.length, 0, 'B3B: invalid permissions replies must not emit resolved')
+
+  runtime.resolvePendingServerRequest(41, { result: { permissions: {}, scope: 'turn' } }, dependencies)
+  assert.equal(runtime.pendingCount, 0)
+  assert.deepEqual(replies.shift(), {
+    requestId: 41,
+    reply: { result: { permissions: {}, scope: 'turn' } },
+  })
+  assert.equal(notifications.shift()?.method, 'server/request/resolved')
+  assert.throws(
+    () => runtime.resolvePendingServerRequest(41, { result: { permissions: {}, scope: 'turn' } }, dependencies),
+    /No pending server request found for id 41/,
+    'B3B: a repeated response must not be sent again',
+  )
+  assert.equal(replies.length, 0)
+  assert.equal(notifications.length, 0)
+
+  // Legacy methods keep their previous reply semantics through the shared safety order.
+  runtime.handleServerRequest(
+    42,
+    'mcp/custom/request',
+    { threadId: 'thread-legacy', turnId: 'turn-legacy' },
+    dependencies,
+  )
+  assert.equal(runtime.pendingCount, 1)
+  assert.equal(notifications.shift()?.method, 'server/request')
+  runtime.resolvePendingServerRequest(42, { result: { decision: 'accept' } }, dependencies)
+  assert.equal(runtime.pendingCount, 0)
+  assert.deepEqual(replies.shift(), {
+    requestId: 42,
+    reply: { result: { decision: 'accept' } },
+  })
+  assert.equal(notifications.shift()?.method, 'server/request/resolved')
 }
 
 function smokeErrorMessage(): void {
@@ -6866,11 +10439,62 @@ async function smokeWebBridgeSettings(): Promise<void> {
     permissions: {
       allowAllPermissionRequests: true,
       commandExecution: 'ask',
-      fileChange: 'allowForSession',
+      // P1a: an invalid legacy value falls back to the (now safe) ask default.
+      fileChange: 'ask',
       mcpTools: 'allowForSession',
     },
   })
   assert.deepEqual(normalizeWebBridgeSettings(null), DEFAULT_WEB_BRIDGE_SETTINGS)
+  // P1a: the safe default is master OFF with every legacy per-item field on ask.
+  assert.deepEqual(DEFAULT_WEB_BRIDGE_SETTINGS, {
+    permissions: {
+      allowAllPermissionRequests: false,
+      commandExecution: 'ask',
+      fileChange: 'ask',
+      mcpTools: 'ask',
+    },
+  }, 'P1a: the stored default must be master OFF with legacy ask fields')
+  assert.deepEqual(normalizeWebBridgeSettings({}), DEFAULT_WEB_BRIDGE_SETTINGS)
+  assert.deepEqual(normalizeWebBridgeSettings({ permissions: {} }), DEFAULT_WEB_BRIDGE_SETTINGS)
+  assert.deepEqual(
+    normalizeWebBridgeSettings({
+      permissions: {
+        commandExecution: 'allowForSession',
+        fileChange: 'allowForSession',
+        mcpTools: 'allowForSession',
+      },
+    }),
+    {
+      permissions: {
+        allowAllPermissionRequests: false,
+        commandExecution: 'allowForSession',
+        fileChange: 'allowForSession',
+        mcpTools: 'allowForSession',
+      },
+    },
+    'P1a: legacy per-item values round-trip but never turn the master switch ON',
+  )
+  // P1a: strict boolean normalization never infers ON from a non-boolean master value.
+  for (const [label, masterValue] of [
+    ['missing', undefined],
+    ['false', false],
+    ['string true', 'true'],
+    ['number 1', 1],
+    ['null', null],
+  ] as const) {
+    assert.equal(
+      normalizeWebBridgeSettings({ permissions: { allowAllPermissionRequests: masterValue } })
+        .permissions.allowAllPermissionRequests,
+      false,
+      `P1a: a ${label} master value must normalize to OFF`,
+    )
+  }
+  assert.equal(
+    normalizeWebBridgeSettings({ permissions: { allowAllPermissionRequests: true } })
+      .permissions.allowAllPermissionRequests,
+    true,
+    'P1a: a literal boolean true master value must normalize to ON',
+  )
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-web-settings-'))
   try {
@@ -6897,6 +10521,134 @@ async function smokeWebBridgeSettings(): Promise<void> {
       },
     })
     assert.deepEqual(await readWebBridgeSettings(settingsPath), written)
+
+    // P1a: persisted strict-boolean, missing and legacy cases through the real reader/writer.
+    const persistedCases: Array<{ label: string; raw: unknown; expected: WebBridgeSettings }> = [
+      {
+        label: 'literal true with legacy allow values',
+        raw: {
+          permissions: {
+            allowAllPermissionRequests: true,
+            commandExecution: 'allowForSession',
+            fileChange: 'allowForSession',
+            mcpTools: 'allowForSession',
+          },
+        },
+        expected: {
+          permissions: {
+            allowAllPermissionRequests: true,
+            commandExecution: 'allowForSession',
+            fileChange: 'allowForSession',
+            mcpTools: 'allowForSession',
+          },
+        },
+      },
+      {
+        label: 'master false with legacy allow values',
+        raw: {
+          permissions: {
+            allowAllPermissionRequests: false,
+            commandExecution: 'allowForSession',
+            fileChange: 'allowForSession',
+            mcpTools: 'allowForSession',
+          },
+        },
+        expected: {
+          permissions: {
+            allowAllPermissionRequests: false,
+            commandExecution: 'allowForSession',
+            fileChange: 'allowForSession',
+            mcpTools: 'allowForSession',
+          },
+        },
+      },
+      {
+        label: 'missing master field with legacy allow values',
+        raw: {
+          permissions: {
+            commandExecution: 'allowForSession',
+            fileChange: 'allowForSession',
+            mcpTools: 'allowForSession',
+          },
+        },
+        expected: {
+          permissions: {
+            allowAllPermissionRequests: false,
+            commandExecution: 'allowForSession',
+            fileChange: 'allowForSession',
+            mcpTools: 'allowForSession',
+          },
+        },
+      },
+      {
+        label: 'string true master value',
+        raw: { permissions: { allowAllPermissionRequests: 'true', commandExecution: 'allowForSession' } },
+        expected: {
+          permissions: {
+            allowAllPermissionRequests: false,
+            commandExecution: 'allowForSession',
+            fileChange: 'ask',
+            mcpTools: 'ask',
+          },
+        },
+      },
+      {
+        label: 'numeric master value',
+        raw: { permissions: { allowAllPermissionRequests: 1, mcpTools: 'allowForSession' } },
+        expected: {
+          permissions: {
+            allowAllPermissionRequests: false,
+            commandExecution: 'ask',
+            fileChange: 'ask',
+            mcpTools: 'allowForSession',
+          },
+        },
+      },
+      {
+        label: 'empty permissions object',
+        raw: { permissions: {} },
+        expected: DEFAULT_WEB_BRIDGE_SETTINGS,
+      },
+    ]
+    for (const row of persistedCases) {
+      await writeFile(settingsPath, JSON.stringify(row.raw), 'utf8')
+      assert.deepEqual(await readWebBridgeSettings(settingsPath), row.expected,
+        `P1a: ${row.label} must be read back without widening the master switch`)
+    }
+
+    // P1a: true -> false -> re-read stays OFF and the legacy fields keep their own values.
+    await writeWebBridgeSettings(settingsPath, {
+      permissions: {
+        allowAllPermissionRequests: true,
+        commandExecution: 'allowForSession',
+        fileChange: 'ask',
+        mcpTools: 'ask',
+      },
+    })
+    assert.equal(
+      (await readWebBridgeSettings(settingsPath)).permissions.allowAllPermissionRequests,
+      true,
+      'P1a: a persisted literal true must stay ON',
+    )
+    await writeWebBridgeSettings(settingsPath, {
+      permissions: {
+        allowAllPermissionRequests: false,
+        commandExecution: 'allowForSession',
+        fileChange: 'ask',
+        mcpTools: 'ask',
+      },
+    })
+    assert.deepEqual(await readWebBridgeSettings(settingsPath), {
+      permissions: {
+        allowAllPermissionRequests: false,
+        commandExecution: 'allowForSession',
+        fileChange: 'ask',
+        mcpTools: 'ask',
+      },
+    }, 'P1a: turning the master switch back off must persist and re-read as OFF')
+
+    await writeFile(settingsPath, '{invalid', 'utf8')
+    assert.deepEqual(await readWebBridgeSettings(settingsPath), DEFAULT_WEB_BRIDGE_SETTINGS)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -8401,6 +12153,920 @@ async function smokeLocalFileHttpRateLimit(): Promise<void> {
     }).catch(() => {})
     appServer.dispose()
     await rm(root, { recursive: true, force: true })
+  }
+}
+
+type BackendUpdateHttpProbe = {
+  status: number
+  contentType: string
+  bodyText: string
+}
+
+function requestBackendUpdateHttp(options: {
+  port: number
+  method: 'GET' | 'POST'
+  path: string
+  headers?: Record<string, string>
+  body?: string
+}): Promise<BackendUpdateHttpProbe> {
+  return new Promise((resolve, reject) => {
+    const request = requestNodeHttp({
+      host: '127.0.0.1',
+      port: options.port,
+      method: options.method,
+      path: options.path,
+      headers: { Connection: 'close', ...(options.headers ?? {}) },
+    }, (response) => {
+      let bodyText = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk: string) => {
+        bodyText += chunk
+      })
+      response.on('end', () => {
+        resolve({
+          status: response.statusCode ?? 0,
+          contentType: String(response.headers['content-type'] ?? ''),
+          bodyText,
+        })
+      })
+    })
+    request.on('error', reject)
+    if (options.body !== undefined) request.write(options.body)
+    request.end()
+  })
+}
+
+function createBackendUpdateBridgeStub() {
+  return Object.assign(
+    async (_req: unknown, _res: unknown, next: () => void) => { next() },
+    {
+      dispose: () => {},
+      subscribeNotifications: () => () => {},
+      listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
+    },
+  )
+}
+
+async function startBackendUpdateHttpFixture(serverOptions: Record<string, unknown>): Promise<{
+  port: number
+  appServer: ReturnType<typeof createHttpAppServer>
+  close: () => Promise<void>
+}> {
+  const appServer = createHttpAppServer(serverOptions as never)
+  const server = createNodeHttpServer(appServer.app)
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      resolve()
+    })
+  })
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+
+  return {
+    port,
+    appServer,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve())
+      }).catch(() => {})
+      appServer.dispose()
+    },
+  }
+}
+
+function guardBackendUpdateFetchAttempts(): { attempts: string[]; restore: () => void } {
+  const attempts: string[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = ((...args: unknown[]) => {
+    attempts.push(String(args[0]))
+    return Promise.reject(new Error('real network access is forbidden in backend update tests'))
+  }) as typeof fetch
+  return {
+    attempts,
+    restore: () => {
+      globalThis.fetch = originalFetch
+    },
+  }
+}
+
+async function smokeBackendUpdateReadOnlyHttp(): Promise<void> {
+  const fixture = await startBackendUpdateHttpFixture({ createBridgeMiddleware: createBackendUpdateBridgeStub })
+  const fetchGuard = guardBackendUpdateFetchAttempts()
+
+  try {
+    const health = await requestBackendUpdateHttp({ port: fixture.port, method: 'GET', path: '/health' })
+    assert.equal(health.status, 200)
+    const healthBody = JSON.parse(health.bodyText) as Record<string, unknown>
+    assert.equal(healthBody.status, 'ok')
+    assert.equal(healthBody.service, 'cx-codex')
+    const healthBackend = healthBody.backend
+    assert.ok(healthBackend !== null && typeof healthBackend === 'object', 'public /health must expose a frozen backend identity')
+    const healthIdentity = healthBackend as Record<string, unknown>
+    assert.equal(typeof healthIdentity.version, 'string')
+    assert.equal(typeof healthIdentity.buildId, 'string')
+    assert.equal(typeof healthIdentity.entrySha256, 'string')
+    assert.equal(typeof healthIdentity.instanceId, 'string')
+    for (const forbidden of ['entryPath', 'pid', 'installRoot', 'commandLine', 'configPath', 'processPath']) {
+      assert.equal(forbidden in healthIdentity, false, `public /health must not expose ${forbidden}`)
+    }
+
+    const status = await requestBackendUpdateHttp({ port: fixture.port, method: 'GET', path: '/codex-api/updates/backend' })
+    assert.equal(status.status, 200)
+    assert.match(status.contentType, /application\/json/u)
+    const statusBody = JSON.parse(status.bodyText) as Record<string, unknown>
+    const statusIdentity = statusBody.backend as Record<string, unknown> | undefined
+    assert.ok(statusIdentity && typeof statusIdentity === 'object', 'read-only status must expose the frozen backend identity')
+    assert.equal(typeof statusIdentity.version, 'string')
+    assert.equal(typeof statusIdentity.entrySha256, 'string')
+    assert.equal(statusIdentity.entrySha256, healthIdentity.entrySha256)
+    assert.equal(statusIdentity.instanceId, healthIdentity.instanceId)
+    const applicability = statusBody.applicability as Record<string, unknown> | undefined
+    assert.ok(applicability && typeof applicability === 'object', 'read-only status must expose install applicability')
+    assert.equal(applicability.automaticUpdateSupported, false)
+    assert.equal(typeof applicability.reason, 'string')
+    assert.ok((applicability.reason as string).length > 0)
+
+    const unwiredCheck = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: '/codex-api/updates/backend/check',
+      headers: { 'content-type': 'application/json', 'X-CX-Codex-Intent': 'backend-update-check' },
+      body: '{}',
+    })
+    assert.equal(unwiredCheck.status, 503, 'a check without a trustworthy origin must fail closed')
+    assert.match(unwiredCheck.contentType, /application\/json/u)
+
+    const missingIntent = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: '/codex-api/updates/backend/check',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    assert.equal(missingIntent.status, 403)
+
+    const unknownField = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: '/codex-api/updates/backend/check',
+      headers: { 'content-type': 'application/json', 'X-CX-Codex-Intent': 'backend-update-check' },
+      body: '{"force":true}',
+    })
+    assert.equal(unknownField.status, 400)
+
+    const apply = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: '/codex-api/updates/backend/apply',
+      headers: { 'content-type': 'application/json', 'X-CX-Codex-Intent': 'backend-update-check' },
+      body: '{}',
+    })
+    assert.equal(apply.status, 409)
+
+    assert.deepEqual(fetchGuard.attempts, [])
+  } finally {
+    fetchGuard.restore()
+    await fixture.close()
+  }
+}
+
+async function smokeBackendUpdateHttpAuthRequired(): Promise<void> {
+  const fixture = await startBackendUpdateHttpFixture({
+    password: 'backend-update-smoke-password',
+    createBridgeMiddleware: createBackendUpdateBridgeStub,
+  })
+  const fetchGuard = guardBackendUpdateFetchAttempts()
+  const remoteHeaders = { 'x-forwarded-for': '203.0.113.9' }
+
+  try {
+    const unauthenticatedStatus = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'GET',
+      path: '/codex-api/updates/backend',
+      headers: remoteHeaders,
+    })
+    assert.equal(unauthenticatedStatus.status, 401)
+
+    const unauthenticatedCheck = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: '/codex-api/updates/backend/check',
+      headers: {
+        ...remoteHeaders,
+        'content-type': 'application/json',
+        'X-CX-Codex-Intent': 'backend-update-check',
+      },
+      body: '{}',
+    })
+    assert.equal(unauthenticatedCheck.status, 401)
+
+    assert.deepEqual(fetchGuard.attempts, [])
+  } finally {
+    fetchGuard.restore()
+    await fixture.close()
+  }
+}
+
+async function createBackendUpdateTestIdentity(version: string): Promise<FrozenBackendIdentity> {
+  return captureFrozenBackendIdentity({
+    entryPath: null,
+    compiledVersion: version,
+    compiledBuildId: `build-${version}`,
+    instanceId: 'instance-controller-test',
+    pid: 1234,
+  })
+}
+
+// Metadata fixtures expose the real `Response` shape: a byte stream body plus
+// observable pull/cancel counters. The checker must read the body incrementally
+// and enforce its own byte cap, so no fixture offers a whole-body `text()`.
+type BackendMetadataStreamProbe = { chunksPulled: number; cancelled: boolean }
+
+function createBackendMetadataStreamResponse(options: {
+  status?: number
+  contentType?: string
+  contentLength?: string
+  body?: string
+  chunkSize?: number
+}): { response: BackendMetadataTransportResponse; probe: BackendMetadataStreamProbe } {
+  const bytes = new TextEncoder().encode(options.body ?? '')
+  const chunkSize = Math.max(1, options.chunkSize ?? Math.max(1, bytes.byteLength))
+  const probe: BackendMetadataStreamProbe = { chunksPulled: 0, cancelled: false }
+  let offset = 0
+  const stream = new NodeReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.byteLength) {
+        controller.close()
+        return
+      }
+      probe.chunksPulled += 1
+      controller.enqueue(bytes.subarray(offset, Math.min(offset + chunkSize, bytes.byteLength)))
+      offset += chunkSize
+    },
+    cancel() {
+      probe.cancelled = true
+    },
+  }, { highWaterMark: 0 })
+  return {
+    response: {
+      status: options.status ?? 200,
+      headers: {
+        get(name: string) {
+          const key = name.toLowerCase()
+          if (key === 'content-type') return options.contentType ?? 'application/json; charset=utf-8'
+          if (key === 'content-length') return options.contentLength ?? null
+          return null
+        },
+      },
+      body: stream,
+    },
+    probe,
+  }
+}
+
+function createBackendMetadataResponse(options: {
+  status?: number
+  contentType?: string
+  contentLength?: string
+  body?: string
+  chunkSize?: number
+}): BackendMetadataTransportResponse {
+  return createBackendMetadataStreamResponse(options).response
+}
+
+function createReleaseBody(options: { tag?: string; draft?: boolean; prerelease?: boolean } = {}): string {
+  return JSON.stringify({
+    tag_name: options.tag ?? 'v2.9.10',
+    name: 'CX-Codex release',
+    draft: options.draft ?? false,
+    prerelease: options.prerelease ?? false,
+    assets: [{ name: 'CX-Codex.zip', browser_download_url: 'https://example.invalid/CX-Codex.zip' }],
+  })
+}
+
+async function smokeBackendUpdateFrozenIdentity(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-backend-update-identity-'))
+  try {
+    const distEntryDir = join(root, 'dist-cli')
+    const distEntry = join(distEntryDir, 'index.js')
+    await mkdir(distEntryDir, { recursive: true })
+    const entryBytes = Buffer.from('#!/usr/bin/env node\nconsole.log("entry-v1")\n', 'utf8')
+    await writeFile(distEntry, entryBytes)
+    const expectedEntrySha = createHash('sha256').update(entryBytes).digest('hex')
+
+    const frozen = await captureFrozenBackendIdentity({
+      entryPath: distEntry,
+      compiledVersion: '2.9.9',
+      compiledBuildId: 'build-test-a',
+      instanceId: 'instance-test-a',
+      pid: 4242,
+    })
+    assert.equal(frozen.version, '2.9.9')
+    assert.equal(frozen.buildId, 'build-test-a')
+    assert.equal(frozen.entrySha256, expectedEntrySha)
+    assert.equal(frozen.buildKind, 'compiled-cli')
+    assert.equal(frozen.instanceId, 'instance-test-a')
+    assert.equal(frozen.pid, 4242)
+    assert.equal(frozen.officialSourceVerified, false)
+    assert.equal(Object.isFrozen(frozen), true)
+
+    // The running entry may be replaced on disk; the frozen identity must not move.
+    await writeFile(distEntry, '#!/usr/bin/env node\nconsole.log("entry-v2-replaced")\n', 'utf8')
+    const controller = createBackendUpdateController({ identity: frozen })
+    const publicIdentity = controller.readPublicIdentity()
+    assert.equal(publicIdentity.entrySha256, expectedEntrySha)
+    assert.equal(publicIdentity.version, '2.9.9')
+    assert.equal(publicIdentity.buildKind, 'compiled-cli')
+    assert.equal(publicIdentity.officialSourceVerified, false)
+    assert.equal('entryPath' in publicIdentity, false)
+    assert.equal('pid' in publicIdentity, false)
+    assert.deepEqual(Object.keys(publicIdentity).sort(), ['buildId', 'buildKind', 'entrySha256', 'instanceId', 'officialSourceVerified', 'version'])
+
+    // Returned copies cannot corrupt frozen state.
+    const mutableIdentity = controller.readPublicIdentity() as { version: string; entrySha256: string }
+    mutableIdentity.version = 'tampered'
+    mutableIdentity.entrySha256 = 'tampered'
+    assert.equal(controller.readPublicIdentity().version, '2.9.9')
+    assert.equal(controller.readPublicIdentity().entrySha256, expectedEntrySha)
+    const mutableStatus = controller.readStatus() as { backend: { version: string }; result: unknown }
+    mutableStatus.backend.version = 'tampered-status'
+    assert.equal(controller.readStatus().backend.version, '2.9.9')
+    assert.equal(controller.readStatus().result, null)
+
+    // Honest provenance: missing compiled identity, non-standard entry, unreadable entry.
+    const unknownIdentity = await captureFrozenBackendIdentity({
+      entryPath: distEntry,
+      compiledVersion: 'unknown',
+      compiledBuildId: 'unknown',
+      instanceId: 'instance-unknown',
+      pid: 1,
+    })
+    assert.equal(unknownIdentity.version, 'unknown')
+    assert.equal(unknownIdentity.buildKind, 'unknown')
+
+    const candidateDir = join(root, 'candidate')
+    await mkdir(candidateDir, { recursive: true })
+    const candidateEntry = join(candidateDir, 'index.js')
+    await writeFile(candidateEntry, 'console.log("candidate")\n', 'utf8')
+    const candidateIdentity = await captureFrozenBackendIdentity({
+      entryPath: candidateEntry,
+      compiledVersion: '2.9.9',
+      compiledBuildId: 'build-test-b',
+      instanceId: 'instance-candidate',
+      pid: 2,
+    })
+    assert.equal(candidateIdentity.buildKind, 'candidate-entry')
+
+    const missingEntryIdentity = await captureFrozenBackendIdentity({
+      entryPath: join(root, 'missing', 'index.js'),
+      compiledVersion: '2.9.9',
+      compiledBuildId: 'build-test-c',
+      instanceId: 'instance-missing-entry',
+      pid: 3,
+    })
+    assert.equal(missingEntryIdentity.entrySha256, 'unknown')
+
+    // A server started without an identity reports unknown and never fills in a version.
+    const unidentified = createBackendUpdateController({ identity: null })
+    assert.equal(unidentified.readPublicIdentity().version, 'unknown')
+    assert.equal(unidentified.readPublicIdentity().entrySha256, 'unknown')
+    assert.equal(unidentified.readPublicIdentity().instanceId, 'unknown')
+    assert.equal(unidentified.readStatus().result, null)
+    assert.equal(unidentified.readStatus().applicability.automaticUpdateSupported, false)
+    assert.ok(unidentified.readStatus().applicability.reason.length > 0)
+    assert.equal(unidentified.readStatus().trustedOriginConfigured, false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+function smokeBackendUpdateSemverAndWireContract(): void {
+  assert.equal(BACKEND_UPDATE_INTENT_HEADER, 'X-CX-Codex-Intent')
+  assert.equal(BACKEND_UPDATE_INTENT_VALUE, 'backend-update-check')
+  assert.equal(BACKEND_UPDATE_STATUS_PATH, '/codex-api/updates/backend')
+  assert.equal(BACKEND_UPDATE_CHECK_PATH, '/codex-api/updates/backend/check')
+  assert.equal(OFFICIAL_BACKEND_RELEASE_METADATA_URL, 'https://api.github.com/repos/Qjzn/CX-Codex/releases/latest')
+
+  assert.deepEqual(parseStableSemver('2.9.10'), { major: 2, minor: 9, patch: 10, buildMetadata: null })
+  assert.deepEqual(parseStableSemver('v2.9.9'), { major: 2, minor: 9, patch: 9, buildMetadata: null })
+  assert.deepEqual(parseStableSemver(' 2.9.9+build.5 '), { major: 2, minor: 9, patch: 9, buildMetadata: 'build.5' })
+  for (const invalid of ['2.9', '2.9.9.1', '2.9.9-rc.1', '01.2.3', 'x.y.z', '', 'v', '2.9.9+', '99999999999999999999.0.0']) {
+    assert.equal(parseStableSemver(invalid), null, `${invalid} must not parse as stable semver`)
+  }
+  assert.equal(parseStableSemver(2 as unknown as string), null)
+
+  assert.equal(compareStableSemver('2.9.9', '2.9.10'), 'newer')
+  assert.equal(compareStableSemver('2.9.9', '2.10.0'), 'newer')
+  assert.equal(compareStableSemver('2.9.9', '3.0.0'), 'newer')
+  assert.equal(compareStableSemver('2.9.9', '2.9.9'), 'equal')
+  assert.equal(compareStableSemver('2.9.9', 'v2.9.9+build.7'), 'equal')
+  assert.equal(compareStableSemver('2.9.10', '2.9.9'), 'ahead')
+  assert.equal(compareStableSemver('3.0.0', '2.99.99'), 'ahead')
+  assert.equal(compareStableSemver('unknown', '2.9.9'), 'unknown')
+  assert.equal(compareStableSemver('2.9.9', 'nightly-2026-10-16'), 'unknown')
+  assert.equal(compareStableSemver('2.9.9', '2.9.9-rc.1'), 'unknown')
+}
+
+async function smokeBackendUpdateControllerCheck(): Promise<void> {
+  const identity = await createBackendUpdateTestIdentity('2.9.9')
+  const calls: string[] = []
+  const fetchGuard = guardBackendUpdateFetchAttempts()
+
+  try {
+    let nextResponse = async (): Promise<BackendMetadataTransportResponse> => createBackendMetadataResponse({
+      body: createReleaseBody({ tag: 'v2.9.10' }),
+    })
+    const controller = createBackendUpdateController(
+      { identity },
+      { fetchMetadata: async (url: string) => { calls.push(url); return nextResponse() } },
+    )
+
+    // Without a trustworthy origin the check refuses and performs no request.
+    const unwiredStatus = await controller.check()
+    assert.equal(unwiredStatus.result?.status, 'error')
+    assert.equal(unwiredStatus.result?.error?.code, 'unavailable')
+    assert.equal(unwiredStatus.result?.latest, null)
+    assert.equal(unwiredStatus.trustedOriginConfigured, false)
+    assert.deepEqual(calls, [])
+
+    controller.addTrustedOrigin('http://127.0.0.1:5999')
+
+    const newer = await controller.check()
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+    assert.equal(newer.result?.status, 'newer')
+    assert.equal(newer.result?.comparison, 'newer')
+    assert.equal(newer.result?.releaseSource, 'official-release-metadata')
+    assert.deepEqual(newer.result?.latest, { tag: 'v2.9.10', version: '2.9.10' })
+    assert.equal(newer.result?.error, null)
+    assert.equal(newer.result?.instanceId, identity.instanceId)
+    assert.equal(newer.result?.current.version, '2.9.9')
+    assert.equal(newer.backend.version, '2.9.9')
+    assert.equal(newer.backend.entrySha256, 'unknown')
+    assert.equal(newer.applicability.automaticUpdateSupported, false)
+    assert.ok(newer.applicability.reason.length > 0)
+    assert.equal(newer.trustedOriginConfigured, true)
+
+    nextResponse = async () => createBackendMetadataResponse({ body: createReleaseBody({ tag: '2.9.9' }) })
+    assert.equal((await controller.check()).result?.status, 'equal')
+
+    nextResponse = async () => createBackendMetadataResponse({ body: createReleaseBody({ tag: 'v2.9.8' }) })
+    assert.equal((await controller.check()).result?.status, 'ahead')
+
+    const failureCases: Array<{
+      label: string
+      response: () => Promise<BackendMetadataTransportResponse>
+      code: string
+    }> = [
+      { label: 'http403', response: async () => createBackendMetadataResponse({ status: 403, body: '{"message":"Forbidden"}' }), code: 'http-status' },
+      { label: 'html200', response: async () => createBackendMetadataResponse({ contentType: 'text/html; charset=utf-8', body: '<html>ok</html>' }), code: 'content-type' },
+      { label: 'fakejson', response: async () => createBackendMetadataResponse({ body: '{not json' }), code: 'invalid-json' },
+      { label: 'draft', response: async () => createBackendMetadataResponse({ body: createReleaseBody({ draft: true }) }), code: 'invalid-release' },
+      { label: 'prerelease', response: async () => createBackendMetadataResponse({ body: createReleaseBody({ prerelease: true }) }), code: 'invalid-release' },
+      { label: 'missingtag', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ draft: false, prerelease: false }) }), code: 'invalid-release' },
+      { label: 'invalidtag', response: async () => createBackendMetadataResponse({ body: createReleaseBody({ tag: 'nightly-2026-10-16' }) }), code: 'invalid-tag' },
+      { label: 'redirected', response: async () => createBackendMetadataResponse({ status: 302, contentType: 'text/html', body: '' }), code: 'redirect' },
+      {
+        label: 'toolarge',
+        response: async () => createBackendMetadataResponse({
+          contentLength: '999999999',
+          body: JSON.stringify({ tag_name: 'v9.9.9', padding: 'x'.repeat(4096) }),
+        }),
+        code: 'too-large',
+      },
+      { label: 'missingdraft', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ tag_name: 'v2.9.10', prerelease: false }) }), code: 'invalid-release' },
+      { label: 'missingprerelease', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ tag_name: 'v2.9.10', draft: false }) }), code: 'invalid-release' },
+      { label: 'stringdraft', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ tag_name: 'v2.9.10', draft: 'true', prerelease: false }) }), code: 'invalid-release' },
+      { label: 'nullprerelease', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ tag_name: 'v2.9.10', draft: false, prerelease: null }) }), code: 'invalid-release' },
+      { label: 'numericdraft', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ tag_name: 'v2.9.10', draft: 0, prerelease: false }) }), code: 'invalid-release' },
+      { label: 'noflags', response: async () => createBackendMetadataResponse({ body: JSON.stringify({ tag_name: 'v2.9.10' }) }), code: 'invalid-release' },
+      { label: 'network', response: async () => { throw new Error('socket closed before response') }, code: 'network' },
+    ]
+
+    // A failure must clear the previous success instead of letting it look current.
+    for (const failureCase of failureCases) {
+      nextResponse = failureCase.response
+      const failed = await controller.check()
+      assert.equal(failed.result?.status, 'error', `${failureCase.label} must fail`)
+      assert.equal(failed.result?.error?.code, failureCase.code, `${failureCase.label} error code`)
+      assert.equal(failed.result?.latest, null, `${failureCase.label} must not keep a release`)
+      assert.equal(failed.result?.releaseSource, 'unknown', failureCase.label)
+      assert.equal(controller.readStatus().result?.status, 'error', failureCase.label)
+      assert.equal(controller.readStatus().result?.latest, null, failureCase.label)
+    }
+
+    // An explicit retry after failures succeeds and replaces the failure.
+    nextResponse = async () => createBackendMetadataResponse({ body: createReleaseBody({ tag: 'v2.9.10' }) })
+    const retried = await controller.check()
+    assert.equal(retried.result?.status, 'newer')
+    assert.equal(retried.result?.error, null)
+
+    // Timeout is bounded and reported as its own outcome.
+    const timeoutController = createBackendUpdateController({ identity }, {
+      fetchMetadata: (_url: string, init: { signal: AbortSignal }) => new Promise<BackendMetadataTransportResponse>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new Error('aborted by timeout')), { once: true })
+      }),
+      timeoutMs: 25,
+    })
+    timeoutController.addTrustedOrigin('http://127.0.0.1:5999')
+    const timedOut = await timeoutController.check()
+    assert.equal(timedOut.result?.error?.code, 'timeout')
+    assert.equal(timedOut.result?.latest, null)
+    timeoutController.dispose()
+
+    // User-visible copy states the actual product capability and must not
+    // expose internal process/batch wording.
+    assert.equal(BACKEND_UPDATE_UNAVAILABLE_REASON.includes('本批'), false)
+    assert.match(BACKEND_UPDATE_UNAVAILABLE_REASON, /仅提供版本检测/u)
+    assert.equal(BACKEND_UPDATE_APPLY_UNSUPPORTED_MESSAGE.includes('本批'), false)
+
+    // The response cap is enforced while streaming the body: an oversized
+    // chunked body without content-length is rejected mid-read and cancelled.
+    const oversizedStream = createBackendMetadataStreamResponse({
+      body: JSON.stringify({ tag_name: 'v9.9.9', padding: 'x'.repeat(4096) }),
+      chunkSize: 64,
+    })
+    const cappedController = createBackendUpdateController({ identity }, {
+      fetchMetadata: async () => oversizedStream.response,
+      maxResponseBytes: 64,
+    })
+    cappedController.addTrustedOrigin('http://127.0.0.1:5999')
+    const capped = await cappedController.check()
+    assert.equal(capped.result?.error?.code, 'too-large')
+    assert.equal(capped.result?.latest, null)
+    assert.ok(oversizedStream.probe.chunksPulled <= 3, `body cap applied too late: pulled ${oversizedStream.probe.chunksPulled} chunks`)
+    assert.equal(oversizedStream.probe.cancelled, true, 'oversized stream must be cancelled')
+    cappedController.dispose()
+
+    // Same bound and cancel against the real `Response` shape the default
+    // transport receives from fetch.
+    let realStreamChunks = 0
+    let realStreamCancelled = false
+    const realOversizedBody = new NodeReadableStream<Uint8Array>({
+      pull(controller) {
+        realStreamChunks += 1
+        controller.enqueue(new TextEncoder().encode('x'.repeat(64)))
+      },
+      cancel() {
+        realStreamCancelled = true
+      },
+    }, { highWaterMark: 0 })
+    // @types/node declares its ReadableStream separately from undici's BodyInit
+    // byte-stream type; the runtime value is a valid Response body.
+    const realOversized = new Response(
+      realOversizedBody as unknown as ConstructorParameters<typeof Response>[0],
+      { headers: { 'content-type': 'application/json' } },
+    )
+    const realCappedController = createBackendUpdateController({ identity }, {
+      fetchMetadata: async () => realOversized as unknown as BackendMetadataTransportResponse,
+      maxResponseBytes: 64,
+    })
+    realCappedController.addTrustedOrigin('http://127.0.0.1:5999')
+    assert.equal((await realCappedController.check()).result?.error?.code, 'too-large')
+    assert.ok(realStreamChunks <= 4, `real Response body read ${realStreamChunks} chunks before rejecting`)
+    assert.equal(realStreamCancelled, true, 'oversized real Response stream must be cancelled')
+    realCappedController.dispose()
+
+    // Bounded streaming still accepts a valid release split into many chunks.
+    const chunkedValid = createBackendMetadataStreamResponse({ body: createReleaseBody({ tag: 'v3.0.1' }), chunkSize: 7 })
+    const chunkedController = createBackendUpdateController({ identity }, { fetchMetadata: async () => chunkedValid.response })
+    chunkedController.addTrustedOrigin('http://127.0.0.1:5999')
+    const chunkedStatus = await chunkedController.check()
+    assert.equal(chunkedStatus.result?.status, 'newer')
+    assert.equal(chunkedStatus.result?.latest?.tag, 'v3.0.1')
+    assert.equal(chunkedValid.probe.cancelled, false)
+    chunkedController.dispose()
+
+    // A response without a readable body is rejected; the checker must never
+    // fall back to an unbounded whole-body text() read.
+    let textCalls = 0
+    const textOnlyController = createBackendUpdateController({ identity }, {
+      fetchMetadata: async () => ({
+        status: 200,
+        headers: {
+          get(name: string) {
+            return name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+        },
+        body: null,
+        text: async () => {
+          textCalls += 1
+          return createReleaseBody({ tag: 'v9.9.9' })
+        },
+      } as unknown as BackendMetadataTransportResponse),
+    })
+    textOnlyController.addTrustedOrigin('http://127.0.0.1:5999')
+    const textOnlyStatus = await textOnlyController.check()
+    assert.equal(textOnlyStatus.result?.error?.code, 'network')
+    assert.equal(textOnlyStatus.result?.latest, null)
+    assert.equal(textCalls, 0, 'unbounded text() must never be used')
+    textOnlyController.dispose()
+
+    // Every rejected metadata response must cancel its unread body: early HTTP
+    // status, content-type and declared-length rejections never read the stream.
+    const earlyRejections = [
+      { label: 'http403', fixture: createBackendMetadataStreamResponse({ status: 403, body: '{"message":"Forbidden"}' }) },
+      { label: 'html200', fixture: createBackendMetadataStreamResponse({ contentType: 'text/html; charset=utf-8', body: '<html>ok</html>' }) },
+      { label: 'declaredoversize', fixture: createBackendMetadataStreamResponse({ contentLength: '999999999', body: createReleaseBody({ tag: 'v9.9.9' }) }) },
+    ]
+    for (const earlyRejection of earlyRejections) {
+      const earlyController = createBackendUpdateController({ identity }, { fetchMetadata: async () => earlyRejection.fixture.response })
+      earlyController.addTrustedOrigin('http://127.0.0.1:5999')
+      const earlyStatus = await earlyController.check()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      assert.equal(earlyStatus.result?.status, 'error', earlyRejection.label)
+      assert.equal(earlyController.readStatus().result?.latest, null, earlyRejection.label)
+      assert.equal(earlyRejection.fixture.probe.cancelled, true, `${earlyRejection.label} must cancel its unread body`)
+      earlyController.dispose()
+    }
+
+    // The timeout bounds a transport that ignores AbortSignal entirely, and a
+    // late response from that transport must never publish.
+    let ignoreAbortResolve: ((response: BackendMetadataTransportResponse) => void) | null = null
+    const ignoreAbortController = createBackendUpdateController({ identity }, {
+      fetchMetadata: () => new Promise<BackendMetadataTransportResponse>((resolve) => {
+        ignoreAbortResolve = resolve
+      }),
+      timeoutMs: 25,
+    })
+    ignoreAbortController.addTrustedOrigin('http://127.0.0.1:5999')
+    let ignoreAbortGuard: ReturnType<typeof setTimeout> | null = null
+    try {
+      const ignoreAbortStatus = await Promise.race([
+        ignoreAbortController.check(),
+        new Promise<BackendUpdateStatus>((_resolve, reject) => {
+          ignoreAbortGuard = setTimeout(() => reject(new Error('check stayed pending while the transport ignored AbortSignal')), 1000)
+        }),
+      ])
+      assert.equal(ignoreAbortStatus.result?.error?.code, 'timeout')
+    } finally {
+      if (ignoreAbortGuard) clearTimeout(ignoreAbortGuard)
+    }
+    assert.ok(ignoreAbortResolve)
+    const lateAfterTimeout = createBackendMetadataStreamResponse({ body: createReleaseBody({ tag: 'v9.9.9' }) })
+    ;(ignoreAbortResolve as (response: BackendMetadataTransportResponse) => void)(lateAfterTimeout.response)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(lateAfterTimeout.probe.cancelled, true, 'late response body after timeout must be cancelled')
+    assert.equal(ignoreAbortController.readStatus().result?.error?.code, 'timeout')
+    assert.equal(ignoreAbortController.readStatus().result?.latest, null)
+    ignoreAbortController.dispose()
+
+    // A late rejection after the timeout must not surface as an unhandled
+    // rejection (the process would fail loudly).
+    let rejectLate: ((error: Error) => void) | null = null
+    const lateRejectController = createBackendUpdateController({ identity }, {
+      fetchMetadata: () => new Promise<BackendMetadataTransportResponse>((_resolve, reject) => {
+        rejectLate = reject
+      }),
+      timeoutMs: 25,
+    })
+    lateRejectController.addTrustedOrigin('http://127.0.0.1:5999')
+    assert.equal((await lateRejectController.check()).result?.error?.code, 'timeout')
+    assert.ok(rejectLate)
+    ;(rejectLate as (error: Error) => void)(new Error('late transport failure after timeout'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(lateRejectController.readStatus().result?.error?.code, 'timeout')
+    lateRejectController.dispose()
+
+    // dispose invalidates synchronously: an ignored-abort late success cannot
+    // publish, the pending check settles, and later checks issue no requests.
+    let publishLate: ((response: BackendMetadataTransportResponse) => void) | null = null
+    const disposedLater = createBackendUpdateController({ identity }, {
+      fetchMetadata: () => new Promise<BackendMetadataTransportResponse>((resolve) => {
+        publishLate = resolve
+      }),
+    })
+    disposedLater.addTrustedOrigin('http://127.0.0.1:5999')
+    const pendingDisposed = disposedLater.check()
+    disposedLater.dispose()
+    assert.equal(disposedLater.readStatus().result?.status, 'error')
+    assert.equal(disposedLater.readStatus().result?.error?.code, 'unavailable')
+    assert.equal(disposedLater.readStatus().result?.latest, null)
+    assert.equal(disposedLater.readStatus().trustedOriginConfigured, true)
+    assert.ok(publishLate)
+    const lateAfterDispose = createBackendMetadataStreamResponse({ body: createReleaseBody({ tag: 'v9.9.9' }) })
+    ;(publishLate as (response: BackendMetadataTransportResponse) => void)(lateAfterDispose.response)
+    let disposeGuard: ReturnType<typeof setTimeout> | null = null
+    try {
+      const settledAfterDispose = await Promise.race([
+        pendingDisposed,
+        new Promise<BackendUpdateStatus>((_resolve, reject) => {
+          disposeGuard = setTimeout(() => reject(new Error('disposed check stayed pending')), 1000)
+        }),
+      ])
+      assert.equal(settledAfterDispose.result?.error?.code, 'aborted')
+    } finally {
+      if (disposeGuard) clearTimeout(disposeGuard)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(lateAfterDispose.probe.cancelled, true, 'late response body after dispose must be cancelled')
+    assert.notEqual(disposedLater.readStatus().result?.status, 'newer')
+    assert.equal(disposedLater.readStatus().result?.error?.code, 'unavailable')
+    assert.equal(disposedLater.readStatus().result?.latest, null)
+    assert.equal((await disposedLater.check()).result?.error?.code, 'unavailable')
+
+    // A late response from a superseded check must never become the current result.
+    let resolveSlowCheck: ((response: BackendMetadataTransportResponse) => void) | null = null
+    let requestIndex = 0
+    const outOfOrder = createBackendUpdateController({ identity }, {
+      fetchMetadata: () => {
+        requestIndex += 1
+        if (requestIndex === 1) {
+          return new Promise<BackendMetadataTransportResponse>((resolve) => {
+            resolveSlowCheck = resolve
+          })
+        }
+        return Promise.resolve(createBackendMetadataResponse({ body: createReleaseBody({ tag: 'v5.0.0' }) }))
+      },
+    })
+    outOfOrder.addTrustedOrigin('http://127.0.0.1:5999')
+    const slowCheck = outOfOrder.check()
+    const fastStatus = await outOfOrder.check()
+    assert.equal(fastStatus.result?.latest?.tag, 'v5.0.0')
+    assert.ok(resolveSlowCheck)
+    ;(resolveSlowCheck as (response: BackendMetadataTransportResponse) => void)(
+      createBackendMetadataResponse({ body: createReleaseBody({ tag: 'v9.9.9' }) }),
+    )
+    const slowStatus = await slowCheck
+    assert.equal(slowStatus.result?.latest?.tag, 'v9.9.9')
+    assert.equal(outOfOrder.readStatus().result?.latest?.tag, 'v5.0.0')
+    assert.equal(outOfOrder.readStatus().result?.status, 'newer')
+    outOfOrder.dispose()
+
+    // dispose aborts in-flight work; later checks stop without new requests.
+    let abortObserved = false
+    const aborting = createBackendUpdateController({ identity }, {
+      fetchMetadata: (_url: string, init: { signal: AbortSignal }) => new Promise<BackendMetadataTransportResponse>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          abortObserved = true
+          reject(new Error('aborted by dispose'))
+        }, { once: true })
+      }),
+    })
+    aborting.addTrustedOrigin('http://127.0.0.1:5999')
+    const abortingCheck = aborting.check()
+    aborting.dispose()
+    const aborted = await abortingCheck
+    assert.equal(abortObserved, true)
+    assert.equal(aborted.result?.error?.code, 'aborted')
+    assert.equal(aborting.readStatus().result?.status, 'error')
+    assert.equal(aborting.readStatus().result?.latest, null)
+    const afterDispose = await aborting.check()
+    assert.equal(afterDispose.result?.error?.code, 'unavailable')
+
+    assert.deepEqual(fetchGuard.attempts, [])
+  } finally {
+    fetchGuard.restore()
+  }
+}
+
+async function smokeBackendUpdateWiredHttp(): Promise<void> {
+  const identity = await createBackendUpdateTestIdentity('2.9.9')
+  const calls: string[] = []
+  const fetchGuard = guardBackendUpdateFetchAttempts()
+  const fixture = await startBackendUpdateHttpFixture({
+    createBridgeMiddleware: createBackendUpdateBridgeStub,
+    backendIdentity: identity,
+    fetchBackendReleaseMetadata: async (url: string) => {
+      calls.push(url)
+      return createBackendMetadataResponse({ body: createReleaseBody({ tag: 'v2.9.10' }) })
+    },
+  })
+  const trustedOrigin = `http://127.0.0.1:${String(fixture.port)}`
+  const trustedHeaders = { Origin: trustedOrigin }
+  const checkHeaders = {
+    ...trustedHeaders,
+    'content-type': 'application/json',
+    [BACKEND_UPDATE_INTENT_HEADER]: BACKEND_UPDATE_INTENT_VALUE,
+  }
+
+  try {
+    fixture.appServer.addTrustedUpdateOrigin(trustedOrigin)
+
+    const health = await requestBackendUpdateHttp({ port: fixture.port, method: 'GET', path: '/health' })
+    assert.equal(health.status, 200)
+    const healthBackend = (JSON.parse(health.bodyText) as Record<string, unknown>).backend as Record<string, unknown>
+    assert.equal(healthBackend.version, '2.9.9')
+    assert.equal(healthBackend.entrySha256, 'unknown')
+    assert.equal(healthBackend.instanceId, identity.instanceId)
+    assert.equal('entryPath' in healthBackend, false)
+    assert.equal('pid' in healthBackend, false)
+
+    const status = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'GET',
+      path: BACKEND_UPDATE_STATUS_PATH,
+      headers: trustedHeaders,
+    })
+    assert.equal(status.status, 200)
+    const statusBody = JSON.parse(status.bodyText) as Record<string, unknown>
+    assert.equal((statusBody.backend as Record<string, unknown>).version, '2.9.9')
+    assert.equal((statusBody.applicability as Record<string, unknown>).automaticUpdateSupported, false)
+    assert.equal(statusBody.result, null)
+    assert.equal(statusBody.trustedOriginConfigured, true)
+    assert.deepEqual(calls, [])
+
+    const check = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: BACKEND_UPDATE_CHECK_PATH,
+      headers: checkHeaders,
+      body: '{}',
+    })
+    assert.equal(check.status, 200)
+    const checkResult = JSON.parse(check.bodyText).result as Record<string, unknown>
+    assert.equal(checkResult.status, 'newer')
+    assert.equal((checkResult.latest as Record<string, unknown>).tag, 'v2.9.10')
+    assert.equal(checkResult.error, null)
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+    for (const forbidden of ['download', 'assetUrl', 'installCommand', 'candidateId', 'jobId', 'updateJob', 'receipt', 'worker', 'CX-Codex.zip']) {
+      assert.equal(check.bodyText.includes(forbidden), false, `check response must not expose ${forbidden}`)
+    }
+
+    const apply = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'POST',
+      path: '/codex-api/updates/backend/apply',
+      headers: checkHeaders,
+      body: '{}',
+    })
+    assert.equal(apply.status, 409)
+    assert.equal(apply.bodyText.includes('apply-unsupported'), true)
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+
+    const statusAfterCheck = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'GET',
+      path: BACKEND_UPDATE_STATUS_PATH,
+      headers: trustedHeaders,
+    })
+    assert.equal(statusAfterCheck.status, 200)
+    const statusAfterCheckBody = JSON.parse(statusAfterCheck.bodyText) as {
+      backend: { version: string }
+      result: { status: string; latest: { tag: string } }
+    }
+    assert.equal(statusAfterCheckBody.result.status, 'newer')
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+
+    // Mutating a returned status copy cannot corrupt the frozen identity/result.
+    statusAfterCheckBody.backend.version = 'tampered'
+    statusAfterCheckBody.result.latest.tag = 'tampered'
+    const statusAgain = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'GET',
+      path: BACKEND_UPDATE_STATUS_PATH,
+      headers: trustedHeaders,
+    })
+    const statusAgainBody = JSON.parse(statusAgain.bodyText) as {
+      backend: { version: string }
+      result: { status: string; latest: { tag: string } }
+    }
+    assert.equal(statusAgainBody.backend.version, '2.9.9')
+    assert.equal(statusAgainBody.result.latest.tag, 'v2.9.10')
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+
+    const rejectionCases: Array<{ label: string; headers: Record<string, string>; body: string; status: number }> = [
+      { label: 'untrusted origin', headers: { ...checkHeaders, Origin: 'https://evil.example' }, body: '{}', status: 403 },
+      { label: 'null origin', headers: { ...checkHeaders, Origin: 'null' }, body: '{}', status: 403 },
+      { label: 'cross-site fetch metadata', headers: { ...checkHeaders, 'Sec-Fetch-Site': 'cross-site' }, body: '{}', status: 403 },
+      { label: 'same-site fetch metadata', headers: { ...checkHeaders, 'Sec-Fetch-Site': 'same-site' }, body: '{}', status: 403 },
+      { label: 'forbidden host', headers: { ...checkHeaders, Host: 'evil.example' }, body: '{}', status: 403 },
+      { label: 'missing intent', headers: { ...trustedHeaders, 'content-type': 'application/json' }, body: '{}', status: 403 },
+      { label: 'wrong intent', headers: { ...checkHeaders, [BACKEND_UPDATE_INTENT_HEADER]: 'update-now' }, body: '{}', status: 403 },
+      { label: 'unknown force field', headers: checkHeaders, body: '{"force":true}', status: 400 },
+      { label: 'unknown url field', headers: checkHeaders, body: '{"url":"https://example.invalid/CX-Codex.zip"}', status: 400 },
+      { label: 'unknown repo field', headers: checkHeaders, body: '{"repo":"Qjzn/CX-Codex"}', status: 400 },
+      { label: 'unknown path field', headers: checkHeaders, body: '{"path":"C:/temp"}', status: 400 },
+      { label: 'unknown command field', headers: checkHeaders, body: '{"command":"install"}', status: 400 },
+      { label: 'empty body', headers: checkHeaders, body: '', status: 400 },
+    ]
+    for (const rejectionCase of rejectionCases) {
+      const response = await requestBackendUpdateHttp({
+        port: fixture.port,
+        method: 'POST',
+        path: BACKEND_UPDATE_CHECK_PATH,
+        headers: rejectionCase.headers,
+        body: rejectionCase.body,
+      })
+      assert.equal(response.status, rejectionCase.status, rejectionCase.label)
+      assert.match(response.contentType, /application\/json/u, rejectionCase.label)
+    }
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+
+    const wrongMethod = await requestBackendUpdateHttp({
+      port: fixture.port,
+      method: 'GET',
+      path: BACKEND_UPDATE_CHECK_PATH,
+      headers: trustedHeaders,
+    })
+    assert.equal(wrongMethod.status, 405)
+    assert.deepEqual(calls, [OFFICIAL_BACKEND_RELEASE_METADATA_URL])
+    assert.deepEqual(fetchGuard.attempts, [])
+  } finally {
+    fetchGuard.restore()
+    await fixture.close()
   }
 }
 
@@ -14073,8 +18739,12 @@ async function smokeDiagnosticsRoutes(): Promise<void> {
   }
   const listEventsCalls: Array<{ afterSeq: number; limit: number }> = []
   const uncertainLimitCalls: number[] = []
+  const appServerStatusReads: number[] = []
   const dependencies = {
-    getAppServerStatus: () => appServerStatus,
+    getAppServerStatus: () => {
+      appServerStatusReads.push(1)
+      return appServerStatus
+    },
     getNotificationDiagnostics: () => ({ unknownNotificationCount: 0, accessToken: 'notification-secret' }),
     getStatusDiagnostics: () => ({ unknownStatusCount: 0, cookie: 'status-cookie' }),
     listPendingServerRequests: () => [pendingServerRequest],
@@ -14129,13 +18799,17 @@ async function smokeDiagnosticsRoutes(): Promise<void> {
         }],
       },
       hookDiagnostics: { available: true, hookCount: 0, error: 'password=[REDACTED]' },
-      schemaAudit: { status: 'ok' },
+      schemaAudit: {
+        status: 'ok',
+        identityMatch: { status: 'unknown', reason: 'no-active-launch-identity', comparedAgainstGeneration: null },
+      },
       windowsSandbox: { status: 'ready', available: true },
       transcription: { configured: true },
       runtimeStore: runtimeHealth,
       timestamp: '2026-01-01T00:00:30.000Z',
     },
   })
+  assert.equal(appServerStatusReads.length, 1)
 
   const diagnosticsResponse = createRouteTestResponse()
   assert.equal(await handleDiagnosticsRoutes(
@@ -14167,6 +18841,78 @@ async function smokeDiagnosticsRoutes(): Promise<void> {
     kind: 'approval',
     receivedAtIso: '2026-01-01T00:00:00.000Z',
   }])
+  assert.equal(appServerStatusReads.length, 2)
+
+  // B4C: exactly one frozen app-server status read per request. The getter returns the same mutable
+  // object and mutates it (including swapping its nested identity) while the audit reader is still
+  // pending, so a second read or an aliased snapshot would surface candidate B instead of A.
+  const identityA: CodexLaunchIdentity = createCodexLaunchIdentity({
+    launchPath: 'C:/b4c-snapshot/codex.exe',
+    versionRaw: 'codex-cli 0.162.1\n',
+    sha256: 'a'.repeat(64),
+    identityKind: 'native',
+  }, 4)
+  const identityB: CodexLaunchIdentity = createCodexLaunchIdentity({
+    launchPath: 'C:/b4c-snapshot/codex-b.exe',
+    versionRaw: 'codex-cli 0.163.0\n',
+    sha256: 'b'.repeat(64),
+    identityKind: 'native',
+  }, 9)
+  const mutableAppServerStatus: AppServerHealth = {
+    running: true,
+    initialized: true,
+    stopping: false,
+    pid: 4321,
+    activeLaunchIdentity: identityA,
+    pendingRpcCount: 0,
+    queuedRpcCount: 0,
+    pendingServerRequestCount: 0,
+    activePlanModeTurnCount: 0,
+    launchPolicy: createAppServerLaunchPolicySnapshot(DEFAULT_APP_SERVER_LAUNCH_POLICY),
+  }
+  const snapshotSummaryA = {
+    available: true,
+    reviewStatus: 'baseline-matched',
+    generatedBy: {
+      launchPath: 'C:/b4c-snapshot/codex.exe',
+      versionRaw: 'codex-cli 0.162.1\n',
+      sha256: 'a'.repeat(64),
+      identityKind: 'native',
+      generation: { status: 'complete' },
+      verification: { status: 'verified' },
+    },
+  }
+  let snapshotStatusReads = 0
+  const snapshotResponse = createRouteTestResponse()
+  assert.equal(await handleDiagnosticsRoutes(
+    { method: 'GET' } as never,
+    snapshotResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/diagnostics'),
+    {
+      ...dependencies,
+      getAppServerStatus: () => {
+        snapshotStatusReads += 1
+        return mutableAppServerStatus
+      },
+      readSchemaAuditSummary: async () => {
+        // Flip the dependency during the existing await window: a late second read or an aliased
+        // snapshot would report candidate B here instead of the captured A.
+        mutableAppServerStatus.running = false
+        mutableAppServerStatus.activeLaunchIdentity = identityB
+        return snapshotSummaryA
+      },
+    },
+  ), true)
+  assert.equal(snapshotStatusReads, 1, 'a diagnostics request must read the app-server status exactly once')
+  const snapshotPayload = JSON.parse(snapshotResponse.body)
+  assert.equal(snapshotPayload.data.appServer.running, true)
+  assert.equal(snapshotPayload.data.appServer.activeLaunchIdentity.generation, 4)
+  assert.equal(snapshotPayload.data.appServer.activeLaunchIdentity.launchPath, 'C:/b4c-snapshot/codex.exe')
+  assert.deepEqual(snapshotPayload.data.schemaAudit.identityMatch, {
+    status: 'matched',
+    reason: 'identity-matched',
+    comparedAgainstGeneration: 4,
+  })
 
   const timeoutHealthResponse = createRouteTestResponse()
   const timeoutStartedAtMs = Date.now()
@@ -14552,6 +19298,186 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/thread-token-usage?threadId=thread-token'),
     dependencies,
   ), false)
+
+  // --- K1-2a compact task-board view (view=task-board) ---
+  // Fixtures for the compact projection stay isolated from the assertions above: they use their own
+  // dependency object and only thread ids prefixed with `thread-compact`, so every earlier expectation
+  // and counter in this smoke function remains untouched.
+  const reconciledBeforeCompact = reconciledThreads.length
+  const legacyBeforeCompact = legacyReads.length
+  const tokenUsageBeforeCompact = tokenUsageReads.length
+  const requestedBeforeCompact = requestedThreads.length
+
+  const compactSentinelRequests: PendingServerRequest[] = [
+    {
+      id: 101,
+      method: 'server/request/compact-sentinel',
+      params: { marker: 'compact-request-payload-sentinel', threadId: 'compact-sentinel-1' },
+      receivedAtIso: '2026-01-02T00:00:00.000Z',
+    },
+    {
+      id: 102,
+      method: 'server/request/compact-sentinel',
+      params: { marker: 'compact-request-payload-sentinel', threadId: 'compact-sentinel-2' },
+      receivedAtIso: '2026-01-02T00:00:01.000Z',
+    },
+  ]
+  const compactSentinelSnapshot = {
+    ...createThreadRuntimeSnapshot({
+      threadId: 'thread-compact-base',
+      executionState: 'running',
+      inProgress: true,
+      activeTurnId: 'turn-compact-sentinel',
+      updatedAtIso: '2026-01-02T00:00:00.000Z',
+      lastEventSeq: 42,
+      stale: true,
+    }),
+    transcript: { messages: [{ id: 'transcript-sentinel', text: 'compact-transcript-sentinel' }] },
+    latestReply: 'compact-latest-reply-sentinel',
+    threadRead: { messages: [{ id: 'thread-read-sentinel' }] },
+    pendingServerRequests: compactSentinelRequests,
+    tokenUsage: { sentinel: 'compact-token-usage-sentinel' },
+  } as ThreadRuntimeSnapshot
+  const compactSentinelKeyList = [
+    'activeTurnId',
+    'executionState',
+    'inProgress',
+    'lastEventSeq',
+    'pendingServerRequestCount',
+    'stale',
+    'threadId',
+    'updatedAtIso',
+  ]
+  const compactExpectedFields = {
+    executionState: 'running',
+    inProgress: true,
+    activeTurnId: 'turn-compact-sentinel',
+    updatedAtIso: '2026-01-02T00:00:00.000Z',
+    lastEventSeq: 42,
+    stale: true,
+    pendingServerRequestCount: 2,
+  }
+  const compactFullSnapshotFor = (threadId: string) => ({
+    ...compactSentinelSnapshot,
+    threadId,
+    latestReply: `restored:${threadId}`,
+  })
+
+  const compactReads: string[] = []
+  let compactPersistedSnapshotReads = 0
+  let compactPersistWrites = 0
+  const compactDependencies = {
+    ...dependencies,
+    runtimeStateStore: {
+      snapshot: () => {
+        compactPersistedSnapshotReads += 1
+        throw new Error('compact task-board view must not read persisted snapshots')
+      },
+      snapshots: () => {
+        compactPersistedSnapshotReads += 1
+        throw new Error('compact task-board view must not read persisted snapshots')
+      },
+    },
+    persistRuntimeSnapshot: () => {
+      compactPersistWrites += 1
+      throw new Error('compact task-board view must not persist snapshots')
+    },
+    readLocalRuntimeSnapshot: (threadId: string) => {
+      compactReads.push(threadId)
+      return { ...compactSentinelSnapshot, threadId, latestReply: `restored:${threadId}` }
+    },
+  }
+
+  const compactTaskBoard = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    compactTaskBoard.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshots?threadIds=thread-compact-1,%20thread-compact-2&view=task-board'),
+    compactDependencies,
+  ), true)
+  assert.equal(compactTaskBoard.response.statusCode, 200)
+  assert.deepEqual(compactReads, ['thread-compact-1', 'thread-compact-2'])
+  assert.deepEqual(JSON.parse(compactTaskBoard.body), {
+    data: [
+      { threadId: 'thread-compact-1', ...compactExpectedFields },
+      { threadId: 'thread-compact-2', ...compactExpectedFields },
+    ],
+  })
+  assert.deepEqual(Object.keys(JSON.parse(compactTaskBoard.body).data[0]).sort(), compactSentinelKeyList)
+  assert.deepEqual(Object.keys(JSON.parse(compactTaskBoard.body).data[1]).sort(), compactSentinelKeyList)
+  assert.ok(!compactTaskBoard.body.includes('compact-transcript-sentinel'))
+  assert.ok(!compactTaskBoard.body.includes('compact-latest-reply-sentinel'))
+  assert.ok(!compactTaskBoard.body.includes('compact-request-payload-sentinel'))
+  assert.ok(!compactTaskBoard.body.includes('thread-read-sentinel'))
+  assert.ok(!compactTaskBoard.body.includes('compact-token-usage-sentinel'))
+
+  const defaultFullView = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    defaultFullView.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshots?threadIds=thread-compact-1'),
+    compactDependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(defaultFullView.body), {
+    data: [compactFullSnapshotFor('thread-compact-1')],
+  })
+
+  for (const unknownView of ['full', 'task-boards', 'TASK-BOARD', '']) {
+    const unknownViewResponse = createRouteTestResponse()
+    assert.equal(await handleRuntimeStateRoutes(
+      { method: 'GET' } as never,
+      unknownViewResponse.response as never,
+      new URL(`http://127.0.0.1/codex-api/runtime/snapshots?threadIds=thread-compact-1&view=${unknownView}`),
+      compactDependencies,
+    ), true)
+    assert.deepEqual(JSON.parse(unknownViewResponse.body), {
+      data: [compactFullSnapshotFor('thread-compact-1')],
+    })
+  }
+
+  const compactReadsBeforeLimit = compactReads.length
+  const compactLimitThreadIds = Array.from({ length: 101 }, (_unused, index) => `thread-compact-limit-${index}`)
+  const compactLimit = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    compactLimit.response as never,
+    new URL(`http://127.0.0.1/codex-api/runtime/snapshots?threadIds=${compactLimitThreadIds.join(',')}&view=task-board`),
+    compactDependencies,
+  ), true)
+  const compactLimitData = JSON.parse(compactLimit.body).data as Array<Record<string, unknown>>
+  assert.equal(compactLimitData.length, 100)
+  assert.deepEqual(Object.keys(compactLimitData[0]).sort(), compactSentinelKeyList)
+  assert.equal(compactLimitData[0].threadId, 'thread-compact-limit-0')
+  assert.equal(compactLimitData[99].threadId, 'thread-compact-limit-99')
+  assert.deepEqual(compactReads.slice(compactReadsBeforeLimit), compactLimitThreadIds.slice(0, 100))
+  assert.equal(compactReads.length, compactReadsBeforeLimit + 100)
+
+  const compactReadsBeforeEmpty = compactReads.length
+  const compactEmptyIds = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    compactEmptyIds.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshots?threadIds=,,%20&view=task-board'),
+    compactDependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(compactEmptyIds.body), { data: [] })
+
+  const compactMissingIds = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    compactMissingIds.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshots?view=task-board'),
+    compactDependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(compactMissingIds.body), { data: [] })
+  assert.equal(compactReads.length, compactReadsBeforeEmpty)
+
+  assert.equal(compactPersistedSnapshotReads, 0)
+  assert.equal(compactPersistWrites, 0)
+  assert.equal(reconciledThreads.length, reconciledBeforeCompact)
+  assert.equal(legacyReads.length, legacyBeforeCompact)
+  assert.equal(tokenUsageReads.length, tokenUsageBeforeCompact)
+  assert.equal(requestedThreads.length, requestedBeforeCompact)
 }
 
 function smokeNotificationSseRoute(): void {

@@ -4,6 +4,9 @@ import {
   type AppServerRuntimeActionsDependencies,
 } from './appServerRuntimeActions.js'
 import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
+import type { RuntimeStartResult } from './appServerRuntimeStart.js'
+import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
+import { createAssistantRuntimeTurnStarter, createAssistantPendingStartResumer } from './assistantRuntime.js'
 import {
   createAppServerRuntimeReaders,
   type AppServerRuntimeReaders,
@@ -70,6 +73,10 @@ type ThreadReadCacheStoreForOperations = {
 }
 
 export type CodexBridgeRuntimeOperationsDependencies = {
+  assistantMainSetup?: Parameters<typeof createAssistantRuntimeTurnStarter>[1]
+  resumeAssistantTask?(payload: unknown): Promise<RuntimeStartResult> | null
+  readAssistantMainClientMessageId?(): string | null
+  isManagedThread?(threadId: string): boolean
   appServer: CodexBridgeRuntimeAppServer
   runtimeStore: RuntimeStoreForOperations
   runtimeStateStore: RuntimeStateStoreForOperations
@@ -97,6 +104,9 @@ export type CodexBridgeRuntimeOperations = AppServerRuntimeReaders
   & {
     persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot
     startRuntimeTurnSettled(payload: unknown): ReturnType<typeof startRuntimeTurnWithAppServer>
+    startAssistantConversation(payload: unknown): ReturnType<typeof startRuntimeTurnWithAppServer>
+    createAssistantWorkerStarter(rpc: (method: string, params: unknown) => Promise<unknown>): (payload: unknown) => ReturnType<typeof startRuntimeTurnWithAppServer>
+    createAssistantWorkerInterrupter(rpc: (method: string, params: unknown) => Promise<unknown>): (payload: unknown) => ReturnType<typeof interruptRuntimeTurnWithAppServer>
   }
 
 export function createCodexBridgeRuntimeOperations(
@@ -131,6 +141,7 @@ export function createCodexBridgeRuntimeOperations(
   })
 
   const runtimeActionDependencies: AppServerRuntimeActionsDependencies = {
+    isManagedThread: dependencies.isManagedThread,
     createRequest: (record) => runtimeStore.createRequest(record),
     updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
     getRequest: (requestId) => runtimeStore.getRequest(requestId),
@@ -152,10 +163,19 @@ export function createCodexBridgeRuntimeOperations(
     getErrorMessage: dependencies.getErrorMessage,
   }
   const runtimeActions = createAppServerRuntimeActions(runtimeActionDependencies)
+  const startAssistantConversation = createAssistantRuntimeTurnStarter(runtimeActionDependencies, dependencies.assistantMainSetup)
+  const resumePending = createAssistantPendingStartResumer({
+    readMainClientMessageId: dependencies.readAssistantMainClientMessageId,
+    startAssistantConversation,
+    startRuntimeTurn: runtimeActions.startRuntimeTurn,
+  })
 
   const runtimeReconciliation = createAppServerRuntimeReconciliation({
     readThreadRuntimeSnapshot: runtimeReaders.readThreadRuntimeSnapshot,
-    resumePendingStart: runtimeActions.startRuntimeTurn,
+    resumePendingStart: async (payload) => {
+      const managed = dependencies.resumeAssistantTask?.(payload)
+      return managed ? await managed : await resumePending(payload)
+    },
     runtimeStore,
     getErrorMessage: dependencies.getErrorMessage,
     writeReconcileFailure: dependencies.writeReconcileFailure,
@@ -167,5 +187,8 @@ export function createCodexBridgeRuntimeOperations(
     ...runtimeReconciliation,
     ...runtimeActions,
     startRuntimeTurnSettled: (payload) => startRuntimeTurnWithAppServer(payload, runtimeActionDependencies),
+    startAssistantConversation,
+    createAssistantWorkerStarter: (rpc) => (payload) => startRuntimeTurnWithAppServer(payload, { ...runtimeActionDependencies, rpc }),
+    createAssistantWorkerInterrupter: (rpc) => (payload) => interruptRuntimeTurnWithAppServer(payload, { ...runtimeActionDependencies, rpc }),
   }
 }

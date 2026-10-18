@@ -34,6 +34,30 @@ export type RuntimeStateRoutesDependencies = {
   getThreadTokenUsage: (threadId: string) => ThreadTokenUsage | null
 }
 
+type CompactTaskBoardSnapshot = {
+  threadId: string
+  executionState: ThreadRuntimeSnapshot['executionState']
+  inProgress: boolean
+  activeTurnId: string
+  updatedAtIso: string
+  lastEventSeq: number
+  stale: boolean
+  pendingServerRequestCount: number
+}
+
+function createCompactTaskBoardSnapshot(snapshot: ThreadRuntimeSnapshot): CompactTaskBoardSnapshot {
+  return {
+    threadId: snapshot.threadId,
+    executionState: snapshot.executionState,
+    inProgress: snapshot.inProgress,
+    activeTurnId: snapshot.activeTurnId,
+    updatedAtIso: snapshot.updatedAtIso,
+    lastEventSeq: snapshot.lastEventSeq,
+    stale: snapshot.stale,
+    pendingServerRequestCount: snapshot.pendingServerRequests.length,
+  }
+}
+
 export async function handleRuntimeStateRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -83,6 +107,12 @@ export async function handleRuntimeStateRoutes(
       .map((threadId) => threadId.trim())
       .filter((threadId) => threadId.length > 0)
       .slice(0, 100)
+    if ((url.searchParams.get('view') ?? '') === 'task-board') {
+      setJson(res, 200, {
+        data: threadIds.map((threadId) => createCompactTaskBoardSnapshot(dependencies.readLocalRuntimeSnapshot(threadId))),
+      })
+      return true
+    }
     setJson(res, 200, { data: threadIds.map((threadId) => dependencies.readLocalRuntimeSnapshot(threadId)) })
     return true
   }

@@ -1,10 +1,28 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const officialRegistry = 'https://registry.npmjs.org'
+
+function verifyLockfileRegistry() {
+  const lockfile = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8'))
+  let resolvedCount = 0
+  for (const [packagePath, entry] of Object.entries(lockfile.packages)) {
+    if (entry.resolved === undefined) continue
+    let url
+    try {
+      url = new URL(entry.resolved)
+    } catch {}
+    if (!url || url.origin !== officialRegistry || url.username || url.password) {
+      console.error(`Dependency lockfile registry check failed: ${packagePath} must resolve from ${officialRegistry} without URL credentials.`)
+      process.exit(1)
+    }
+    resolvedCount += 1
+  }
+  console.log(`Dependency lockfile registry check passed: ${resolvedCount} resolved URLs use ${officialRegistry}.`)
+}
 
 function uniqueExistingPaths(paths) {
   return [...new Set(paths.filter(Boolean).map((value) => resolve(value)))]
@@ -49,6 +67,7 @@ function readAuditPayload(stdout) {
   }
 }
 
+verifyLockfileRegistry()
 const npm = findCompatibleNpm()
 const audit = spawnSync(process.execPath, [
   npm.npmCliPath,
