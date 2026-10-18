@@ -353,7 +353,9 @@ function isPositiveInteger(value: unknown): value is number {
  */
 function isPlatformAbsolutePath(value: string): boolean {
   if (value.length === 0) return false
-  return process.platform === 'win32' ? WINDOWS_ABSOLUTE_PATH_PATTERN.test(value) : value.startsWith('/')
+  // 审计记录的是 Windows 桌面产品的启动来源：盘符/UNC 路径本身就是绝对来源，
+  // 不因当前宿主是 POSIX CI 就降级成“不可比较”。POSIX 绝对路径同样接受。
+  return WINDOWS_ABSOLUTE_PATH_PATTERN.test(value) || value.startsWith('/')
 }
 
 /**
