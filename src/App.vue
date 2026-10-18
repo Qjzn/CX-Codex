@@ -6893,9 +6893,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
   .new-thread-empty {
     @apply px-4;
-    justify-content: flex-start;
-    padding-top: clamp(4.5rem, 16dvh, 7rem);
-    padding-bottom: clamp(3rem, 10dvh, 5rem);
+    /* 原来在手机上靠上摆放（padding-top 16dvh + flex-start），
+       结果标题下方到输入框之间留下 ~550px 空白。改为在可视区居中，上下对称留白。 */
+    justify-content: center;
+    padding-top: clamp(1rem, 4dvh, 2rem);
+    padding-bottom: clamp(1.5rem, 6dvh, 3rem);
   }
 
   .skip-to-content {
