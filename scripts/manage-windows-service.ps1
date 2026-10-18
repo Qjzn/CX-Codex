@@ -288,6 +288,10 @@ function Get-ServiceSnapshot {
     }
     startupTask = Get-TaskFact -Name $TaskName
     watchdogTask = Get-TaskFact -Name $WatchdogTaskName
+    standby = [pscustomobject][ordered]@{
+      path = $script:StandbyMarkerPath
+      active = Test-Path -LiteralPath $script:StandbyMarkerPath -PathType Leaf
+    }
     processes = $processes
   }
 }
@@ -392,6 +396,27 @@ function Wait-ServiceHealth {
   throw (New-ServiceFailure -Code "HEALTH_TIMEOUT" -Message "Service health did not become ready within $HealthTimeoutSeconds second(s).")
 }
 
+function Enter-ServiceStandby {
+  $standbyDirectory = Split-Path -Parent $script:StandbyMarkerPath
+  if (-not [string]::IsNullOrWhiteSpace($standbyDirectory)) {
+    New-Item -ItemType Directory -Path $standbyDirectory -Force | Out-Null
+  }
+  $payload = [ordered]@{
+    port = $Port
+    enteredAtIso = (Get-Date).ToString("o")
+    reason = "explicit-service-stop"
+  } | ConvertTo-Json -Compress
+  $temporaryPath = "$($script:StandbyMarkerPath).tmp-$PID"
+  [System.IO.File]::WriteAllText($temporaryPath, $payload, (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -LiteralPath $temporaryPath -Destination $script:StandbyMarkerPath -Force
+}
+
+function Exit-ServiceStandby {
+  if (Test-Path -LiteralPath $script:StandbyMarkerPath -PathType Leaf) {
+    Remove-Item -LiteralPath $script:StandbyMarkerPath -Force
+  }
+}
+
 function New-ServiceResult {
   param(
     [bool]$Ok,
@@ -411,6 +436,7 @@ function New-ServiceResult {
     config = $Snapshot.config
     startupTask = $Snapshot.startupTask
     watchdogTask = $Snapshot.watchdogTask
+    standby = $Snapshot.standby
   }
 }
 
@@ -430,6 +456,7 @@ function Write-ServiceResult {
   Write-Host "Launcher: exists=$($Result.launcher.exists) path=$($Result.launcher.path)"
   Write-Host "Startup task: exists=$($Result.startupTask.exists) enabled=$($Result.startupTask.enabled) state=$($Result.startupTask.state)"
   Write-Host "Watchdog task: exists=$($Result.watchdogTask.exists) enabled=$($Result.watchdogTask.enabled) state=$($Result.watchdogTask.state)"
+  Write-Host "Standby: active=$($Result.standby.active) path=$($Result.standby.path)"
   if (-not $Result.ok) {
     Write-Host "Error code: $($Result.code)" -ForegroundColor Red
     if (@($Result.process.unmanagedListenerPids).Count -gt 0) {
@@ -459,6 +486,7 @@ function New-FallbackSnapshot {
     }
     startupTask = [pscustomobject][ordered]@{ name = $TaskName; exists = $false; enabled = $false; state = "Unknown" }
     watchdogTask = [pscustomobject][ordered]@{ name = $WatchdogTaskName; exists = $false; enabled = $false; state = "Unknown" }
+    standby = [pscustomobject][ordered]@{ path = $script:StandbyMarkerPath; active = Test-Path -LiteralPath $script:StandbyMarkerPath -PathType Leaf }
   }
 }
 
@@ -466,6 +494,7 @@ $script:ResolvedConfigPath = Get-NormalizedPath -Path $ConfigPath -Label "Config
 $script:ResolvedLauncherPath = Get-NormalizedPath -Path $LauncherPath -Label "Launcher path"
 $configDirectory = Split-Path -Parent $script:ResolvedConfigPath
 $script:PidMarkerPath = Join-Path $configDirectory "cx-codex-$Port.pid"
+$script:StandbyMarkerPath = Join-Path $configDirectory "cx-codex-$Port.standby"
 $script:ManagedIdentityPaths = @($script:ResolvedConfigPath, $script:ResolvedLauncherPath)
 
 $requiredCommands = @("Get-CimInstance", "Get-NetTCPConnection", "Get-ScheduledTask")
@@ -510,6 +539,7 @@ try {
 
   Assert-NoUnmanagedListener -Snapshot $lastSnapshot
   if ($Action -eq "stop") {
+    Enter-ServiceStandby
     Stop-ManagedProcessTree -Snapshot $lastSnapshot
     $lastSnapshot = Get-ServiceSnapshot
     Write-ServiceResult -Result (New-ServiceResult -Ok $true -Code "OK" -Message "Managed service process stopped." -Snapshot $lastSnapshot)
@@ -524,6 +554,7 @@ try {
   }
 
   if ($Action -eq "start") {
+    Exit-ServiceStandby
     if (-not $lastSnapshot.health.ready) {
       Start-ManagedLauncher
       Wait-ServiceHealth
@@ -534,6 +565,7 @@ try {
   }
 
   Stop-ManagedProcessTree -Snapshot $lastSnapshot
+  Exit-ServiceStandby
   Start-ManagedLauncher
   Wait-ServiceHealth
   $lastSnapshot = Get-ServiceSnapshot

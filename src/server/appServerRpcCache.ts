@@ -187,7 +187,8 @@ export class AppServerRpcCache {
   private readonly cachedModelListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly threadListCachePath: string
   private threadListGeneration = 0
-  private pendingThreadListCachePayload: string | null = null
+  private modelListGeneration = 0
+  private threadListCacheDirty = false
   private threadListCacheWritePromise: Promise<void> | null = null
 
   constructor(options: AppServerRpcCacheOptions = {}) {
@@ -204,6 +205,12 @@ export class AppServerRpcCache {
     this.clearThreadListSharedReads()
     this.cachedThreadListRpcByKey.clear()
     this.persistThreadListCache()
+  }
+
+  clearModelList(): void {
+    this.modelListGeneration += 1
+    this.clearModelListSharedReads()
+    this.cachedModelListRpcByKey.clear()
   }
 
   invalidateThreadList(): void {
@@ -269,7 +276,12 @@ export class AppServerRpcCache {
     )
   }
 
-  writeModelList(shareableKey: string, value: unknown): void {
+  writeModelList(
+    shareableKey: string,
+    value: unknown,
+    generation = this.modelListGeneration,
+  ): void {
+    if (generation !== this.modelListGeneration) return
     writeCachedRpc(this.cachedModelListRpcByKey, shareableKey, value, 4)
   }
 
@@ -291,11 +303,18 @@ export class AppServerRpcCache {
     }
 
     const threadListGeneration = this.threadListGeneration
+    const modelListGeneration = this.modelListGeneration
     let request: Promise<unknown>
     request = enqueueRpc(method, params)
       .then((value) => {
         const normalizedValue = method === 'thread/list' ? normalizeThreadListResult(value) : value
-        this.writeShareableCache(method, shareableKey, normalizedValue, threadListGeneration)
+        this.writeShareableCache(
+          method,
+          shareableKey,
+          normalizedValue,
+          threadListGeneration,
+          modelListGeneration,
+        )
         return normalizedValue
       })
       .finally(() => {
@@ -347,6 +366,7 @@ export class AppServerRpcCache {
   refreshModelListInBackground(shareableKey: string, params: unknown, enqueueRpc: EnqueueRpc): void {
     if (this.sharedReadRpcByKey.has(shareableKey)) return
 
+    const generation = this.modelListGeneration
     const cached = this.cachedModelListRpcByKey.get(shareableKey)
     const now = Date.now()
     if (
@@ -355,20 +375,20 @@ export class AppServerRpcCache {
     ) {
       return
     }
-    if (cached) {
+    if (cached && generation === this.modelListGeneration) {
       cached.refreshStartedAtMs = now
     }
 
     let request: Promise<unknown>
     request = enqueueRpc('model/list', params)
       .then((value) => {
-        this.writeModelList(shareableKey, value)
+        this.writeModelList(shareableKey, value, generation)
         return value
       })
       .catch((error) => {
         logBridgeError('Background model/list refresh failed', error)
         const current = this.cachedModelListRpcByKey.get(shareableKey)
-        if (current) {
+        if (current && generation === this.modelListGeneration) {
           current.refreshStartedAtMs = 0
         }
         return null
@@ -395,11 +415,12 @@ export class AppServerRpcCache {
     shareableKey: string,
     value: unknown,
     threadListGeneration: number,
+    modelListGeneration: number,
   ): void {
     if (method === 'thread/list') {
       this.writeThreadList(shareableKey, value, threadListGeneration)
     } else if (method === 'model/list') {
-      this.writeModelList(shareableKey, value)
+      this.writeModelList(shareableKey, value, modelListGeneration)
     }
   }
 
@@ -414,6 +435,14 @@ export class AppServerRpcCache {
   private clearThreadListSharedReads(): void {
     for (const key of this.sharedReadRpcByKey.keys()) {
       if (key.startsWith('thread/list:')) {
+        this.sharedReadRpcByKey.delete(key)
+      }
+    }
+  }
+
+  private clearModelListSharedReads(): void {
+    for (const key of this.sharedReadRpcByKey.keys()) {
+      if (key.startsWith('model/list:')) {
         this.sharedReadRpcByKey.delete(key)
       }
     }
@@ -441,24 +470,15 @@ export class AppServerRpcCache {
 
   private persistThreadListCache(): void {
     if (!this.threadListCachePath) return
-    try {
-      const entries = Array.from(this.cachedThreadListRpcByKey.entries()).map(([key, entry]) => ({
-        key,
-        value: entry.value,
-        cachedAtMs: entry.cachedAtMs,
-        invalidated: entry.invalidated,
-      }))
-      this.pendingThreadListCachePayload = JSON.stringify({ version: 1, entries })
-      this.startThreadListCacheWriter()
-    } catch {
-      // List caching must never break app-server RPC handling.
-    }
+    this.threadListCacheDirty = true
+    this.startThreadListCacheWriter()
   }
 
   private startThreadListCacheWriter(): void {
-    if (this.threadListCacheWritePromise || this.pendingThreadListCachePayload === null) return
+    if (this.threadListCacheWritePromise || !this.threadListCacheDirty) return
 
-    const writePromise = this.drainThreadListCacheWrites()
+    // Coalesce synchronous invalidations before serializing the latest state.
+    const writePromise = Promise.resolve().then(() => this.drainThreadListCacheWrites())
     this.threadListCacheWritePromise = writePromise
     void writePromise.finally(() => {
       if (this.threadListCacheWritePromise !== writePromise) return
@@ -468,10 +488,16 @@ export class AppServerRpcCache {
   }
 
   private async drainThreadListCacheWrites(): Promise<void> {
-    while (this.pendingThreadListCachePayload !== null) {
-      const payload = this.pendingThreadListCachePayload
-      this.pendingThreadListCachePayload = null
+    while (this.threadListCacheDirty) {
+      this.threadListCacheDirty = false
       try {
+        const entries = Array.from(this.cachedThreadListRpcByKey.entries()).map(([key, entry]) => ({
+          key,
+          value: entry.value,
+          cachedAtMs: entry.cachedAtMs,
+          invalidated: entry.invalidated,
+        }))
+        const payload = JSON.stringify({ version: 1, entries })
         await mkdir(dirname(this.threadListCachePath), { recursive: true })
         await writeFile(this.threadListCachePath, payload, 'utf8')
       } catch {

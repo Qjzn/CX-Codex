@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { AssistantTaskLedger } from './assistantTaskLedger.js'
 
 export type RuntimeRequestStatus =
   | 'queued'
@@ -363,8 +364,151 @@ function fromMobilePushOutboxRow(row: MobilePushOutboxRow): MobilePushOutboxReco
   }
 }
 
+export type AssistantIdentityRecord = {
+  assistantId: string
+  name: string
+  cwd: string
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type AssistantIdentityWriteInput = {
+  name: string
+  cwd: string
+  revision: number | null
+}
+
+export type AssistantIdentityWriteResult =
+  | { status: 'saved'; identity: AssistantIdentityRecord }
+  | { status: 'conflict'; identity: AssistantIdentityRecord | null; reason?: 'revision' | 'workspace' }
+
+// A2a persisted main-conversation reservation. Same SQLite file as
+// assistant_identity, still owned by RuntimeStore (no second database, no
+// second writer). The first prompt is only ever stored as a hash.
+export type AssistantMainConversationRecord = {
+  assistantId: string
+  clientMessageId: string
+  cwd: string
+  firstPromptHash: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type AssistantMainConversationReserveInput = {
+  assistantId: string
+  revision: number
+  cwd: string
+  clientMessageId: string
+  promptHash: string
+}
+
+export type AssistantMainConversationConflictReason =
+  | 'identity_missing'
+  | 'revision'
+  | 'workspace'
+  | 'reserved'
+
+export type AssistantMainConversationReserveResult =
+  | { status: 'claimed'; conversation: AssistantMainConversationRecord }
+  | { status: 'existing'; conversation: AssistantMainConversationRecord }
+  | {
+      status: 'conflict'
+      reason: AssistantMainConversationConflictReason
+      conversation: AssistantMainConversationRecord | null
+    }
+
+type AssistantIdentityRow = {
+  assistant_id: string
+  name: string
+  cwd: string
+  revision: number
+  created_at_iso: string
+  updated_at_iso: string
+}
+
+const ASSISTANT_IDENTITY_NAME_MAX_LENGTH = 80
+
+type AssistantMainConversationRow = {
+  assistant_id: string
+  client_message_id: string
+  cwd: string
+  first_prompt_hash: string
+  created_at_iso: string
+  updated_at_iso: string
+}
+
+function fromAssistantIdentityRow(row: AssistantIdentityRow): AssistantIdentityRecord {
+  return {
+    assistantId: row.assistant_id,
+    name: row.name,
+    cwd: row.cwd,
+    revision: row.revision,
+    createdAt: row.created_at_iso,
+    updatedAt: row.updated_at_iso,
+  }
+}
+
+function fromAssistantMainConversationRow(
+  row: AssistantMainConversationRow,
+): AssistantMainConversationRecord {
+  return {
+    assistantId: row.assistant_id,
+    clientMessageId: row.client_message_id,
+    cwd: row.cwd,
+    firstPromptHash: row.first_prompt_hash,
+    createdAt: row.created_at_iso,
+    updatedAt: row.updated_at_iso,
+  }
+}
+
+function assistantCwdKey(cwd: string): string {
+  const normalized = cwd.trim().replace(/\\/g, '/')
+  const trimmed = normalized === '/' ? '/' : normalized.replace(/\/+$/, '')
+  return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//') ? trimmed.toLowerCase() : trimmed
+}
+
+function normalizeAssistantIdentityName(input: AssistantIdentityWriteInput): string {
+  const raw = input?.name
+  if (typeof raw !== 'string') {
+    throw new TypeError('Assistant identity name must be a string')
+  }
+  const name = raw.trim()
+  if (!name) {
+    throw new TypeError('Assistant identity name must not be empty')
+  }
+  if (name.length > ASSISTANT_IDENTITY_NAME_MAX_LENGTH) {
+    throw new TypeError(`Assistant identity name must be at most ${ASSISTANT_IDENTITY_NAME_MAX_LENGTH} characters`)
+  }
+  return name
+}
+
+function normalizeAssistantIdentityCwd(input: AssistantIdentityWriteInput): string {
+  const raw = input?.cwd
+  if (typeof raw !== 'string') {
+    throw new TypeError('Assistant identity cwd must be a string')
+  }
+  const cwd = raw.trim()
+  if (!cwd) {
+    throw new TypeError('Assistant identity cwd must not be empty')
+  }
+  return cwd
+}
+
+function normalizeAssistantIdentityRevision(input: AssistantIdentityWriteInput): number | null {
+  const raw = input?.revision
+  if (raw === null) {
+    return null
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
+    throw new TypeError('Assistant identity revision must be null or a positive integer')
+  }
+  return raw
+}
+
 export class RuntimeStore {
   private readonly db: Database.Database
+  readonly assistantTasks: AssistantTaskLedger
   private appendEventCount = 0
 
   constructor(dbPath = defaultRuntimeDatabasePath()) {
@@ -380,6 +524,26 @@ export class RuntimeStore {
       CREATE TABLE IF NOT EXISTS runtime_metadata (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS assistant_identity (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        assistant_id TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        created_at_iso TEXT NOT NULL,
+        updated_at_iso TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS assistant_main_conversation (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        assistant_id TEXT NOT NULL UNIQUE,
+        client_message_id TEXT NOT NULL UNIQUE,
+        cwd TEXT NOT NULL,
+        first_prompt_hash TEXT NOT NULL,
+        created_at_iso TEXT NOT NULL,
+        updated_at_iso TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS runtime_requests (
@@ -502,6 +666,15 @@ export class RuntimeStore {
     this.getStreamId()
     this.migrateRuntimeRequestOwnership()
     this.runLightweightStartupMaintenance()
+    this.assistantTasks = new AssistantTaskLedger(this.db, { pid: process.pid, nonce: randomUUID() }, (pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false
+        throw error
+      }
+    })
   }
 
   getLatestEventSeq(): number {
@@ -512,6 +685,178 @@ export class RuntimeStore {
   getOldestEventSeq(): number {
     const row = this.db.prepare('SELECT COALESCE(MIN(seq), 0) AS seq FROM runtime_events').get() as { seq?: number } | undefined
     return typeof row?.seq === 'number' && Number.isFinite(row.seq) ? Math.max(0, Math.trunc(row.seq)) : 0
+  }
+
+  // A1 persisted singleton identity. One row, guarded by the singleton CHECK
+  // (singleton = 1); createdAt/assistantId are write-once, revision is
+  // optimistic-concurrency state. No deletion path exists.
+  readAssistantIdentity(): AssistantIdentityRecord | null {
+    const row = this.readAssistantIdentityRow()
+    return row ? fromAssistantIdentityRow(row) : null
+  }
+
+  // A2a main-conversation reservation. Read-only: never starts, never retries.
+  readAssistantMainConversation(): AssistantMainConversationRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM assistant_main_conversation WHERE singleton = 1')
+      .get() as AssistantMainConversationRow | undefined
+    return row ? fromAssistantMainConversationRow(row) : null
+  }
+
+  // The single atomic claim for the assistant main conversation. The winner is
+  // decided by the INSERT itself (UNIQUE client_message_id / assistant_id plus
+  // the frozen singleton row), after BEGIN IMMEDIATE has re-checked the current
+  // identity revision and cwd inside the same transaction.
+  reserveAssistantMainConversation(
+    input: AssistantMainConversationReserveInput,
+  ): AssistantMainConversationReserveResult {
+    const assistantId = typeof input?.assistantId === 'string' ? input.assistantId.trim() : ''
+    const clientMessageId = typeof input?.clientMessageId === 'string' ? input.clientMessageId.trim() : ''
+    const promptHash = typeof input?.promptHash === 'string' ? input.promptHash.trim() : ''
+    const cwd = typeof input?.cwd === 'string' ? input.cwd.trim() : ''
+    if (!assistantId || !clientMessageId || !promptHash || !cwd) {
+      throw new TypeError('Assistant main conversation reservation requires assistantId, clientMessageId, cwd and promptHash')
+    }
+    const revision = input.revision
+    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
+      throw new TypeError('Assistant main conversation revision must be a positive safe integer')
+    }
+
+    const reserve = this.db.transaction((): AssistantMainConversationReserveResult => {
+      const identity = this.readAssistantIdentityRow()
+      if (!identity) {
+        return { status: 'conflict', reason: 'identity_missing', conversation: null }
+      }
+      const currentIdentity = fromAssistantIdentityRow(identity)
+      if (currentIdentity.assistantId !== assistantId) {
+        return { status: 'conflict', reason: 'identity_missing', conversation: this.readAssistantMainConversation() }
+      }
+      if (currentIdentity.revision !== revision) {
+        return { status: 'conflict', reason: 'revision', conversation: this.readAssistantMainConversation() }
+      }
+      if (assistantCwdKey(currentIdentity.cwd) !== assistantCwdKey(cwd)) {
+        return { status: 'conflict', reason: 'revision', conversation: this.readAssistantMainConversation() }
+      }
+
+      const existing = this.readAssistantMainConversation()
+      if (existing) {
+        if (assistantCwdKey(existing.cwd) !== assistantCwdKey(currentIdentity.cwd)) {
+          return { status: 'conflict', reason: 'workspace', conversation: existing }
+        }
+        const identical = existing.assistantId === assistantId
+          && existing.clientMessageId === clientMessageId
+          && existing.firstPromptHash === promptHash
+        if (identical) {
+          return { status: 'existing', conversation: existing }
+        }
+        // Same or different request after the main conversation was already
+        // claimed: never submit anything and never hand out a new identity.
+        return { status: 'conflict', reason: 'reserved', conversation: existing }
+      }
+
+      const timestamp = nowIso()
+      const conversation: AssistantMainConversationRecord = {
+        assistantId,
+        clientMessageId,
+        // Frozen to the identity workspace that was verified above.
+        cwd: currentIdentity.cwd,
+        firstPromptHash: promptHash,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      this.db
+        .prepare(
+          `INSERT INTO assistant_main_conversation (
+            singleton, assistant_id, client_message_id, cwd, first_prompt_hash, created_at_iso, updated_at_iso
+          ) VALUES (1, @assistantId, @clientMessageId, @cwd, @firstPromptHash, @createdAt, @updatedAt)`,
+        )
+        .run(conversation)
+      return { status: 'claimed', conversation }
+    })
+
+    // BEGIN IMMEDIATE: revision/cwd check and the claim commit together, so two
+    // connections can never both become the main conversation owner.
+    return reserve.immediate()
+  }
+
+  writeAssistantIdentity(input: AssistantIdentityWriteInput): AssistantIdentityWriteResult {
+    const name = normalizeAssistantIdentityName(input)
+    const cwd = normalizeAssistantIdentityCwd(input)
+    const expectedRevision = normalizeAssistantIdentityRevision(input)
+
+    const write = this.db.transaction(
+      (nextName: string, nextCwd: string, expected: number | null): AssistantIdentityWriteResult => {
+        const existing = this.readAssistantIdentityRow()
+        if (!existing) {
+          if (expected !== null) {
+            return { status: 'conflict', identity: null }
+          }
+          const now = new Date().toISOString()
+          const identity: AssistantIdentityRecord = {
+            assistantId: randomUUID(),
+            name: nextName,
+            cwd: nextCwd,
+            revision: 1,
+            createdAt: now,
+            updatedAt: now,
+          }
+          this.db
+            .prepare(
+              `INSERT INTO assistant_identity (
+                singleton, assistant_id, name, cwd, revision, created_at_iso, updated_at_iso
+              ) VALUES (1, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(identity.assistantId, identity.name, identity.cwd, identity.revision, identity.createdAt, identity.updatedAt)
+          return { status: 'saved', identity }
+        }
+
+        const current = fromAssistantIdentityRow(existing)
+        if (expected === null || expected !== current.revision) {
+          return { status: 'conflict', identity: current }
+        }
+
+        // A2a: once the main conversation is reserved its workspace is frozen,
+        // otherwise the already-running main thread and a new cwd would silently
+        // mix. Name-only edits stay allowed.
+        if (
+          assistantCwdKey(nextCwd) !== assistantCwdKey(current.cwd)
+          && this.readAssistantMainConversation() !== null
+        ) {
+          return { status: 'conflict', identity: current, reason: 'workspace' }
+        }
+
+        const updatedAt = new Date().toISOString()
+        const nextRevision = current.revision + 1
+        const result = this.db
+          .prepare(
+            `UPDATE assistant_identity
+               SET name = ?, cwd = ?, revision = ?, updated_at_iso = ?
+             WHERE singleton = 1 AND revision = ?`,
+          )
+          .run(nextName, nextCwd, nextRevision, updatedAt, current.revision)
+        if (result.changes !== 1) {
+          return { status: 'conflict', identity: this.readAssistantIdentity() }
+        }
+        return {
+          status: 'saved',
+          identity: { ...current, name: nextName, cwd: nextCwd, revision: nextRevision, updatedAt },
+        }
+      },
+    )
+
+    // BEGIN IMMEDIATE: the read-decide-write cycle takes the write lock up
+    // front, so two connections can never both commit from the same revision.
+    return write.immediate(name, cwd, expectedRevision)
+  }
+
+  private readAssistantIdentityRow(): AssistantIdentityRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT assistant_id, name, cwd, revision, created_at_iso, updated_at_iso
+           FROM assistant_identity
+          WHERE singleton = 1`,
+      )
+      .get() as AssistantIdentityRow | undefined
   }
 
   getStreamId(): string {
@@ -692,13 +1037,13 @@ export class RuntimeStore {
       ? this.db.prepare(`
           SELECT * FROM runtime_requests
           WHERE thread_id = ? AND status IN ('queued', 'queue_failed')
-          ORDER BY created_at_iso ASC, request_id ASC
+          ORDER BY created_at_iso ASC, rowid ASC
           LIMIT ?
         `).all(normalizedThreadId, boundedLimit) as RuntimeRequestRow[]
       : this.db.prepare(`
           SELECT * FROM runtime_requests
           WHERE status IN ('queued', 'queue_failed')
-          ORDER BY created_at_iso ASC, request_id ASC
+          ORDER BY created_at_iso ASC, rowid ASC
           LIMIT ?
         `).all(boundedLimit) as RuntimeRequestRow[]
     return rows.map(fromRequestRow)

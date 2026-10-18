@@ -25,6 +25,7 @@ import { setJson } from './httpJsonResponse.js'
 import { cacheSessionAttachmentPaths } from './sessionAttachmentAccess.js'
 import {
   normalizePlanModeTurnStartParams,
+  prepareNativeCollaborationTurnStartParams,
   readCollaborationModeFromPayload,
   shouldRetryPlanModeWithoutNativeMode,
 } from './runtimePayload.js'
@@ -59,6 +60,7 @@ export type RpcProxyRouteDependencies = {
   ) => Promise<unknown | null>
   augmentThreadListRpcResult: (params: unknown, result: unknown) => Promise<unknown>
   clearThreadSearchIndex: () => void
+  isPublicRpcAllowed?: (method: string, params: unknown) => boolean
 }
 
 export async function handleRpcProxyRoute(
@@ -79,6 +81,11 @@ export async function handleRpcProxyRoute(
     return true
   }
 
+  if (dependencies.isPublicRpcAllowed && !dependencies.isPublicRpcAllowed(body.method, body.params)) {
+    setJson(res, 403, { error: '助手托管线程仅允许读取执行记录' })
+    return true
+  }
+
   const collaborationMode = body.method === 'turn/start'
     ? readCollaborationModeFromPayload(body.params)
     : 'execute'
@@ -87,7 +94,7 @@ export async function handleRpcProxyRoute(
   const requestedTurnWindow = readThreadReadTurnWindow(body.method, body.params)
   const forwardedParams = stripLocalThreadReadParams(body.method, body.params)
   const rpcParams = body.method === 'turn/start'
-    ? normalizePlanModeTurnStartParams(forwardedParams, { includeNativeMode: true })
+    ? await prepareNativeCollaborationTurnStartParams(forwardedParams, dependencies.rpc)
     : forwardedParams
   const rpcThreadId = readThreadIdFromPayload(rpcParams)
   if (rpcThreadId && shouldInvalidateThreadReadCacheForRpc(body.method)) {

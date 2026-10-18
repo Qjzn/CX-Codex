@@ -32,6 +32,7 @@
         :is-updating="false"
         :error="fixtureGoalError"
         :plan-mode-active="selectedCollaborationMode === 'plan'"
+        :open-editor-request="goalEditorRequestId"
         execution-hint="等待消息队列"
         @set-goal="updateFixtureGoal"
         @set-status="updateFixtureGoalStatus"
@@ -58,6 +59,7 @@
         :dictation-click-to-toggle="false"
         :dictation-auto-send="false"
         :show-dictation-button="true"
+        :can-manage-thread-goal="showGoalFixture"
         dictation-language="zh"
         @submit="onSubmit"
         @update:selected-model="noop"
@@ -67,6 +69,7 @@
         @refresh-plugins="noop"
         @reload-plugins="noop"
         @login-plugin="noop"
+        @open-thread-goal="goalEditorRequestId += 1"
         @interrupt="noop"
       />
     </section>
@@ -117,6 +120,7 @@ const availableModels: ComposerModelInfo[] = [
 ]
 const composerRef = ref<ThreadComposerExposed | null>(null)
 const submitCount = ref(0)
+const goalEditorRequestId = ref(0)
 const fixtureParams = typeof window !== 'undefined'
   ? new URLSearchParams(window.location.hash.split('?')[1] ?? '')
   : new URLSearchParams()

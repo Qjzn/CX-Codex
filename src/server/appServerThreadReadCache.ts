@@ -22,6 +22,8 @@ export type CachedThreadRead = {
 
 export type ThreadReadCacheSource = 'app-server' | 'session-log'
 
+export const APP_SERVER_THREAD_READ_CACHE_LIMIT = 64
+
 export function readIsoTimestampMs(value: string | null | undefined): number {
   if (!value) return 0
   const timestampMs = Date.parse(value)
@@ -52,13 +54,22 @@ export class AppServerThreadReadCacheStore {
   }
 
   get(threadId: string): CachedThreadRead | null {
-    return this.cachedByThreadId.get(threadId) ?? null
+    const cached = this.cachedByThreadId.get(threadId)
+    if (!cached) return null
+    this.cachedByThreadId.delete(threadId)
+    this.cachedByThreadId.set(threadId, cached)
+    return cached
   }
 
   remember(threadId: string, threadRead: unknown, source: ThreadReadCacheSource = 'app-server'): CachedThreadRead {
     rememberSessionAttachmentPaths(threadRead)
     const cachedThreadRead = createCachedThreadRead(threadRead, () => new Date().toISOString(), source)
+    this.cachedByThreadId.delete(threadId)
     this.cachedByThreadId.set(threadId, cachedThreadRead)
+    if (this.cachedByThreadId.size > APP_SERVER_THREAD_READ_CACHE_LIMIT) {
+      const oldestThreadId = this.cachedByThreadId.keys().next().value
+      if (typeof oldestThreadId === 'string') this.cachedByThreadId.delete(oldestThreadId)
+    }
     return cachedThreadRead
   }
 

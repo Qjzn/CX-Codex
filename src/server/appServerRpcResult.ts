@@ -2,8 +2,11 @@ const THREAD_RESPONSE_TURN_LIMIT = 10
 const THREAD_RESPONSE_TURN_ITEM_LIMIT = 160
 const THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT = 1
 const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
-const LOW_VALUE_THREAD_ITEM_TYPES = new Set(['fileChange', 'mcpToolCall', 'reasoning'])
 const MIN_THREAD_RESPONSE_TURN_LIMIT = 1
+const THREAD_FILE_CHANGE_LIMIT = 32
+const THREAD_FILE_DIFF_TEXT_LIMIT = 20_000
+const THREAD_COMMAND_OUTPUT_LIMIT = 24_000
+const THREAD_MCP_ERROR_LIMIT = 4_000
 
 type ThreadTurnWindowOptions = {
   view: 'older'
@@ -135,9 +138,10 @@ function trimTurnItems(turn: unknown): unknown {
   const items = Array.isArray(record?.items) ? record.items : null
   if (!record || !items) return turn
 
-  const filteredItems = items.filter((item) => !isLowValueThreadItem(item))
+  const filteredItems = items.map(compactObservableThreadItem)
   if (filteredItems.length <= THREAD_RESPONSE_TURN_ITEM_LIMIT) {
-    return filteredItems.length === items.length
+    const didCompactItems = filteredItems.some((item, index) => item !== items[index])
+    return !didCompactItems
       ? turn
       : {
           ...record,
@@ -157,9 +161,73 @@ function trimTurnItems(turn: unknown): unknown {
   }
 }
 
-function isLowValueThreadItem(item: unknown): boolean {
+function compactObservableThreadItem(item: unknown): unknown {
   const record = asRecord(item)
-  return typeof record?.type === 'string' && LOW_VALUE_THREAD_ITEM_TYPES.has(record.type)
+  if (!record) return item
+
+  if (record.type === 'fileChange') {
+    const changes = Array.isArray(record.changes) ? record.changes : []
+    const boundedChanges = changes.slice(0, THREAD_FILE_CHANGE_LIMIT).map((change) => {
+      const row = asRecord(change)
+      if (!row) return change
+      return {
+        path: typeof row.path === 'string' ? row.path : '',
+        kind: row.kind ?? { type: 'update', move_path: null },
+        diff: boundText(typeof row.diff === 'string' ? row.diff : '', THREAD_FILE_DIFF_TEXT_LIMIT),
+      }
+    })
+    return {
+      ...record,
+      changes: boundedChanges,
+      ...(changes.length > boundedChanges.length
+        ? { changesView: 'bounded', originalChangesCount: changes.length }
+        : {}),
+    }
+  }
+
+  if (record.type === 'mcpToolCall') {
+    const error = asRecord(record.error)
+    return {
+      type: record.type,
+      id: record.id,
+      server: record.server,
+      tool: record.tool,
+      status: record.status,
+      durationMs: record.durationMs,
+      arguments: null,
+      result: null,
+      error: error
+        ? { message: boundText(typeof error.message === 'string' ? error.message : '', THREAD_MCP_ERROR_LIMIT) }
+        : null,
+      payloadView: 'metadata-only',
+    }
+  }
+
+  if (record.type === 'reasoning') {
+    return {
+      type: record.type,
+      id: record.id,
+      status: record.status,
+      startedAt: record.startedAt,
+      completedAt: record.completedAt,
+      durationMs: record.durationMs,
+      payloadView: 'metadata-only',
+    }
+  }
+
+  if (record.type === 'commandExecution' && typeof record.aggregatedOutput === 'string') {
+    const boundedOutput = boundText(record.aggregatedOutput, THREAD_COMMAND_OUTPUT_LIMIT)
+    return boundedOutput === record.aggregatedOutput
+      ? item
+      : { ...record, aggregatedOutput: boundedOutput, outputView: 'bounded' }
+  }
+
+  return item
+}
+
+function boundText(value: string, limit: number): string {
+  if (value.length <= limit) return value
+  return `${value.slice(0, limit)}\n\n[content bounded by CX-Codex]`
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

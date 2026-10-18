@@ -11,9 +11,11 @@ import {
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from './appServerThreadPayload.js'
 import { readThreadReadFromSessionLog } from './appServerSessionLogThreadRead.js'
+import { resolveCodexSessionLogPath, validateCodexSessionLogPath } from './codexSessionPathResolver.js'
 import {
   isRpcTimeoutError,
   isThreadMaterializingError,
+  isThreadNotLoadedError,
 } from './appServerRpcErrors.js'
 import type { PendingServerRequest } from './pendingServerRequests.js'
 import type {
@@ -42,6 +44,8 @@ export type AppServerThreadRuntimeSnapshotDependencies = {
   persistRuntimeSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot
   listPendingServerRequestsForThread(threadId: string): PendingServerRequest[]
   getThreadTokenUsage(threadId: string): ThreadTokenUsage | null
+  resolveSessionLogPath?: (threadId: string) => Promise<string>
+  validateSessionLogPath?: (path: string, threadId: string) => Promise<string>
   readSessionLogThreadRead?: (sessionPath: string, fallbackThreadRead: unknown) => Promise<unknown | null>
   getErrorMessage(error: unknown, fallback: string): string
   writeWarning(message: string, details: Record<string, unknown>): void
@@ -62,6 +66,22 @@ export async function readAppServerThreadRuntimeSnapshot(
   }
 
   const cachedThreadRead = dependencies.getCachedThreadRead(normalizedThreadId)
+  if (options.preferCachedMessages === true && cachedThreadRead) {
+    // Cache-first reads exist to make an already-known structured transcript
+    // paintable without waiting for App Server ownership or RPC availability.
+    // Runtime Store remains authoritative for execution state; the cached
+    // thread/read payload is only the message projection input and is
+    // converged by the caller's background authoritative refresh.
+    const tokenUsage = dependencies.getThreadTokenUsage(normalizedThreadId)
+      ?? readThreadTokenUsageFromThreadReadPayload(cachedThreadRead.threadRead)
+    return dependencies.persistRuntimeSnapshot(normalizedThreadId, dependencies.snapshotRuntime(normalizedThreadId, {
+      threadRead: cachedThreadRead.threadRead,
+      messageState: 'cached',
+      pendingServerRequests: dependencies.listPendingServerRequestsForThread(normalizedThreadId),
+      tokenUsage,
+    }))
+  }
+
   let lightThreadRead: unknown = null
   try {
     lightThreadRead = await dependencies.rpc('thread/read', {
@@ -88,13 +108,47 @@ export async function readAppServerThreadRuntimeSnapshot(
     pendingServerRequests: dependencies.listPendingServerRequestsForThread(normalizedThreadId),
     tokenUsage: dependencies.getThreadTokenUsage(normalizedThreadId),
   })
-  const sessionPath = lightThreadRead ? readThreadSessionPathFromThreadReadPayload(lightThreadRead) : ''
+  const rpcSessionPath = lightThreadRead ? readThreadSessionPathFromThreadReadPayload(lightThreadRead) : ''
+  let sessionPath = ''
+  try {
+    // A desktop-owned thread can rotate its log while a light RPC still returns
+    // the old shard. Resolve verified candidates even when that RPC succeeds.
+    const resolvedPath = await (dependencies.resolveSessionLogPath ?? resolveCodexSessionLogPath)(normalizedThreadId)
+    if (resolvedPath) sessionPath = resolvedPath
+  } catch (error) {
+    dependencies.writeWarning('Session log path lookup failed', {
+      threadId: normalizedThreadId,
+      error: dependencies.getErrorMessage(error, 'Session log path lookup failed'),
+    })
+  }
+  if (!sessionPath && rpcSessionPath) {
+    try {
+      sessionPath = await (dependencies.validateSessionLogPath ?? validateCodexSessionLogPath)(rpcSessionPath, normalizedThreadId)
+    } catch (error) {
+      dependencies.writeWarning('Session log identity validation failed', {
+        threadId: normalizedThreadId,
+        error: dependencies.getErrorMessage(error, 'Session log identity validation failed'),
+      })
+    }
+  }
+  const lightRoot = asRecord(lightThreadRead)
+  const lightThread = asRecord(lightRoot?.thread)
+  const sessionFallbackThreadRead = sessionPath ? {
+    ...lightRoot,
+    thread: {
+      ...lightThread,
+      id: normalizedThreadId,
+      path: sessionPath,
+      turns: Array.isArray(lightThread?.turns) ? lightThread.turns : [],
+    },
+  } : lightThreadRead
   let sessionLogReadAttempted = false
   let threadRead: unknown = null
   let messageState: ThreadRuntimeSnapshot['messageState'] = 'unavailable'
 
   if (
     cachedThreadRead &&
+    (!sessionPath || cachedThreadRead.sessionPath === sessionPath) &&
     lightUpdatedAtIso &&
     cachedThreadRead.updatedAtIso === lightUpdatedAtIso &&
     !isCachedThreadReadStaleForRuntime(cachedThreadRead, runtimeSnapshotBeforeMessageRead, lightInProgress)
@@ -102,18 +156,14 @@ export async function readAppServerThreadRuntimeSnapshot(
     threadRead = cachedThreadRead.threadRead
     messageState = cachedThreadRead.source === 'session-log' ? 'cached' : 'fresh'
   } else {
-    if (lightThreadRead && sessionPath) {
+    if (sessionFallbackThreadRead && sessionPath) {
       sessionLogReadAttempted = true
-      const recoveredThreadRead = await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
+      const recoveredThreadRead = await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, sessionFallbackThreadRead)
       if (recoveredThreadRead) {
         threadRead = trimThreadTurnsInRpcResult('thread/read', recoveredThreadRead)
         messageState = 'cached'
         dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead, 'session-log')
       }
-    }
-    if (!threadRead && options.preferCachedMessages === true && cachedThreadRead) {
-      threadRead = cachedThreadRead.threadRead
-      messageState = 'cached'
     }
     if (!threadRead) {
       try {
@@ -143,7 +193,7 @@ export async function readAppServerThreadRuntimeSnapshot(
           })
         } else {
           const recoveredThreadRead = !sessionLogReadAttempted && sessionPath
-            ? await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
+            ? await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, sessionFallbackThreadRead)
             : null
           if (recoveredThreadRead) {
             threadRead = trimThreadTurnsInRpcResult('thread/read', recoveredThreadRead)
@@ -229,5 +279,10 @@ export function createAppServerThreadRuntimeSnapshotReader(
 }
 
 function isRecoverableThreadReadError(error: unknown): boolean {
-  return isThreadMaterializingError(error) || isRpcTimeoutError(error)
+  return isThreadMaterializingError(error) || isThreadNotLoadedError(error) || isRpcTimeoutError(error)
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null
 }

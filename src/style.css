@@ -19,15 +19,16 @@
   --ui-focus: #2563eb;
   --ui-sidebar-width: 288px;
   --ui-topbar-height: 44px;
-  --ui-content-max: 800px;
-  --ui-composer-max: 800px;
-  --ui-composer-min-height: 88px;
+  --ui-content-max: 48rem;
+  /* 48rem visible shell + the composer's 1.25rem desktop gutters on both sides. */
+  --ui-composer-max: calc(48rem + 2.5rem);
+  --ui-composer-min-height: 92px;
   --ui-row-height: 40px;
   --ui-radius-row: 10px;
   --ui-radius-card: 8px;
   --ui-radius-control: 10px;
   --ui-radius-pill: 999px;
-  --ui-radius-composer: 14px;
+  --ui-radius-composer: 12px;
   --ui-shadow-float: 0 14px 40px rgb(0 0 0 / 0.08);
   --ui-z-popover: 70;
   --motion-duration-press: 80ms;
@@ -40,10 +41,10 @@
   --font-sans-reading: "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono-ui: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", "Fira Code", "Consolas", "Liberation Mono", monospace;
   --font-size-body: 16px;
-  --font-size-reading: 15px;
+  --font-size-reading: 16px;
   --font-size-meta: 12px;
   --font-size-title: 17px;
-  --line-height-reading: 1.62;
+  --line-height-reading: 1.65;
   --tracking-tight-soft: 0;
   --tracking-body-soft: 0;
 }
@@ -77,9 +78,9 @@ body {
 
 @media (max-width: 767px) {
   :root {
-    --font-size-reading: 14px;
+    --font-size-reading: 16px;
     --font-size-title: 16px;
-    --line-height-reading: 1.52;
+    --line-height-reading: 1.65;
   }
 }
 
@@ -117,37 +118,6 @@ button,
   }
 }
 
-@media (forced-colors: active) {
-  :root {
-    --ui-bg-window: Canvas;
-    --ui-bg-sidebar: Canvas;
-    --ui-bg-surface: Canvas;
-    --ui-bg-surface-muted: Canvas;
-    --ui-bg-row-hover: Highlight;
-    --ui-bg-row-active: Highlight;
-    --ui-border-subtle: ButtonBorder;
-    --ui-border-strong: CanvasText;
-    --ui-text-primary: CanvasText;
-    --ui-text-secondary: CanvasText;
-    --ui-text-tertiary: GrayText;
-    --ui-accent: LinkText;
-    --ui-success: LinkText;
-    --ui-warning: CanvasText;
-    --ui-danger: LinkText;
-    --ui-focus: Highlight;
-  }
-
-  :where(button, a, input, textarea, select, [role='button']):focus-visible {
-    outline: 2px solid Highlight;
-    outline-offset: 2px;
-  }
-
-  :where(.thread-status-indicator, .thread-goal-status-dot, .live-overlay-indicator-core) {
-    border: 1px solid CanvasText;
-    forced-color-adjust: none;
-  }
-}
-
 code,
 pre {
   font-family: var(--font-mono-ui);
@@ -172,6 +142,38 @@ pre {
   --ui-danger: #fb923c;
   --ui-focus: #60a5fa;
   --ui-shadow-float: 0 16px 44px rgb(0 0 0 / 0.34);
+}
+
+@media (forced-colors: active) {
+  :root,
+  :root.dark {
+    --ui-bg-window: Canvas;
+    --ui-bg-sidebar: Canvas;
+    --ui-bg-surface: Canvas;
+    --ui-bg-surface-muted: Canvas;
+    --ui-bg-row-hover: Highlight;
+    --ui-bg-row-active: Highlight;
+    --ui-border-subtle: ButtonBorder;
+    --ui-border-strong: CanvasText;
+    --ui-text-primary: CanvasText;
+    --ui-text-secondary: CanvasText;
+    --ui-text-tertiary: GrayText;
+    --ui-accent: LinkText;
+    --ui-success: LinkText;
+    --ui-warning: CanvasText;
+    --ui-danger: LinkText;
+    --ui-focus: Highlight;
+  }
+
+  :where(button, a, input, textarea, select, [role='button']):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  :where(.thread-status-indicator, .thread-goal-status-dot, .execution-pulse) {
+    border: 1px solid CanvasText;
+    forced-color-adjust: none;
+  }
 }
 
 :root.dark body {
@@ -208,6 +210,10 @@ pre {
 
 :root.dark .content-root {
   @apply bg-zinc-950;
+}
+
+:root.dark .user-message-body {
+  background: #27272a;
 }
 
 :root.dark .composer-with-queue {
@@ -674,14 +680,6 @@ pre {
 
 :root.dark .conversation-loading,
 :root.dark .conversation-empty {
-  @apply text-zinc-400;
-}
-
-:root.dark .live-overlay-label {
-  @apply text-zinc-400;
-}
-
-:root.dark .live-overlay-reasoning {
   @apply text-zinc-400;
 }
 

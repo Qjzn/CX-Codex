@@ -1,5 +1,10 @@
 <template>
-  <section class="thread-goal" :data-state="goal?.status || 'empty'" aria-label="持续目标">
+  <section
+    v-if="goal || isLoading || error || isEditing"
+    class="thread-goal"
+    :data-state="goal?.status || 'empty'"
+    aria-label="持续目标"
+  >
     <div v-if="isLoading && !goal" class="thread-goal-loading" role="status">
       <span class="thread-goal-spinner" aria-hidden="true" />
       正在读取持续目标…
@@ -100,17 +105,6 @@
       </div>
     </template>
 
-    <button
-      v-else-if="!isLoading && !isEditing"
-      type="button"
-      class="thread-goal-create"
-      :disabled="isUpdating || disabled"
-      @click="openEditor"
-    >
-      <span aria-hidden="true">◎</span>
-      设置持续目标
-    </button>
-
     <form v-if="isEditing" class="thread-goal-editor" @submit.prevent="save">
       <label class="thread-goal-editor-label" for="thread-goal-objective">
         {{ goal ? '编辑持续目标' : '设置要持续追求的目标' }}
@@ -148,6 +142,7 @@ const props = withDefaults(defineProps<{
   error?: string
   executionHint?: string
   planModeActive?: boolean
+  openEditorRequest?: number
 }>(), {
   isLoading: false,
   isUpdating: false,
@@ -155,6 +150,7 @@ const props = withDefaults(defineProps<{
   error: '',
   executionHint: '',
   planModeActive: false,
+  openEditorRequest: 0,
 })
 
 const emit = defineEmits<{
@@ -340,6 +336,11 @@ watch(() => props.goal?.objective, (objective) => {
   if (!isEditing.value) draft.value = objective ?? ''
 })
 
+watch(() => props.openEditorRequest, (request, previous) => {
+  if (request <= 0 || request === previous) return
+  openEditor()
+})
+
 watch(() => props.goal?.threadId, (threadId, previousThreadId) => {
   if (threadId !== previousThreadId) resetTransientState()
 })
@@ -373,7 +374,6 @@ onBeforeUnmount(() => {
 }
 
 .thread-goal-loading,
-.thread-goal-create,
 .thread-goal-summary,
 .thread-goal-editor,
 .thread-goal-error,
@@ -384,8 +384,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--ui-bg-surface) 92%, transparent);
 }
 
-.thread-goal-loading,
-.thread-goal-create {
+.thread-goal-loading {
   display: inline-flex;
   min-height: 32px;
   align-items: center;
@@ -397,10 +396,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.thread-goal-create { cursor: pointer; }
-
-.thread-goal-create:hover,
-.thread-goal-create:focus-visible,
 .thread-goal-action:hover,
 .thread-goal-action:focus-visible {
   border-color: var(--ui-border-strong);
@@ -628,20 +623,52 @@ textarea:disabled { cursor: not-allowed; opacity: .55; }
   .thread-goal-usage { display: none; }
   .thread-goal-usage-mobile {
     display: block;
-    margin-top: 2px;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
     color: var(--ui-text-secondary);
     font-size: 11px;
     line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .thread-goal-objective {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 7px;
+  }
+  .thread-goal-kicker {
+    grid-column: 1 / -1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .thread-goal-text {
+    grid-column: 1;
+    -webkit-line-clamp: 1;
+  }
+  .thread-goal-usage-mobile {
+    grid-column: 2;
+    align-self: center;
+    max-width: 118px;
   }
   .thread-goal-action-secondary { display: none; }
   .thread-goal-more { display: block; }
   .thread-goal-action { min-width: 44px; min-height: 44px; padding-inline: 7px; }
-  .thread-goal-create,
   .thread-goal-error button,
   .thread-goal-editor-actions button { min-height: 44px; }
   .thread-goal-confirm { align-items: flex-start; flex-direction: column; }
   .thread-goal-confirm > div { align-self: flex-end; }
   .thread-goal-confirm button { min-height: 44px; }
+}
+
+@media (pointer: coarse) {
+  .thread-goal-action,
+  .thread-goal-error button,
+  .thread-goal-editor-actions button,
+  .thread-goal-confirm button {
+    min-height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

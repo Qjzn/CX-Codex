@@ -1,5 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { resolveCodexCommand } from '../commandResolution.js'
+import {
+  captureCodexLaunchIdentity,
+  createCodexLaunchIdentity,
+  markCodexLaunchIdentityUnknown,
+  readCodexLaunchFileSha256,
+  resolveCodexCommand,
+  type CodexLaunchIdentity,
+  type CodexLaunchIdentityCore,
+  type CodexVersionProbe,
+} from '../commandResolution.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
 import { createAppServerHealthSnapshot, type AppServerHealth } from './appServerHealth.js'
@@ -50,6 +59,12 @@ const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 2
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
 
+export type AppServerProcessDependencies = {
+  resolveCodexCommand?: () => string | null
+  probeCodexVersion?: CodexVersionProbe
+  spawnProcess?: (command: string, args: string[]) => ChildProcessWithoutNullStreams
+}
+
 export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
@@ -59,6 +74,8 @@ export class AppServerProcess {
   private stopping = false
   private startedAtMs = 0
   private activeCodexCommand = ''
+  private activeLaunchIdentity: CodexLaunchIdentity | null = null
+  private launchGeneration = 0
   private lastRestartAtMs = 0
   private readonly stderrLogger = new AppServerStderrLogger()
   private readonly rpcDiagnostics = new AppServerRpcDiagnostics(
@@ -89,13 +106,52 @@ export class AppServerProcess {
   private readonly appServerLaunchPolicy = resolveAppServerLaunchPolicy()
   private readonly appServerArgs = createAppServerArgs(this.appServerLaunchPolicy)
   private readRestartBlockingRequestCount: () => number = () => 0
+  private rpcPolicy: ((method: string, params: unknown, context?: object) => Promise<unknown>) | null = null
+  private rpcWriteGuard: ((method: string, params: unknown, context?: object) => void) | null = null
+  private serverRequestInterceptor: ((id: number, method: string, params: unknown) => boolean) | null = null
+
+  constructor(private readonly dependencies: AppServerProcessDependencies = {}) {}
 
   private getCodexCommand(): string {
-    const codexCommand = resolveCodexCommand()
+    const codexCommand = (this.dependencies.resolveCodexCommand ?? resolveCodexCommand)()
     if (!codexCommand) {
       throw new Error('Codex CLI is not available. Install @openai/codex or set CX_CODEX_CODEX_COMMAND.')
     }
     return codexCommand
+  }
+
+  private spawnAppServerChild(invocation: { command: string; args: string[] }): ChildProcessWithoutNullStreams {
+    if (this.dependencies.spawnProcess) {
+      return this.dependencies.spawnProcess(invocation.command, invocation.args)
+    }
+
+    return spawn(invocation.command, invocation.args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: process.platform === 'win32',
+    })
+  }
+
+  /**
+   * Launch target binding: the captured absolute target is what gets spawned, and the original
+   * Windows shim semantics still apply to it. Only a capture that could not be fixed to a real
+   * absolute target falls back to the resolved command so an exotic PATH layout does not lose the
+   * previous launch behavior; that case is published as an `unknown` identity.
+   */
+  private resolveLaunchCommand(command: string, core: CodexLaunchIdentityCore): string {
+    if (core.reason === 'unresolved-launch-path' || core.reason === 'empty-launch-command') {
+      return command
+    }
+    return core.launchPath
+  }
+
+  private verifyLaunchFingerprint(core: CodexLaunchIdentityCore): CodexLaunchIdentityCore {
+    if (core.identityKind === 'unknown' || core.sha256 === null) {
+      return core
+    }
+    if (readCodexLaunchFileSha256(core.launchPath) === core.sha256) {
+      return core
+    }
+    return markCodexLaunchIdentityUnknown(core, 'launch-window-fingerprint-changed')
   }
 
   private start(): void {
@@ -104,17 +160,28 @@ export class AppServerProcess {
     this.stopping = false
     this.startedAtMs = Date.now()
     this.activeCodexCommand = this.getCodexCommand()
-    const invocation = getSpawnInvocation(this.activeCodexCommand, this.appServerArgs)
-    const proc = spawn(invocation.command, invocation.args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: process.platform === 'win32',
+    const launchCore = captureCodexLaunchIdentity(this.activeCodexCommand, {
+      probeVersion: this.dependencies.probeCodexVersion,
     })
+    const invocation = getSpawnInvocation(this.resolveLaunchCommand(this.activeCodexCommand, launchCore), this.appServerArgs)
+    const proc = this.spawnAppServerChild(invocation)
     this.process = proc
+    this.launchGeneration += 1
+    this.activeLaunchIdentity = createCodexLaunchIdentity(
+      this.verifyLaunchFingerprint(launchCore),
+      this.launchGeneration,
+    )
 
     attachAppServerProcessHandlers(proc, {
       isCurrentProcess: (eventProc) => this.process === eventProc,
-      handleStdoutChunk: (chunk) => this.stdoutLineBuffer.push(chunk, (line) => this.handleLine(line)),
-      handleStderrMessage: (message) => this.stderrLogger.log(message),
+      handleStdoutChunk: (chunk) => {
+        if (this.process !== proc) return
+        this.stdoutLineBuffer.push(chunk, (line) => this.handleLine(line))
+      },
+      handleStderrMessage: (message) => {
+        if (this.process !== proc) return
+        this.stderrLogger.log(message)
+      },
       handleStdinError: (error) => {
         logBridgeError('Codex app-server stdin failed', error)
         this.restartAppServer('stdin error')
@@ -123,6 +190,7 @@ export class AppServerProcess {
         logBridgeError('Codex app-server process error', error)
         this.cleanupProcessRuntime(createRpcTransportError(`codex app-server process error: ${error.message}`))
         this.process = null
+        this.activeLaunchIdentity = null
         this.initialized = false
         this.initializePromise = null
         this.stdoutLineBuffer.clear()
@@ -141,6 +209,7 @@ export class AppServerProcess {
           this.cleanupProcessRuntime(failure)
           this.process = null
           this.activeCodexCommand = ''
+          this.activeLaunchIdentity = null
           this.initialized = false
           this.initializePromise = null
           this.stdoutLineBuffer.clear()
@@ -264,6 +333,7 @@ export class AppServerProcess {
 
     this.process = null
     this.activeCodexCommand = ''
+    this.activeLaunchIdentity = null
     this.initialized = false
     this.initializePromise = null
     this.stdoutLineBuffer.clear()
@@ -297,6 +367,15 @@ export class AppServerProcess {
       },
       observeThreadTokenUsage: (params) => this.threadTokenUsage.observeUpdate(params),
     })
+
+    // Terminal turn notifications are the only trigger that expires the local pending server
+    // requests of that turn. The dispatcher calls this owner method before it emits the
+    // original turn/completed line, so the automatic resolved notifications below are always
+    // emitted ahead of the original notification. The generic capture handling above is
+    // untouched; every other notification method falls straight through here.
+    this.serverRequests.expirePendingServerRequestsForTerminalTurn(notification, {
+      emitNotification: (resolvedNotification) => this.emitNotification(resolvedNotification),
+    })
   }
 
   private sendServerRequestReply(requestId: number, reply: ServerRequestReply): void {
@@ -313,6 +392,35 @@ export class AppServerProcess {
 
   setRestartProtectionReader(reader: () => number): void {
     this.readRestartBlockingRequestCount = reader
+  }
+
+  /**
+   * Central role policy hook applied at the very beginning of every public rpc(),
+   * before initialization, queueing or caching. It only rewrites/refuses params; it
+   * never starts a turn, so installing it cannot change cold-recovery semantics.
+   */
+  setRpcPolicy(policy: ((method: string, params: unknown, context?: object) => Promise<unknown>) | null): void {
+    this.rpcPolicy = policy
+  }
+
+  /**
+   * Synchronous last-moment transport guard invoked at the actual write boundary of a
+   * managed RPC (backend-private context only, never logged or serialized). Throwing
+   * rejects the RPC with no pending record, timeout or line written.
+   */
+  setRpcWriteGuard(guard: ((method: string, params: unknown, context?: object) => void) | null): void {
+    this.rpcWriteGuard = guard
+  }
+
+  /**
+   * Intercepts incoming app-server requests (approvals, tool calls) before the
+   * generic approval handling. Returning true means the interceptor answered or
+   * refused the request itself.
+   */
+  setServerRequestInterceptor(
+    interceptor: ((id: number, method: string, params: unknown) => boolean) | null,
+  ): void {
+    this.serverRequestInterceptor = interceptor
   }
 
   invalidateThreadListCache(): void {
@@ -339,6 +447,16 @@ export class AppServerProcess {
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {
+    if (this.serverRequestInterceptor) {
+      let handled = false
+      try {
+        handled = this.serverRequestInterceptor(requestId, method, params) === true
+      } catch {
+        this.rejectServerRequest(requestId)
+        return
+      }
+      if (handled) return
+    }
     this.serverRequests.handleServerRequest(requestId, method, params, {
       permissions: this.webBridgeSettings.permissions,
       sendServerRequestReply: (requestId, reply) => this.sendServerRequestReply(requestId, reply),
@@ -358,12 +476,14 @@ export class AppServerProcess {
     return this.rpcQueue.enqueue(method, params)
   }
 
-  private async call(method: string, params: unknown): Promise<unknown> {
+  private async call(method: string, params: unknown, context?: object): Promise<unknown> {
     this.start()
     const id = this.nextId++
     const timeoutMs = getRpcTimeoutMs(method, params)
 
     return new Promise((resolve, reject) => {
+      this.rpcWriteGuard?.(method, params, context)
+
       const timeoutId = setTimeout(() => {
         const timedOutRequest = this.pending.finalize(id)
         if (!timedOutRequest) return
@@ -390,6 +510,17 @@ export class AppServerProcess {
     })
   }
 
+  /**
+   * An initialization whose child has been replaced or released must reject instead of resolving:
+   * a fulfilled abandoned initialization would let the original caller continue through
+   * call/start, spawn a replacement child and write an uninitialized business RPC.
+   */
+  private assertCurrentChildForInitialization(proc: ChildProcessWithoutNullStreams | null): void {
+    if (!proc || this.process !== proc) {
+      throw createRpcTransportError('codex app-server was replaced before initialization completed')
+    }
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
     if (this.initializePromise) {
@@ -397,22 +528,54 @@ export class AppServerProcess {
       return
     }
 
-    this.initializePromise = (async () => {
+    this.start()
+    const proc = this.process
+    const promise = (async () => {
+      this.assertCurrentChildForInitialization(proc)
       const clientInfo = createAppServerClientInfo(await readPackageVersion())
+      this.assertCurrentChildForInitialization(proc)
       await this.call('initialize', createAppServerInitializeParams(clientInfo))
+      this.assertCurrentChildForInitialization(proc)
       this.sendLine(createAppServerRpcNotification('initialized'))
       this.initialized = true
-    })().finally(() => {
-      this.initializePromise = null
-    })
+    })()
+    this.initializePromise = promise
 
-    await this.initializePromise
+    try {
+      await promise
+    } finally {
+      if (this.initializePromise === promise) {
+        this.initializePromise = null
+      }
+    }
   }
 
-  async rpc(method: string, params: unknown): Promise<unknown> {
-    await this.ensureInitialized()
+  /**
+   * Public continuation guard: the initialization await of a public request still yields even when
+   * it is already fulfilled, so the request must be bound to the child it actually started with and
+   * re-validated against the live initialized owner before it is allowed to continue into
+   * cache invalidation / enqueue / call. Otherwise a disposed owner could have its request recreate
+   * an uninitialized replacement child.
+   */
+  private assertSameInitializedChild(proc: ChildProcessWithoutNullStreams | null): void {
+    if (!proc || proc !== this.process || !this.initialized) {
+      throw createRpcTransportError('codex app-server is no longer the initialized owner for this request')
+    }
+  }
+
+  async rpc(method: string, params: unknown, context?: object): Promise<unknown> {
+    if (this.rpcPolicy) params = await this.rpcPolicy(method, params, context)
+    const initialize = this.ensureInitialized()
+    const ownerProcess = this.process
+    await initialize
+    this.assertSameInitializedChild(ownerProcess)
     if (shouldInvalidateThreadListCacheForRpc(method)) {
       this.rpcCache.invalidateThreadList()
+    }
+    // A context-bearing RPC is a private managed boundary: it must never coalesce, queue or
+    // cache with unrelated RPCs, and its guard has to run at the actual transport write.
+    if (context) {
+      return this.call(method, params, context)
     }
     if (getAppServerRpcQueuePriority(method, params) === 0) {
       return this.call(method, params)
@@ -445,6 +608,22 @@ export class AppServerProcess {
     this.resolvePendingServerRequest(id, reply)
   }
 
+  /**
+   * Refuses a pending app-server request with the generic assistant rejection.
+   * Used by the server-request interceptor so a managed assistant thread can never
+   * inherit host-level automatic approval.
+   */
+  rejectServerRequest(id: number): void {
+    this.sendServerRequestReply(id, { error: { code: -32000, message: '助手请求已拒绝' } })
+  }
+
+  /** A deferred dynamic-tool reply must never target a replacement child. */
+  replyToInterceptedServerRequest(id: number, result: unknown, generation: number): boolean {
+    if (this.getActiveLaunchIdentity()?.generation !== generation) return false
+    this.sendServerRequestReply(id, { result })
+    return true
+  }
+
   listPendingServerRequests(): PendingServerRequest[] {
     return this.serverRequests.listPendingServerRequests()
   }
@@ -457,7 +636,15 @@ export class AppServerProcess {
     return this.threadTokenUsage.get(threadId)
   }
 
+  getActiveLaunchIdentity(): CodexLaunchIdentity | null {
+    if (!this.initialized || !this.process || !this.activeLaunchIdentity) {
+      return null
+    }
+    return this.activeLaunchIdentity
+  }
+
   getStatus(): AppServerHealth {
+    const activeLaunchIdentity = this.getActiveLaunchIdentity()
     return createAppServerHealthSnapshot({
       running: this.process !== null,
       initialized: this.initialized,
@@ -465,6 +652,7 @@ export class AppServerProcess {
       pid: this.process?.pid ?? null,
       command: this.activeCodexCommand,
       startedAtIso: this.startedAtMs > 0 ? new Date(this.startedAtMs).toISOString() : '',
+      ...(activeLaunchIdentity ? { activeLaunchIdentity } : {}),
       pendingRpcCount: this.pending.count,
       queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.serverRequests.pendingCount,
@@ -490,6 +678,7 @@ export class AppServerProcess {
     this.stopping = true
     this.process = null
     this.activeCodexCommand = ''
+    this.activeLaunchIdentity = null
     this.initialized = false
     this.initializePromise = null
     this.stdoutLineBuffer.clear()

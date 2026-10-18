@@ -1,5 +1,7 @@
+import type { CodexLaunchIdentity } from '../commandResolution.js'
 import type { AppServerLaunchPolicySnapshot } from './appServerLaunch.js'
 import type { RpcDiagnostics } from './appServerRpcDiagnostics.js'
+import { copyCodexLaunchIdentity } from '../commandResolution.js'
 
 export type AppServerHealth = {
   running: boolean
@@ -8,6 +10,7 @@ export type AppServerHealth = {
   pid: number | null
   command?: string
   startedAtIso?: string
+  activeLaunchIdentity?: CodexLaunchIdentity
   pendingRpcCount: number
   queuedRpcCount: number
   pendingServerRequestCount: number
@@ -27,6 +30,7 @@ export function createAppServerHealthSnapshot(input: AppServerHealth): AppServer
     pid: input.pid,
     ...(input.command ? { command: input.command } : {}),
     ...(input.startedAtIso ? { startedAtIso: input.startedAtIso } : {}),
+    ...(input.activeLaunchIdentity ? { activeLaunchIdentity: copyCodexLaunchIdentity(input.activeLaunchIdentity) } : {}),
     pendingRpcCount: input.pendingRpcCount,
     queuedRpcCount: input.queuedRpcCount,
     pendingServerRequestCount: input.pendingServerRequestCount,

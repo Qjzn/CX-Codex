@@ -9,7 +9,7 @@ export type CodexBridgeSharedStateGlobal<TAppServer, TMethodCatalog> = typeof gl
 
 export type CodexBridgeSharedStateDependencies<TAppServer, TMethodCatalog> = {
   createAppServer: () => TAppServer
-  createMethodCatalog: () => TMethodCatalog
+  createMethodCatalog: (appServer: TAppServer) => TMethodCatalog
   globalScope?: CodexBridgeSharedStateGlobal<TAppServer, TMethodCatalog>
 }
 
@@ -24,9 +24,10 @@ export function getCodexBridgeSharedState<TAppServer, TMethodCatalog>(
   const existing = globalScope[CODEX_BRIDGE_SHARED_STATE_KEY]
   if (existing) return existing
 
+  const appServer = dependencies.createAppServer()
   const created = {
-    appServer: dependencies.createAppServer(),
-    methodCatalog: dependencies.createMethodCatalog(),
+    appServer,
+    methodCatalog: dependencies.createMethodCatalog(appServer),
   }
   globalScope[CODEX_BRIDGE_SHARED_STATE_KEY] = created
   return created

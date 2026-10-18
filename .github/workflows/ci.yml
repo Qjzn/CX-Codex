@@ -35,6 +35,11 @@ jobs:
       - name: Audit dependency security
         run: npm run verify:dependency-security
 
+      - name: Verify conversation and core workflow contracts
+        run: |
+          npm run verify:conversation-transcript
+          npm run verify:core-flows
+
       - name: Run release verification
         run: npm run verify:release -- -SchemaAudit skip
 
@@ -65,6 +70,7 @@ jobs:
               -Port 7441 `
               -Password "ci-password" `
               -SkipStartupTask `
+              -SkipWatchdogTask `
               -SkipFirewall `
               -SkipLogin `
               -NoStart `

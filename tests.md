@@ -1,5 +1,418 @@
 # Tests
 
+## 会话体验P0：真实前后台验证与跨轮计时（2026-09-10，本地候选）
+
+- 独立17448、专用native任务两轮真实发送：气泡分别48/32ms、服务端接受51/37ms、运行提示358/129ms。前台公开进展数据到DOM可见11.1ms；两个样本不是P95，也没有桌面/Web同时同源对照。
+- 第二轮在手机宽度浏览器实际隐藏141248.4ms；返回前原生已完成，返回时无需刷新即可看到final、fresh/completed，计时保持34秒。浏览器标签页不是Android后台进程、锁屏或Doze证据。
+- 真实逐帧观察发现第二轮开始时短暂00:36→00:00，约103ms。公开state专项修前精确复现36130ms应为130ms；原因是线程级Runtime摘要沿用上一轮起点。修复只改该摘要的代际清理、开始事件时间传递及projection时间字段的数值读取，不新建时钟或状态源，不修改UI模板。
+- 新轮或已结束后无ID的新accepted执行清旧起止时间；同轮通知保留起点，缺失时间可被明确native起点补齐。原生Unix秒不再被字符串读取过滤，缺少所有时间证据时不以Date.now制造执行起点。晚到旧序号快照仍按原版本门槛拒绝。
+- 独立复核新增真实红例：既有helper把sync_degraded也算settled，同轮恢复会清空摘要起点，旧snapshot可能掩盖它。仅在本轮新执行判定排除此状态，不改全局helper合同；公开摘要与投影均回归通过。
+- 永久入口`node scripts/verify-conversation-runtime-timing-contract.mjs`已接入core-flows，最终8/8。仅原始跨轮与sync恢复有明确修前红证据，其余是保留/新增控制，不全部宣称红→绿。
+- 修后bridge-free浏览器使用真实state/gateway/projection/ThreadConversation/TurnExecutionClock，HTTP/WS与输入时钟为夹具。1365×900、393×852均在新正文GET挂起时显示B00:00，真实组件tick至00:05，释放快照后不归零；A始终00:05，公开进展可见、普通动态偏好有脉冲、无错误/横向溢出。主代理已目视复核截图；这不是补丁后的真实native重跑。
+- 仍开放：预创建但尚无首轮的原生任务直达URL时，thread/read(includeTurns)返回`list_turns is not supported yet`，首轮发送后恢复。尚未修复，不等同于所有新会话入口失败，也不能声称完整发布门禁通过。
+
+原始样本、修后浏览器报告、截图和最终检查日志见`output/conversation-live-validation-20260910/`。本轮没有替换/重启7420，没有Git提交/推送/发布，没有Android测试；仅私有候选及测试浏览器启停。人工复验合同：连续两轮、同轮断线恢复、旧快照晚到均不得借上一轮计时或丢失本轮起点；公开进展与final继续各自呈现。
+
+最终检查：`build:frontend`、`verify-core-flows.mjs`（含8项计时、16项刷新合同）、`verify-frontend-normalizers.mjs`、`test:7420:frontend -- -SourceOnly`、`verify:governance`、`git diff --check`全部通过；构建既有Vite配置/大chunk警告未隐藏。私有浏览器关闭，17448/17449均0监听，7420健康ok。
+
+回滚按本节新增计时hunk及专项测试撤销，保留之前dirty变更，不整文件回退。
+
+## 会话体验P0：刷新意图与正文来源（2026-09-10，本地候选）
+
+修复边界：只改前端gateway/公开state的读取协调，不改会话投影、UI模板、原生Runtime写入、队列持久化或日志reader；没有替换/重启7420、真实模型/手机测试、Git提交/推送或发布。
+
+- 使用正确HTTP响应结构先得到7项定向结果：5红/2绿。明确复现旧A尚未完成时B刷新只等待A就返回、6秒内被12秒静默节流跳过、同毫秒被900ms gateway缓存满足、同期刷新丢补读，以及runtime-only响应把正文来源误写为unavailable。真实state不可用和cached不冒fresh是原本通过的对照；后续新增取消/失败等控制不全部计为修前红例。
+- `refreshSnapshot`只表达必须重新读取状态正文的意图，不等于`forceSettledRpcRefresh`，不强制重型原生RPC。旧读结束后由首个有效等待者启动补读，同期等待者共享它；补读开始之后的新意图还需要下一次读取。WeakSet只标记真正处理完成的补读，不把普通缓存读、异常或中途取消当作完成。
+- status/reconcile只携带运行事实，通过显式`runtimeOnly`更新，不能用`threadRead===null`猜来源。同版本保留已知fresh/cached，新序号、生命周期变化或stale把fresh降为cached，正文读取后才能确认fresh；实际state返回unavailable仍诚实降级并保留可读旧正文。
+- 自动前台/连接恢复及正文失效通知沿既有公共同步链传递刷新意图；普通无正文失效的侧栏通知继续受静默节流约束，没有增加轮询频率或新的状态所有者。
+- 扩展到16项时又稳定复现一个真实红例：自动R2读取过程中收到新正文通知，R2结束后删除pending导致第三版正文丢补读。修正为读取开始前领取旧标记、失败/取消恢复需求，途中到达的新标记留给下一次读取。对应公开WebSocket用例只执行该通知新建的一次350ms debounce，不运行背景轮询来凑结果。
+
+永久入口：`node scripts/verify-conversation-refresh-contract.mjs`（已接入`npm run verify:core-flows`）。真实`useDesktopState`→HTTP gateway→唯一projection，只有HTTP与浏览器宿主受控。每个用例独立进程/任务ID，逐请求记录开始和实际释放的版本；不启动真实服务、不调用模型。浏览器专项使用agent-browser的独立17447与真实组件，证据见`output/conversation-refresh-browser-20260910/`；它不是7420部署、真实端到端P95或Android证据。
+
+最终本地检查：专项16/16，主代理执行包含该专项的`node scripts/verify-core-flows.mjs`、`node scripts/verify-frontend-normalizers.mjs`、`npm run test:7420:frontend -- -SourceOnly`、`npm run build:frontend`、`npm run verify:governance`及`git diff --check`通过。中间成功标记自引用导致TS2454，修正后重新构建通过；Vite既有配置/大chunk警告仍存在。最终指纹与参考边界见`output/conversation-refresh-audit-20260910/implementation.md`；CLI/server实现本轮未改，不拿之前的server构建当作本轮重跑。
+
+浏览器主代理独立重跑`node output/conversation-refresh-browser-20260910/verify-after.mjs`，202条保存证据断言通过（不是202个独立场景，`productOverallPass:false`）。最终源码重启私有fixture后重跑393×852及1365×900旧A挂起主例：每组只一次公开refresh、2次state GET、1用户/1轮/1final、source=fresh、终态20秒且无运行标记/错误/横向溢出；两张final截图已目视核对，4份源文件hash匹配。较早修订另有两尺寸6秒内更新及runtime-only保留正文控制，不能反向标成最终hash全矩阵。私有浏览器已关闭，17447无监听，主代理独立检查确认；不是真机触摸或生产延迟证据。
+
+旧证据更正：`output/conversation-refresh-audit-20260910/fixture-audit.md`及真实gateway的22条检查区分了state的平铺data与reconcile的`data.snapshot`。上轮旧reconcile桩确实错误，但正确桩也能重现上述产品缺陷；6544ms间隔不支持“900ms启动缓存”旧归因。旧output保持原样，不能回写旧样本冒认通过。
+
+人工复验合同：旧正文请求未返回时刷新一次，释放旧响应后无需第二次刷新即显示最新final；完成后6秒内再刷新应读取新内容；连续刷新不并发放大正文GET；运行状态先到时不伪造回复，正文恢复后source与终态/耗时一致。失败或取消某个等待者不能吞掉其他有效刷新。此切片不取消底层读超时、不承诺模型更快，完整生产/设备/发布门禁继续开放。
+
+回滚须按本节`refreshSnapshot`协调、`runtimeOnly`来源处理及对应专项测试逐hunk撤销，保留之前的dirty变更；不整文件回退。
+
+## 会话体验P0：公开进展、执行计时与阅读保护（2026-09-10，本地候选）
+
+本轮按“进行下一步”实施，不替换/重启7420，不提交、推送或发布；没有真实模型、用户会话或设备操作。之前身份恢复的dirty改动保持不变，以下证据不放行完整P0或产品目标。
+
+- 先复现真实reader把尚无`task_complete`的任务恢复成completed；15项生命周期测试最初11红/4绿。修复仅映射明确`task_started/task_complete/turn_aborted`和同turn时间，失败、中断与普通完成分开；原生Unix秒优先，旧记录外层事件时间为兼容回退。显式null在projection仍保持未知，不借item/轮询时间；wall `duration_ms`不冒充排除等待后的active elapsed。
+- 修复过程中另复现空生命周期边界导致分页轮数虚增，以及已结束任务的旧start回放阻断下一合法任务；前者按首个可见item计数，后者精确终态ID的旧start对scope也no-op。第7项增加后续新轮断言，保持15项。最终15生命周期＋20来源＋37身份＋12显示合同共84/84通过。
+- 浏览器修前两条commentary默认只挂载最后一条；追加command后正文DOM变为0、选区失效。两个相隔约3秒的样本停在同一个“已处理34秒”。此红例来自原生结构snapshot→公开state→真实组件；不是人为把reader结果改成running。
+- 新UI默认最近两段公开commentary且不作三行截断；操作不占文字窗口，只有显式“查看操作详情”后才挂载命令/输出等结构行。操作归本轮，不虚构与某段文字的因果关联。文件摘要和审批仍沿既有独立层级；不展示内部reasoning。
+- `TurnExecutionClock.vue`只在known-anchor running时本地逐秒更新，hidden清interval，waiting/terminal停表、sync-degraded隐藏不可信秒数，未知时间不伪造00:00；降低动态效果时取消持续动画。现有state恢复轮询仍存在，不把“时钟本身无RPC”冒称全链没有请求。
+- 目视复核发现新分隔状态旁仍保留旧“正在思考”行；最终候选已删除重复行，将原运行反馈指标属性迁入同一时钟根节点，运行只保留一个状态所有者。既有浏览器smoke断言同步检查唯一状态；本轮不冒称已执行该Playwright脚本。
+- 选择文字、焦点进入过程、离底部或显式展开历史时，保留当前挂载的过程快照，阻止自动裁剪、v-html替换及终态收起。返回最新释放保护；显式定位可刷新目标窗口；快照只保留当前挂载轮次、不持久化。两处独立审查发现的新消息定位与冻结Map累积边界已修复。
+
+验证命令（均本地）：`node --test scripts/session-log-lifecycle.test.mjs scripts/session-log-history-source.test.mjs scripts/session-log-user-identity.test.mjs scripts/session-log-display-contract.test.mjs`、`npm run verify:core-flows`、`npm run verify:frontend-normalizers`、`npm run test:7420:frontend -- -SourceOnly`、`npm run build:frontend`、`npm run build:cli`、`npm run verify:server-modules`、`npm run verify:governance`、`git diff --check`。上述命令通过；source-only最初按旧“最后一个混合过程项/内联时钟”的实现断言失败，已更新为两段文字/独立时钟/操作显式挂载的当前合同，并保留有界、无网络时钟和双重跟随保护断言。未跑该大脚本完整浏览器矩阵。Vite既有配置前向兼容和localPreview大chunk警告仍在。
+
+浏览器证据目录：`output/conversation-live-progress-browser-20260910/`；协议/参考审计：`output/conversation-live-progress-20260910/audit.md`。隔离Vite不加载真实Bridge，夹具API只供测试；实际日志恢复用自有JSONL→生产reader结果。主代理独立执行`node output/conversation-live-progress-browser-20260910/verify-before.mjs`及`verify-after.mjs`：分别14条红例证据断言、1070条修后证据断言通过，后者明确`productOverallPass: false`；这些是保存的浏览器证据核对数，不是1070个独立场景。
+
+- 前一UI修订的完整交互：393×852、1365×900、884×1104及393 reduced-motion四组，从两段公开文字经过新命令/第三段与正文delta到终态，保持原文字节点、选区/Range、复制节点与祖先，命令/输出默认0挂载。手机和reduced组scrollTop=200，desktop=93；884内容未形成可滚窗口，scrollTop=0，不能算非零滚动锚点测试。手机详情按钮44px，实点后才挂载命令和输出，Tab可继续；desktop显式定位新C3成功。普通时钟自行推进、同节点动画继续，终态冻结；reduced无持续动画。
+- 最终UI修订删除重复状态后，重新获取桌面/手机/884/reduced四份窄回归截图与JSON：均1个divider、1个live状态、1个running反馈标记，普通动画1、reduced0，无横向溢出；`final-mobile-running.png`等四图由主代理目视确认。实际reader手机运行→完成另重跑选区/节点保持与15秒终态冻结。六份当前源码SHA-256核对通过，但这些hash不追溯证明前一修订的交互截图；完整版本边界记录于report。
+- 884实测`pointer:coarse=false`，仅视口模拟；普通desktop/884详情32px符合既有设计，不声称触摸折叠屏44px通过。waiting/stale/hidden-tab停表及多轮冻结缓存上限本轮只有投影测试/源码审查，未做相应浏览器行为验证。两次私有浏览器about:blank中断的样本被排除并保留记录，后续用新case完成验证，不当成产品通过或失败。
+- 终态reader浏览器样本曾需要额外公开刷新，最终`projection.sourceState=unavailable`保留为限制；当时“启动缓存”的归因未被验证。后续刷新专项审计确认旧reconcile夹具嵌套不正确，同时正确合同下仍可复现12秒静默节流和in-flight刷新意图丢失；历史证据不回写成通过。生命周期事实与视觉终态通过不等于整体fresh恢复通过。
+- 最终报告见`output/conversation-live-progress-browser-20260910/report.md`。`cleanup.json`记录专用浏览器正常关闭、17446无监听；主代理另行读取清理记录并确认端口无监听。没有关闭用户浏览器或其他服务。
+
+人工复验：运行时不点过程即读到公开文字；不更新snapshot仍能看秒数；选择当前文字并追加工具/第三段/终态，选区与位置不丢；点操作详情后才看到技术行；Tab可达且窄屏44px；点击返回最新恢复跟随，收藏定位新到文字可达；等待审批/断连/完成时文案、动画与秒数对应真实状态。
+
+剩余范围：真实7420发送反馈与端到端P95、完整长会话压力重跑、手机后台两分钟/网络恢复、跨组件新任务交接、未知或paginated日志及旧完整性限制均未放行。新计时使用已有权威锚点，不代表模型更快；历史缺生命周期的兼容策略未伪装成完整原生等价。下一步优先真实发送→公开进展→final的延迟分段取证，再决定是否调整订阅/刷新链路。回滚只逐hunk撤销本节UI/helper、生命周期接线及对应测试合同，保留既有身份/缓存/队列改动，不整文件回退。
+
+## 会话体验P0：原生 raw-first 中间帧与日志来源（2026-09-10，本地候选）
+
+问题：上一切片修正了最终双来源快照，但普通模型输入先于UI事件到达时，公开状态链路仍暂时插入匿名用户气泡。此次隔离浏览器先保存真实reader驱动的红例：raw阶段2用户/2轮，event到达后才恢复1用户/1轮，不能只验最后一帧。
+
+- 按固定原生0.153.4历史契约，仅实际文件首个完整非空`session_meta`声明`history_mode=legacy`且ID匹配时，从首帧仅恢复规范UI用户。raw不确认本地发送，不按正文关联身份；原日志不改。来源审计见`output/session-log-history-source-20260910/audit.md`。
+- 新`appServerSessionLogCheckpoint.ts`复用checkpoint文件句柄，以4KiB块探测、最多64KiB；完整头字节指纹覆盖真实头部可能超过512字节的模式字段。cold full/tail与direct parse使用同一规则，cache绑定文件及thread身份；后续fork meta不覆盖首头。缺失/未知/损坏/不完整/超预算/mismatched头保守兼容，这是CX边界，不冒充原生默认/报错语义。
+- 完整或可信增量的原生空历史返回可用thread，真实runtime snapshot链路仅调用轻量`thread/read(includeTurns:false)`；这验证避免无谓heavy RPC，不是实际模型或7420延迟数据。冷截断尾窗没有记录则返回null，不能抹掉窗口外历史；读取前后原生来源证据不一致同样拒绝，外层cache不记混源空快照。
+- 私有恢复缓存逐次clone并保留隐藏的显式轮次边界，不向UI生成空轮/用户。后续无turnId的agent event在增量与完整读取中归属一致，不落到上一轮；包含首轮仅raw的控制。
+
+专项`node --test scripts/session-log-history-source.test.mjs`最终20/20，纳入`verify:core-flows`。修前最初7项6红/1绿，扩至14项9红/5绿；随后新增2项是修后控制。独立审查再复现尾窗假空、读取时原子替换混源及隐藏边界丢失，固化4项真实文件/流时序红例后修绿；不是全部20项都曾失败。相邻37项日志身份、12项显示来源一起运行69/69通过。
+
+浏览器证据：`output/session-log-history-source-browser-20260910/`，私有17445、agent-browser、真实reader产物→公开useDesktopState→真实组件/CSS，自有JSONL与受控API，不接真实模型/会话。393×852和1365×900主例均经local→202（仅request/thread/starting）→raw-only→真实追加event→公开refresh；最终源码另重跑手机主例。每个观察阶段均1用户/1轮、原user/turn节点、display/render key、DOM Range/anchor及scrollTop=120，MutationObserver只记录初始挂载；raw不清outbox，实际event身份到达才清。缺失/unknown头对照保守保留2用户且不确认A，不算零重复通过。真reload仅验证逻辑身份及无重发，sourceState仍unavailable，不冒认状态恢复或跨document物理连续性。
+
+`node output/session-log-history-source-browser-20260910/verify-after.mjs`由主代理独立重跑，329项证据断言通过；按最终源码重生所有reader输入并核对JSONL/源码哈希。桌面浏览器来自早候选，最终reader重生一致，不冒称最终hash桌面全重跑；报告明确`productOverallPass:false`。已查看最终手机raw/event截图，没有改版或字体/触控/真机验收声明。私有浏览器关闭、17445无监听，见`cleanup.json`。
+
+最终检查：`node scripts/verify-core-flows.mjs`（含最终20项）、`node scripts/verify-frontend-normalizers.mjs`、`npm run build:cli`、`node scripts/verify-server-modules.mjs`、`npm run verify:governance`及`git diff --check`通过。服务模块日志中的慢RPC/bridge failed是受控失败夹具，不是7420实况。未改前端实现，因此本轮不重跑frontend build，也不拿上一切片构建当作本轮构建。
+
+残余：未知格式raw-only仍可能保守显示两条；paginated规范completed-item、远程图片/音频空文本事件、新任务跨组件/父轮次交接未覆盖。普通fallback仍沿用completed呈现策略；本轮没有修复进展默认折叠、思考动画/计时与终态组合问题。任意同inode中段改写仍超出增量append-only契约，完整P0/CX-CE-02和发布门禁未放行。
+
+边界/回滚：本轮生产改动仅reader及独立checkpoint helper；没有改CSS、数据库、outbox格式、模型协议或原日志。未替换/重启7420、未Git提交/推送/发布，无真机或真实模型测试。回滚应逐hunk撤销本节来源/缓存变化及测试入口并移除本轮新增helper/专项脚本，保留既有dirty改动，不整文件回退。
+
+## 会话体验P0：双来源用户显示与阅读连续性（2026-09-10，本地候选）
+
+> 以下为上一切片证据；其中显式可信legacy的raw-first缺口由上节候选继续修正，未知格式及其他残余仍有效。
+
+问题：上轮原生结构JSONL的模型输入与UI事件进入同一轮，匿名response抢占opener。DOM虽然只有一条气泡，实际已替换原user/turn节点并清空选区。本轮先重现该浏览器红例，再修投影来源，不用正文去重掩盖问题。
+
+- 官方CLI `rust-v0.153.4`固定提交`3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`的[ThreadHistoryBuilder](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server-protocol/src/protocol/thread_history.rs#L443)明确：普通raw user不产生UI用户，legacy用户事件才产生并携带client身份。原生确实先写模型输入再发UI事件。证据和paginated差异见`output/session-log-display-20260910/audit.md`；不是重新跑真实模型。
+- `projectConversation.ts`在同轮存在日志用户事件或原生snapshot/notification用户时，不将`recoverySource=response_item`的模型输入投影成用户。原始reader记录保留、不改ID、不回填client、不建立猜测alias；本地optimistic不充当规范来源，跨轮不抑制。
+- `ThreadConversation.vue`按稳定display key逐条显示该轮全部user blocks，补上同轮后续用户正文；复制、收藏、失败操作和反馈属性各自绑定当前用户项。轮次回退仅首条显示。保持既有同轮用户聚合布局，不声称逐事件交错时间线，也没有新增弹窗或动效。
+- 新永久脚本`node --test scripts/session-log-display-contract.test.mjs`执行真实reader→真实projection：最初6项为4红/2绿；补中间态时另有1项真实红→绿；其余新增控制首跑即绿。最终**12/12通过**，纳入`verify:core-flows`，不是12项都曾失败。涵盖native通知已到而日志event未到、native snapshot与fallback页并存、不同正文来源选择、同文独立client、跨轮legacy、空client和未知response-only。
+
+浏览器证据在`output/session-log-display-browser-20260910/`：隔离17444的真实reader产物→公开useDesktopState/gateway→真实组件；自有JSONL及API，不接7420/真实用户sessions/模型。
+
+- 原生双源主例从local→仅含request/thread/starting的202→快照→公开刷新，在393×852、1365×900、884×1104均保持1用户/1轮次、原user/turn节点、display/render key、DOM Range和scrollTop=120；快照清outbox，无重发、失败气泡或非预期API/JS错误。最终源码另跑手机主例，早期与最终哈希分别留存。
+- 同turn双独立client A/B控制：原始1个response+2个event→2个投影用户→2个DOM，A原节点、选区和滚动保持，仅新增B。B-only不能确认A；raw-only无client也不能确认A。后两者保守保留两条/两轮，不能算零重复或零跳动通过。
+- 真正浏览器重载后逻辑身份恢复，本document发送0次、累计1次；不要求跨document物理节点/选区/滚动相同。884仅视口模拟，coarse pointer为false，不是真机/触摸证据；native通知早到的分支本轮仅永久测试，不冒称浏览器覆盖。
+- 本轮未改过程折叠规则：快照来自既有fallback completed策略，公开进展仍在展开后可读；不据此声称“文字优先”“思考动画/时间”和真实执行速度已验收。
+
+`node output/session-log-display-browser-20260910/verify-after.mjs`的310项证据核对通过，并重新用当前reader读取7份夹具、核对浏览器输入与最终源码哈希；输出明确`scopedIdentitySlice: passed`及`productOverallPass: false`。`reloadSourceState: unavailable`也如实保留，仅逻辑身份/无重发通过，不冒认完整reload状态恢复。自有浏览器已关闭，17444无监听，见`cleanup.json`；7420仍为原PID 91540，未执行服务操作。
+
+验证：`node scripts/verify-core-flows.mjs`、`node scripts/verify-frontend-normalizers.mjs`、`npm run build:frontend`、`npm run verify:governance`通过；Vite配置前向兼容/localPreview大chunk警告仍存在。本轮生产改动只在前端投影和组件，无server实现修改；上一轮CLI/server构建不冒充本轮重跑。最后一次完整核心检查含11项显示测试，第12项原生snapshot控制单独运行通过。
+
+残余与下一步：raw先到且尚无任何规范UI来源的正常增量区间、paginated日志、远程图片/音频空文本事件、首次新任务跨组件及跨父轮次交接仍未关闭；上轮同inode中段重写绕过采样checkpoint的限制仍在。完整CX-CE-02、P0和发布门禁未放行。下一切片优先显式识别日志历史模式，从读取入口分离规范UI源与未知兼容源，再验逐帧反馈。
+
+边界/回滚：未替换或重启7420，未提交、推送、部署或发布。只需按本节列出的投影来源过滤、user模板遍历及新增测试入口逐hunk撤销可回到本轮前行为；保留先前未提交改动，禁止整文件回退。原始日志、数据库和outbox存储格式未变。
+
+## 会话体验P0：日志回退身份恢复（2026-09-10，本地候选）
+
+> 以下为上一切片的原始证据；其中双来源opener替换已由上节候选修复，其余边界继续有效。
+
+- 通过真实`readThreadReadFromSessionLog`读取自有合成JSONL，不读用户sessions、不调用模型。初始11项为7失败/4通过，复现event身份未读取、同文response吞掉identified event及增量clone丢身份；后续边界用例不能都计为旧版红灯。
+- `event_msg/user_message.client_id`仅属于事件本身，恢复为`clientId`；明确`task_started.turn_id`且无冲突时才归属轮次，孤立turn_context、结束后事件、冲突生命周期不猜配。增量保留身份、来源、时间、图片与解析scope；全量/增量使用日志字节偏移生成记录ID，避免同时间戳或分段读重置序号丢消息。
+- 路径替换、截断及首末各512字节检查失败时重新扫描，不继承旧scope；不是任意同inode中段重写的完整检测。没有末尾换行时下次完整重扫；大行分块只在完整行边界拼接，避免反复复制整条记录。
+- 纯图片event保留字符串local_images及既有image path标记；非本地URL不伪装成本地文件，未知远程图片/音频格式未在本轮扩展。内部context仍过滤。identified event与无身份response没有精确join，禁止按正文互相删除或转移身份；两种表示可能继续保留，完整CX-CE-02仍未放行。
+- 参考已生成的隔离原生CLI 0.153.4日志，以及缓存桌面26.818.5229对clientId的消费职责。未找到桌面JSONL恢复等价实现，不声称全量桌面对齐；只读审计见`output/session-log-identity-20260910/audit.md`。
+
+本轮专项命令：`node --test scripts/session-log-user-identity.test.mjs`，37/37通过，并纳入`scripts/verify-core-flows.mjs`。独立审查另复现非候选坏JSON误绑、流解析结束后文件改写导致旧scope/新checkpoint混存；修复后固化真实文件和流结束时序，另加正常并发追加仍从原字节末尾增量继续的控制。核心计划/目标/队列契约、frontend-normalizers、前后端构建、server-modules及governance通过；首次server编译发现新增Buffer类型推断不匹配，修复后重跑通过。Vite前向兼容及localPreview大chunk警告仍为已知项；这些检查不代替生产/真机。
+
+独立审查最终**4/5，不是整体全绿**：`output/session-log-identity-20260910/run-reader-review.mjs`通过坏行、真实stream-end后首尾变化竞态、普通追加等价及8MiB单行恢复；仍可复现同inode中段task_started等长改写并追加时误用旧scope，首尾512B采样不构成整段完整性证明。当前增量契约仅支持原区间不变的正常追加；任意中段原地改写未解决，记录在`reader-review-findings.md`，不能据此放行完整P0。8MiB检查不是生产延迟或性能门禁证据。
+
+浏览器（隔离17443，真实reader产物→真实useDesktopState/gateway/ThreadConversation，产品API受控；不是7420）：
+
+- identified event-only正例在393×852、1365×900的local→202 starting→snapshot→首次公开refresh保持1用户/1轮次、原节点、display key、DOM Range与scrollTop=120；snapshot清outbox，无失败或逃逸API。真reload走selectThread，逻辑身份恢复且不再次POST。后续手动滚动/点击展开用于截图，不计入上述阅读保护断言；进展默认仍折叠，展开后内容存在，不称文字优先已实现。字体实取符合既有style.css，未美化夹具。
+- 缺response turn元数据的legacy双源对照：2原始用户/2投影/2DOM，保留无法关联的匿名mirror，不冒认全面去重。与当前原生结构相同的独立对照补有`metadata.turn_id`与`content_item_kinds=['user.text']`：**2原始用户/1轮次→2投影用户→DOM仅1个opener，但原用户/轮次节点均被替换、选区丢失**；outbox虽然清空，身份稳定仍未通过。不能用DOM只有一条判为去重成功。证据：`output/session-log-identity-browser-20260910/unjoined-native-shape-report.json`。
+- 同文独立client的公开刷新控制：B-only证据不能确认A，A继续confirming；A+B证据到齐才清A，2条原始/投影/DOM均保留。图片本轮浏览器未扩测，仅有reader自动化控制。全部素材见`output/session-log-identity-browser-20260910/`；不得用event-only正例替代原生双源反例。
+
+`node output/session-log-identity-browser-20260910/verify-reports.mjs`的235个**证据核对**断言exit 0，包含确认上述已知失败存在，并明确输出`productOverallPass: false`，不是235个产品验收通过。当前reader重新读取6份夹具，与捕获的浏览器输入逐项相等；手机采集时的较早源码哈希单独保留，未伪装全部来自同一版本。
+
+边界不变：未替换/重启7420，未提交、推送、部署或发布。日志回退仍沿用既有completed状态策略，本轮不证明运行状态、计时或所有历史重复已修复；后续优先消除恢复来源歧义，再验证首次新任务交接与进展层级。
+
+## 会话体验P0：原生消息身份闭环（2026-09-10，本地候选）
+
+> 本节为上一切片证据；其中“session-log仍丢client_id”已由上方修复替代，其余未验收边界仍保留。
+
+### 当前契约及失败优先验证
+
+- Runtime启动将持久请求的`clientMessageId`传为原生`clientUserMessageId`；execute、plan兼容降级、thread/resume重试均保持原键、正文和选项，不创建新的重试循环。前端快照和实时通知优先读取用户`clientId`，旧`clientMessageId/clientUserMessageId`仍兼容；非空原生字段优先，旧别名不得冒领。
+- 原生0.153.4的通知用户item ID为UUID，历史read可改为`item-1`。投影只归并同轮、跨快照/通知来源、一对一的原生身份；保留真实snapshot ID及经过验证的live别名以恢复精确显示绑定。同来源多项、跨轮冲突、缺身份不按正文或位置猜配。缓存也只在同轮一对一客户端关联下保留自定义display，歧义不得转移。
+- 同item的空clientId回放不抹除已知身份；精确绑定与未匹配本地项碰撞时保持不同渲染键。只有runtime状态先到、仍无真实轮次/消息证据且存在未绑定本地提交时，不凭status创造第二个空轮次。本地仍确认中，不伪装正在执行；实际turn/item通知的活动仍显示。
+- **撤回上轮临时opener推断**：真实新版`turn/start`可能接续当前轮，返回turnId不是“快照第一位用户属于本请求”的证据。删除本地临时`runtimeOpenerIdentity.ts`，移除生成/顶层返回/前端解释；旧诊断payload保留原样且不作确认依据，不迁移数据库、不删除用户数据。原服务端测试改名为`runtime-user-identity-contract.test.mjs`并保留HTTP、SQLite、重放、native queue、伪造/损坏控制责任。
+- 首批16项：旧实现13失败/3通过，仅补发送字段后7失败/9通过；读取映射、撤回位置推断、快照/实时别名与缓存补测分别先复现再修复。浏览器及独立审查还复现空轮次、空client回放抹除和精确alias display丢失。最终专项为**native 34/34、display 48/48、runtime 17/17，共99项**；不是99项都在旧实现失败。最后两个审查用例先在独立output脚本红→绿，再迁入永久测试。
+
+### 原生协议实证（区别于真实模型与生产）
+
+- 当前CLI 0.153.4真实app-server，隔离配置/工作目录，唯一模型请求由回环假provider返回固定文字。通知、live thread/read、进程重启后resume/read均保留相同clientId。最终1次本地`/responses`、0 Authorization、0外部代理尝试、0工具/授权请求；两个自有CLI进程exit 0。证据：`output/native-identity-protocol-20260910/native-run-jzly7k/result.json`。
+- 首次运行后台插件发现产生4次外部CONNECT尝试，全部被本地拒绝代理阻断，因此首轮总门禁记红；关闭相关功能后连续两次通过。原红记录保留，不称首次全绿。该测试没有真实模型、真实账号、7420、手机或公网性能证据。
+- 对齐参考为缓存桌面26.818.5229的客户端消息关联职责，加当前本机CLI新生成schema及真实协议实证；不是当前桌面GUI全量对齐，没有复制专有实现。维护/诊断/对齐技能要求分别取协议、节点和恢复证据，不以字段存在或截图代替端到端验证。
+
+### 浏览器与剩余边界
+
+- 隔离17442、agent-browser专用会话、真实useDesktopState/gateway/ThreadConversation和既有样式，产品HTTP桩控制且WebSocket/逃逸API阻断。POST202严格仅requestId/threadId/starting，不提供turn/opener；快照只提供原生clientId，不提前放GET证明。旧实现393×852明确2个用户DOM/2轮次/2投影块，outbox confirming 1。
+- 首次修复后用户已不重复，但MutationObserver发现runtime先到产生一个空权威轮次；该次严格验证失败，另存`first-after-red-*`。补保护后393×852、1365×900从local→202→native snapshot→refresh各帧始终1用户/1轮次；原user/turn对象、选区、display/render键与scrollTop=120保留。Mutation只有初始各1次插入，此后0新增/移除；snapshot即清outbox，无request证明查询、失败态或逃逸API。
+- 真浏览器reload通过真实selectThread水合与公开刷新，只验逻辑身份、缓存及不再次提交；不承诺跨document物理DOM/选区/scroll。无原生身份对照仍保留2用户/2轮次和1条confirming outbox，防止误吞；该反例不是所有旧版本去重通过。截图、严格采样、完整复现和最终状态见`output/native-identity-browser-20260910/README.md`。
+- 本次不是完整P0/发布放行：session-log fallback仍会丢`event_msg.payload.client_id`，且不能靠相同正文给无身份response补配。旧CLI、首次新任务跨组件预览、同轮后续用户呈现、真实服务消息一次执行及真机等仍需独立验收。未替换/重启7420，未提交/推送/部署/发布；保留之前未提交改动。
+
+### 已运行检查
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' --test scripts/native-user-identity.test.mjs scripts/runtime-user-identity-contract.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-display-identity.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:cli
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-server-modules.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:governance
+& 'C:/Program Files/nodejs/node.exe' output/native-identity-browser-20260910/verify-before.mjs
+& 'C:/Program Files/nodejs/node.exe' output/native-identity-browser-20260910/verify-after.mjs
+```
+
+上述专项、核心门禁、normalizer、transcript、源码检查、governance、构建及最终浏览器报告校验均exit 0。before校验只确认旧缺陷，after中的无身份分支只确认未解决边界。server smoke曾因旧全量RPC参数断言缺少新增原生字段失败，补全原键断言后通过，未删除原责任。构建仍有已有Vite配置前向兼容和localPreview大chunk警告；server故障注入日志不是7420故障。core-flows仅证明本地计划/目标/队列等确定性契约，不能代替生产表现或延迟测试。
+
+## 会话体验P0：消息显示身份稳定（2026-09-10，本地候选）
+
+> 历史记录：本节原始opener证明方案及早确认未解决状态，已由上方“原生消息身份闭环”替代。以下保留当时实验结果和旧证据路径，不作为当前实现/当前门禁声明；旧runtime-opener测试已改名。
+
+### 本轮契约与实现边界
+
+- 用户气泡的`displayMessageId`、轮次容器的`renderKey`独立于权威`itemId/turnId`。确认只更新真实身份与送达事实，不因Vue父容器换键而重建同页消息；展开状态、虚拟化测高、定位及阅读锚点同步使用渲染键。收藏、回退和诊断属性仍使用真实服务端身份。
+- 关联使用明确`clientMessageId/clientUserMessageId`，或原始`turn/start`响应产生的`openerTurnId`。该证明写入现有Runtime请求payload，绑定request/client/thread，POST与GET按需返回；普通activeTurnId、恢复轮次、正文或时间相近不构成证明。原生队列接管与状态恢复不会凭空生成证明，不新增数据库表或恢复循环。
+- 精确item/turn显示映射先写入现有用户缓存，再清理本地副本、outbox和临时元数据；缓存序列化与相等比较保留client/display，明确重试换执行键时outbox仍能保留逻辑显示键。用户缓存仍为3天/12个任务/每任务24条，outbox仍为7天/12条，未复制助手回复。无现代身份的历史迁移分支仍保留，不能声称全部旧正文推断已移除。
+- 审查补查缓存身份来源与重复client冲突：运行中的新turn不能覆盖历史用户的turn；重复client不能由普通恢复turn消歧，可信原始opener或已锁定的精确item/turn才可关联。否则保留独立消息，不以看起来相同为由清理outbox。
+
+### 失败优先与自动化
+
+- 最初纯投影两项红灯分别证明用户显示ID和父轮次键在确认时变化；现代身份过滤又复现同文不同client被正文吞并、同轮历史opener吞掉另一条消息、无client快照按正文消耗本地项三类错误。缓存补充红灯确认仅client/display变化曾被相等比较丢弃，同轮同文不同client也曾被错误合并。新增对照用例并非全部在旧代码执行过，不把最后的通过数量等同于红灯数量。
+- `scripts/verify-display-identity.mjs`执行生产投影、身份过滤、缓存合并、outbox编解码及公开`useDesktopState`。公开入口控制首次/已有任务HTML502后GET恢复，权威用户item不带client；观察每个Vue渲染批次、storage写入顺序、outbox删除日志和新state实例经`selectThread`恢复。无证明对照不误认原消息已确认；真正浏览器重载另列。
+- `node --test scripts/runtime-opener-identity.test.mjs`15项通过，使用真实Runtime启动/路由逻辑与临时内存SQLite，只替换外部RPC/HTTP边界。覆盖原始响应、早期接受/晚到GET、相同ID重放、恢复保留或不制造证明、native queue以及伪造/损坏身份。先复现实际POST缺失证明，再补实现；不证明真实模型只执行一次。
+- 两项纳入`verify:core-flows`。前端源码门禁改为同时核对稳定渲染键与真实DOM身份、显式传递opener证明；server smoke保留starting/running阶段和Plan正文断言，区分启动前无证明、真实响应后持久化证明，没有删掉旧验证责任。
+- 最终显示身份专项46/46、服务端关联专项15/15通过；core-flows、conversation transcript（含发送反馈30项）、normalizer、前端源码门禁、governance、前端构建（含vue-tsc）、CLI构建及server modules均exit 0。审查新增真实gateway历史turn误绑红灯、弱turn覆盖原始证明、缓存锁定与冲突渲染键红灯后逐项修复。构建仍有既存Vite配置前向兼容及localPreview大chunk警告；server模块测试中的队列/健康失败日志来自故障夹具，不是7420现场故障。
+
+本轮相关检查命令（显式Node路径运行；不访问7420）：
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-display-identity.mjs
+& 'C:/Program Files/nodejs/node.exe' --test scripts/runtime-opener-identity.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:cli
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:server-modules
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:governance
+```
+
+### 浏览器证据
+
+- 隔离17441加载真实`useDesktopState`、gateway和`ThreadConversation`；所有产品HTTP均受控，WebSocket与逃逸API被阻断，不加载7420 bridge。agent-browser基线在393×852、1365×900均复现ACK时user节点1→3、轮次节点2→4，原节点断开且文字选区消失；快照随后改真实item ID，没有再发生第二次物理替换。
+- 候选393×852、1365×900、884×1104：ACK含原始opener证明，随后fresh权威用户快照不带client，最终公开刷新并清理本地项。各阶段user节点1/轮次节点2仍连接；显示键、选区及scrollTop=120保持，MutationObserver没有确认后的移除/重插，无失败态、重复DOM或意外API。此处基线快照带client，候选另验证新证明契约，不能描述成完全相同网络载荷的前后对照。
+- 无证明反例：ACK无opener且快照无client，投影保留authority与local两条user block，outbox仍1条confirming且删除日志为0；目前组件只渲染turn.opener，单条DOM不代表去重完成。该路径会换节点、丢选区，明确不是稳定性通过。
+- 真浏览器reload保留本夹具storage，不再次提交，经真实`selectThread`水合后公开刷新：逻辑显示键和cache client/display仍保留，当前document发送0次、累计1次，outbox为空。最初夹具直接改selectedThreadId再刷新跳过水合造成假失败，修正夹具而未改生产；旧证据标记为shortcut，不算生产红灯。跨document物理节点、选区和scroll不在重载通过声明内。
+- 普通早确认时序另行取证：POST202仅有request/thread/starting，无turn/opener；新turn的无client快照先到时仍出现2个DOM user/2个投影块，原本地节点保留但位置变化。`turn/started`触发的第一次GET仍starting，既有约750ms二次查询取得证明后收敛回原节点并清理outbox。该结果证明最后能够收敛，不满足“全过程只有一条消息”；不通过修改fixture提前提供证明来掩盖。
+- 截图、DOM引用/选区/请求/缓存JSON及重现说明见`output/display-identity-browser-20260910/README.md`。文字选择通过DOM Range，滚动位置通过显式scroll事件验证；不是手机长按或触摸惯性。884视口的pointer:coarse为false，不是真机折叠屏。
+- 最终源码重启隔离服务后再次验证393手机正例；`verify-before.mjs`、`verify-after.mjs`、`verify-early.mjs`均exit 0，其中early/无证明断言仅确认未解决边界。专用浏览器已关闭，17441已确认无监听，证据目录保留。
+
+Codex对照使用缓存`26.818.5229`包的`local-conversation-thread-turn-entries-CaJaieGL.js`，只核对真实item ID与独立turnSearchKey的职责区分；不是当前安装桌面版完整对齐，没有复制其专有代码。此次技能影响是要求同时验证真实节点与操作身份，而不是只把投影单测当作视觉通过。
+
+### 尚未放行
+
+这是一段有可信关联时的显示身份修复，不是全部P0完成。下一项优先解决已复现的早确认/快照先到短暂重复；首次新任务预览与真实会话仍属两个组件，同轮第二条用户消息的显示、送达失败与执行失败分离仍待处理。旧服务/原生队列及RPC响应成功但证明持久化前崩溃可能没有证明。需要Web与CLI配套候选，不能只更新静态Web就声称本契约已生效。
+
+opener补充证明还依赖候选turn中首条用户item的完整性：当前RPC裁剪保留头部与尾部，但局部通知、回退日志或不完整用户集合的原opener完整性未逐项验证。该限制不能因正常fresh快照通过而忽略；异常冲突分支优先保留真实消息及唯一渲染键，不承诺其DOM完全不变。
+
+收尾协议复核发现更直接的下一步：`output/core-flow-20260909/protocol-schema/codex_app_server_protocol.v2.schemas.json`的TurnStartParams/TurnSteerParams包含`clientUserMessageId`，用户ThreadItem包含`clientId`。当前普通启动及用户归一化未接通这一原生组合，不能继续把“所有原生用户快照均无关联字段”当作结论。本轮未验证实际Runtime的回传/重载语义，也未接入；下轮优先验证原生关联并评估是否替代桥接opener补充证明，避免长期维护多条映射链路。
+
+未替换/重启7420，未提交/推送/发布，未调用真实模型、真机、公网、P95或浸泡测试；完整CX-CE-02和产品目标保持未完成。回滚仅撤销本节对应差异块及新文件，保留先前未提交修改，不还原整个文件或工作区。
+
+## 会话体验P0：队列修改安全降级（2026-09-10，本地候选）
+
+### 决策及用户行为
+
+- 审计确认：`backgroundPersisted=false`、缺少`serverRequestId`或`deliveryState=failed`都不是“从未交给服务”的证明；入队响应丢失后也可能出现这些标记。DELETE 404不能证明原消息未开始，native取消等待后也没有原子状态条件保护。因此按PRD7.2.1的既定降级规则，已进入队列链路的消息暂不开放原位编辑或立即引用。
+- 队列正文改为可选择的只读内容，用内联文字说明限制，不打开替换草稿弹窗。长正文完整换行显示，外层保留34dvh滚动边界；操作区顶对齐，手机和粗指针操作保持44×44px。暗色队列补齐既有surface/border/accent token，仅作用于组件自身，不改全局主题。
+- App编辑入口与历史确认入口均保留防御：原队列项、正文、身份和已有草稿不变，不创建修订上下文或调用移除；独立FailedMessagesTray编辑保持原流程。公开`quoteQueuedMessage`也拒绝旧调用，不DELETE、不restore、不创建第二个outbox/request或触发提交回调。
+- 保留重排、重试和删除入口；本轮没有修复或宣称其取消状态已可靠。底层安全取消、入队不确定响应分类、稳定显示身份仍未完成，不能把关闭入口描述为完整编辑功能已实现。
+
+### 失败优先与复现
+
+- `verify-queue-edit-contract.mjs`以AST提取并执行真实App.vue编辑/确认函数，控制ref、composer和移除边界。八类队列状态、草稿确认期间状态变化/消失、切换任务、缺少composer及独立失败编辑控制，先27失败/4通过，修复后31项通过；另加真实SFC模板事件、SSR全文、scoped CSS可读性及三个粗指针44px目标共5项，当时36项通过。纯内存恢复旧clamp时35/36且仅正文可读性失败。浏览器发现暗色白底浅字后再补第37项：旧样式36/37红，修复后37/37绿；验证编译后的暗色选择器仅命中组件本体、祖先无需scope且不泄漏到全局或浅色。这些检查不替代实际HTTP或浏览器证明。
+- `verify-queue-quote-safety.mjs`通过真实`useDesktopState`的storage及公开队列恢复装载；native/external/server-failed与取消200/404/409/ACK丢失矩阵，加无服务端ID的queued/failed，共14项。旧实现全部失败并观察到DELETE、新client ID/outbox或restore；保护后14项通过，调用期间队列不消失且变更请求为0。最终实现不进入取消路径，因此不声称底层取消协议通过。
+- 两项已纳入`verify:core-flows`。旧源码门禁同步把“必须立即引用并恢复”改为“禁止取消/再发送，解释限制”，没有静默删除验收责任；原fixture也不再模拟已撤下的引用流程。
+- 最终源码的37项编辑/UI契约、14项公开引用入口通过，整套core-flows再次通过；前端源码门禁、conversation transcript、normalizer、governance及diff检查通过。`build:frontend`（含vue-tsc）仅保留已有Vite配置前向兼容和localPreview大chunk警告；不将这些检查冒充服务端取消已修复。
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-queue-edit-contract.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-queue-quote-safety.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+```
+
+Codex对照：读取缓存桌面包`queued-message-list-DJj2tNz-.js`的编辑、删除、立即发送回调与禁用状态。保留紧凑队列层级，但不照搬未经本项目协议保证的修改能力；这是有意的安全差异，不是当前安装桌面版的完整对齐。
+
+### 浏览器证据与边界
+
+- 隔离17440加载真实`QueuedMessages.vue`及全局样式，不加载gateway；真实API和实时连接被阻断，保留操作仅记录组件事件。agent-browser覆盖1365×900、393×852、884×1104的明暗六组：没有编辑/引用入口或事件，草稿保留，重排/重试/删除事件参数正确，无横向溢出、页面错误或意外API。它不证明实际删除/重试的服务端结果。
+- 393×852长消息可在34dvh队列内滚动阅读全文；后续行按钮显式滚入后可命中并触发正确事件，重试/移动/删除均至少44×44px。全文通过DOM Range选择验证，不冒充真机长按选择；884×1104为视口验证，预设设备的`pointer:coarse`仍为false，所以粗指针实际交互未验证，只有CSS契约测试。
+- 暗色截图先复现白底浅字，原因是队列位于transcript旁边，未继承其局部暗色背景token。仅在队列组件内补齐已有暗色调色板，三组暗色重新取证；正文计算颜色为`rgb(244,244,245)`，行背景为`rgb(24,24,27)`，正文对比度16.12:1。修复前后截图及JSON、复现步骤见`output/queue-safety-browser-20260910/README.md`；`verify-reports.mjs`六组及三暗正文对比度检查通过。不使用fixture覆盖队列主题掩盖缺陷。本次专用浏览器与17440服务已关闭，无该端口监听，未触及7420。
+
+本轮仅本地候选；未替换/重启7420、未提交/推送/发布、未调用真实模型或设备。浏览器证据单列于`output/queue-safety-browser-20260910/`；只读UI与桩事件不等于真实执行次数、手机锁屏或公网验证。保留上一批未提交改动；回滚仅撤销本节对应差异块，不还原整个文件或工作区。
+
+## 会话体验P0：发送确认可信（2026-09-10，本地候选）
+
+### 本轮行为契约
+
+- 无效ACK（HTML、截断JSON、空对象、缺少必要字段、未知状态或不匹配身份）不是明确拒绝。HTTP 404/408/5xx与网络不确定性沿用现有有界恢复；明确400参数拒绝仍失败一次，不因错误正文包含网络关键词就自动重发。
+- 恢复查询只接受原`clientMessageId`；发送ACK若携带身份必须匹配请求，已有会话的确认不得绑定另一线程。兼容202及尚无thread/turn的`pending_start`，不因严格校验破坏合法的异步接受。
+- 每次重放保留原请求完整正文和`clientMessageId`，先核对再重试；现有700/2000/5000/10000ms退避耗尽后保留waiting outbox，恢复时取得确认不再额外提交。没有新增重试循环或后端状态机。
+- 权威用户快照早于outbox清理时，按`clientMessageId`／`clientUserMessageId`抑制本地副本，不按文字去重。同文不同请求或缺少身份的消息仍各自保留。
+- 仅收到用户item、没有turn状态/开始/结束证据的轮次仍待启动；不继承旧idle的完成状态，不借用户消息时间伪造处理用时。有无本地残留均一致，明确running/waiting/completed/failed保持权威语义。
+
+### 自动化结果与复现
+
+- API边界14项通过：先复现无效响应丢失错误类型、空响应被当成failed及身份校验缺口，再最小修复。
+- 公开`useDesktopState`入口44项通过：首次/已有会话、晚到running/completed、无效查询、明确拒绝及退避耗尽恢复；同步观察每个失败状态，Vue提交批次观察重复气泡，完整POST正文和请求ID逐次相等。早期12个异常场景先记录红灯；不得把最终成功当作中间无误报的唯一断言。
+- `send-feedback-smoke.ts`现30项通过（原17项＋本轮13项），含4个快照抢先去重红→绿、同文不同ID控制、4个早到用户确认/有无本地残留及4个明确状态控制。审查先复现2条假终态红灯，再补齐无本地残留分支；完整conversation transcript通过。
+- `verify:core-flows`已纳入API14项和公开入口44项；原有计划、目标、队列、计时及RPC公平性检查也全部通过。normalizer、前端源码门禁、governance、`build:frontend`（含vue-tsc）通过；构建保留已有Vite配置前向兼容及localPreview大chunk警告，不扩大到无关重构。
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' --test scripts/runtime-send-response.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-delivery-contract.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:governance
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+```
+
+上述状态测试使用受控HTTP/WebSocket、内存storage及虚拟退避时钟；既有队列测试使用临时SQLite，不连接7420、不调用模型、不写用户数据库。请求重放次数及mock请求记录不能证明真实服务恰好执行一次。
+
+### 浏览器及尚未完成的门禁
+
+- 隔离17439，真实`useDesktopState`和`ThreadConversation`，所有API桩化且禁用bridge；agent-browser验证393×852、1365×900两端的HTML502→查询404→同ID重放→晚到running及权威user快照。首次渲染后的每个DOM观察批次均1条用户消息、0个failed，应用/页面错误为空，无意外API；证据与复现见`output/delivery-browser-20260910/README.md`，截图及JSON同目录。这是浏览器尺寸模拟，不是真机或公网。
+- 本轮Codex对照仅使用缓存提取包`output/codex-app-extracted-26.818.5229/`，核对`clientUserMessageId`及连接恢复/运行语义；不是当前安装版本实测，没有复制其专有实现。修复保留本项目单一投影和已有恢复协调器。
+- 完整CX-CE-02仍未放行：同页确认绑定后用户DOM及显示ID仍会改变，确认期间文案仍“发送中”；实际服务一次执行、设备和统计性能门槛未验证。用户原始故障现场未复现，只复现并修复了同类可触发路径。
+- 下一项P0：已接受队列消息编辑时，当前UI在取消结果未知便删除本地项并允许提交修订；DELETE 404不能证明原请求已安全取消，存在原消息先开始的竞态。需先明确安全取消/确认契约，无法保证时禁用已接受消息的原位编辑并保留草稿，不能用乐观替换掩盖。
+- 执行失败与送达失败分离、稳定显示身份及组合状态其余场景仍待P0；Composer上缘运行栏、公开进展优先、动画/权威计时和阅读保护待P1。本轮不改变完整产品目标或正式发布阻塞状态。
+- 未替换/重启7420、未提交/推送/发布，未执行真实模型、手机、后台两分钟、P95或浸泡测试。回滚只撤销本轮对应差异块，保留先前修改；隔离测试服务与浏览器完成后关闭。
+
+## 7420替换与前端复核（2026-09-10）
+
+- 本轮获准替换本地7420；先核对RPC、重启保护、Runtime非终态/队列、原生队列及active goal均为空，再优雅退出旧实例。保留原配置、认证、数据库和可恢复部署；没有提交、推送或发布。
+- 真实新测试任务跑完5轮：Markdown对话、TXT/图片读取、20秒等待期间入队、原生Plan方案、页面按钮确认执行。刷新后5轮均completed、4个最终回复、1份已提交方案；goal/queue为空且无虚假活动态。暂停目标经真实API创建、页面编辑/刷新/确认清除，未执行自然续跑。
+- 本机新会话单样本：气泡25ms、服务确认30ms、权威turn启动729ms、运行可见754ms、首段数据9204ms/可见9230ms；不是公网P95或桌面同轮对照。上传轮气泡34ms/服务确认39ms。回复已显示后未被加载态替换；保留偶发已分发历史RPC约6秒的未定位项。
+- 附件显示身份新增契约：明确的Windows绝对路径与同文件的`file:///C:/...`仅显示一个标签，保留首个原始名称/路径；URI只解码一次，不误合并`#/%`编码代表的不同文件，不改文件访问权限或共享路径工具。`scripts/conversation-transcript-smoke.ts`新增24个投影场景红→绿；reply-quality夹具包含同文件两种写法，浏览器显示一个checklist标签，并验证首次图片503后重试成功。
+- 搜索显示新增契约：索引返回partial时，“更多会话仍在整理”与已有本地/远端匹配结果同时显示，不能因提示出现而卸载结果；没有匹配时只显示对应空态。真实7420先复现结果1→0，再修复提示与列表互斥的模板分支。`node --test scripts/verify-sidebar-search-render.mjs`直接渲染生产SFC模板，9项中2项修复前失败、修复后全部通过；最终7420在独立浏览器页注入partial响应，桌面/手机均保持1条结果和提示，随后刷新移除注入。
+- 最终前端构建和公开投影/样式检查通过；核心65项、搜索模板9项、retention4项、DOM反馈6项、图片URL3项、normalizer、CLI构建/server modules均通过。真实7420的桌面/手机/折叠屏尺寸无横向溢出；有暗色浏览器复核，图片503重试属于隔离夹具证据，均不是真机或公网证据。
+- 精确部署哈希、端口/PID、截图、可重复命令、工具误报及回滚路径见 `output/local-deploy-20260910-core/report.md`。附件去重与搜索修正均只更新Web资源，保留本轮先前版本的哈希资源，不再次重启后端。Android、自然目标完成、定时任务、长时间浸泡及发布门禁仍未覆盖。
+
+## 计划、目标、队列核心契约（2026-09-09 至 09-10，本地候选）
+
+### 用户行为契约
+
+- 待执行方案使用原生计划协议；执行确认必须切回执行模式。结构化 `plan.text` 独立展示 Markdown 正文，不藏在默认折叠的过程记录中；`turn/plan/updated` 进度清单不能冒充待执行方案。普通最终回复不靠文本猜测成计划卡。
+- 只有最新且已完成的方案可直接提交；从紧随其后的已送达确认消息恢复“已提交执行”，刷新、跨任务同名计划不能丢失或串状态。发送中不冒充成功，明确发送失败后可重试；按钮标识“待确认”，不能将方案生成完成误称为执行完成。
+- 目标通知的 live/replay 路径一致；旧 GET/SET/CLEAR 不覆盖较新的暂停、完成或清除。整秒时间戳无法区分响应先后时重新读取权威值，不使用 `>=` 猜顺序。更新及重读期间不自动续跑，重读失败保留状态、显示错误并等待恢复。
+- 目标续跑让位于已排队消息、在途发送、执行中任务及全局/本任务待输入；暂停、预算/额度受限、阻塞、完成不自动启动。
+- 队列取消后迟到的配置失败或原生列表不能恢复消息；准备期间重排控制实际启动顺序，删除头项后的下一条不额外等4秒扫描。失败首项必须显式处理，不能被重排绕过；重复ID的无效重排在修改原生队列前拒绝。
+- 同毫秒入队仍保持插入顺序，SQLite重新打开后不变；同一 clientMessageId 的重复入队、双连接消费保持一次启动。steer失败原位恢复一次。
+- 后台插件/MCP/列表读取不占满会话读取通道，后台也有公平调度机会。发送/停止原本就走紧急旁路，本次不能宣称修复了它们在普通读取队列里等待；后台冷加载可能更晚。
+- 已完成轮次的实际开始/结束时间优先于Runtime同步时刻，重读和刷新不得把回复耗时拉长；无权威轮次时间时才补缺。
+
+### 可重复验证
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:core-flows
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-retention.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-chat-feedback-dom.mjs
+& 'C:/Program Files/nodejs/node.exe' --test scripts/conversation-style.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:cli
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-server-modules.mjs
+```
+
+`verify:core-flows` 不连接现有7420、不调用真实模型、不修改用户数据库；状态测试使用受控HTTP/WebSocket，队列使用临时SQLite。真实模型、浏览器、设备分别验收，详见 `output/core-flow-20260909/report.md`。
+
+### 浏览器和真实服务边界
+
+- 静态fixture：`#/__regression/conversation-blocks?regression=frontend&plan=1` 核对方案正文、标题和列表、44px手机执行按钮；点击后仅fixture模拟提交。加入 `planHistoryImplemented=1` 后刷新，历史确认能恢复禁用状态，不依赖本地已提交ID数组。
+- `#/__regression/composer-shell?regression=frontend&goal=1&goalSwitch=1&planMode=1` 验证暂停/恢复、编辑、切换任务清掉草稿、清除二次确认、计划模式不被目标操作退出。
+- 393×852、884×1104、1440×900及暗色检查无核心内容横向溢出；浏览器尺寸模拟不等同手机真机、锁屏、Doze或后台两分钟恢复。
+- 17424使用独立Runtime及认证存储。首次真实四轮验证了只计划提示、确认后安全20秒等待、排队A/B顺序与最终清空；当时发现原生计划参数契约错误，因此该首次结果不算原生Plan模式或真实计划按钮证明。
+- 修正协议后另建原生计划测试，真实返回 `[userMessage, plan]`。补齐已完成turn对plan/delta残留的结算后，真实Web按钮发出精确执行确认、收到预期结果，刷新保持两轮completed及“已提交执行”。最终证据 `native-plan-result.json`、`native-plan-ui-result.json`；该UI单样本气泡32ms、运行状态144ms、首回复4407ms，不是P95或同模型速度对比。
+- 真实目标验证仅覆盖paused创建、读取、编辑、清除，最终goal为空且无执行轮次；自然达成与真实自动续跑未验证。真实4轮历史在Web刷新后仍为4个最终回复，无虚假运行状态。
+- 当前7420、Git/CI、两小时浸泡、Android及正式发布不因这些候选检查通过而自动通过。本轮没有部署到7420或提交/推送/发版；回滚仅撤销本轮对应差异块，不还原整个脏工作区。
+
+## 回复呈现质量与可见性计时（2026-09-09，本地候选）
+
+### 用户行为契约
+
+- 已选会话完成后，侧栏列表暂时漏项不得清空已显示正文；显式回退、归档、切换后的状态释放仍然生效。检查每次中间响应式更新，不只检查最终结果；远端 `thread/deleted` 不在本次覆盖范围。
+- 仅解析完整的前置附件传输封装，兼容 `My request` / `My request for Codex`、BOM、CRLF。普通标题、代码块、引用和不完整封装不误删；附件按路径去重，实时与快照走同一投影。
+- 本地图片复用 `/codex-local-image` 鉴权及路径授权，不输出空 `src`。加载中有占位，失败有44px重试，成功后开放链接；正文不展示上传协议/临时路径。
+- Markdown标题字重600；无序/有序/嵌套列表保留标记。暗色背景与代码表面仅作用于会话，Vue编译后的CSS不能退化为裸 `.dark` 全局规则。
+- 可见指标只归属本页提交的精确thread/turn/item；sending/accepted不等于running。隐藏、折叠、离屏、恢复历史不补记；170个历史标记不能挤掉末尾当前回复；里程碑完成后100次重复更新不增加布局读取或存储写入。
+- `assistantRenderOverhead`保留旧字段名，但含义是“首数据到实际可见的墙钟间隔”，包含用户停留历史区/隐藏页面的时间，不能当作纯CPU渲染耗时。
+
+### 定向命令
+
+本机使用显式Node22，避免旧npm shim：
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-retention.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-chat-feedback-dom.mjs
+& 'C:/Program Files/nodejs/node.exe' --experimental-strip-types --test scripts/local-image-url.test.mjs
+& 'C:/Program Files/nodejs/node.exe' --test scripts/conversation-style.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+```
+
+### 隔离浏览器验证
+
+构建后检查17423未占用，运行 `node scripts/reply-quality-fixture-server.mjs 17423`。它仅绑定localhost、只读构建资源，只提供固定测试图片/收藏夹响应；不启动bridge、模型任务或写用户状态，不替换7420。使用agent-browser，结束后关闭会话及该测试服务。
+
+- 打开 `http://127.0.0.1:17423/#/__regression/conversation-blocks?regression=frontend&fixture=reply-quality`。首次固定图片响应503，点击重试后成功，刷新仍可见。断言naturalWidth>0、opacity=1、无封装文本、恰好两个附件标签、h3字重600、ul为disc。
+- 改为 `fixture=send-feedback` 后刷新页面，依次操作sending/accepted/running/completed。核对 `window.__cxCodexChatFeedbackMetrics`；旧final不记为新回复；隐藏/离屏后指标保持缺省，恢复可见才记录，重复resize不改既有时间。
+- 393×852、884×1104、1440×900无文档或会话横向溢出；另检查手机暗色正文、代码与图片恢复状态。尺寸模拟不等同Android/折叠屏真机证据。
+- `streamStress=1` 本次5秒窗口：1600个投影活动、105次更新、101次心跳、操作成功、无横向溢出；该窗口无>=50ms Long Task，页面生命周期最大定时器迟滞31ms。默认仅展示最新过程，未展开全活动，因此不是全展开压力测试、P95或长期稳定性门禁。
+- 报告与截图：`output/reply-quality-20260909/report.md`。未替换7420、未复测真实模型发送/附件读取，未推送/发版；本地代码与线上可用性分别验收。
+
+## 发送反馈与会话日志身份（2026-09-09，本地候选）
+
+### 验收边界
+
+- `thread/started` 只代表会话创建，不启动执行计时，也不得让空闲会话自动进入排队模式。
+- 未取得权威 turn 的本地消息使用 `submitting`；分别显示发送中、正在确认送达、已送达且等待启动、等待网络。只有真实队列条目才显示排队；只有执行证据才显示思考与执行计时。
+- 旧轮 idle/completed 不得结算新提交；旧 active Runtime 不得复活已完成轮次或与新轮同时运行。真实 turnId 回填后同一用户消息只显示一次，失败发送不继承旧执行耗时。
+- 单/双 UUID 日志文件名只用来发现候选；日志首行 metadata 的线程身份才决定内容归属和文件变化通知的目标。读取有字节上限，拒绝越界路径、身份冲突和目录重定向；显式 RPC 路径也必须验证。
+- light RPC 和缓存仍指向旧分片时，恢复必须读取最新有效同线程分片，并将实际路径写回恢复结果。不能验证的 RPC 文件路径不得进入正文读取，转由该线程的正式 RPC 获取内容。
+
+### 自动化与证据
+
+- `npm run verify:conversation-transcript`：含 `scripts/send-feedback-smoke.ts` 的 17 项状态/代际检查及已有投影、导出、长历史性能检查。无真实开始时间时不借用发送时间或旧 Runtime 时间伪造计时。
+- `npm run verify:session-identity`：16 项，15 通过；Windows 未授予文件 symlink 创建权限的一项跳过，真实目录 junction 防护已通过。
+- `npm run verify:server-modules`：覆盖创建会话、日志变化通知、分片旋转缓存收敛和未验证 RPC 路径拒绝。
+- `npm run test:send-feedback:browser -- --base-url http://127.0.0.1:17421`：先在隔离端口启动本地静态预览；独立无头浏览器验证桌面 1440×900、手机 393×852 的七种发送状态、单消息、无执行假计时、无横向溢出。脚本可用 `CX_CODEX_PLAYWRIGHT_MODULE` / `CX_CODEX_CHROMIUM_EXECUTABLE` 指定已有测试运行时。
+- 浏览器仅模拟初始化收藏 GET，其余 Runtime API/WS 全部阻断。截图与报告：`output/send-feedback-browser-20260909/`。它不代表真实网络首字耗时、Android 锁屏恢复、7420 部署或正式发布已通过。
+- 当前目录上的只读分片定位样本约 143–167 ms，是额外的恢复路径发现成本，不是端到端 P95；后续应以真实链路时间戳验证后决定是否增加带文件变化失效的发现缓存。
 ## Markdown 15 compatibility (2026-09-08)
 
 - Conversation ordered lists preserve their original starting number when parser attributes are numeric or textual. Headings, quotes and unfinished code fences retain their existing behavior.
@@ -58,6 +471,8 @@
 - 回滚只恢复 `TaskPetOverlayService`、`TaskPetRuntimePolicy`、相应偏好键、真机验证脚本与前端活动任务补充来源；不得清理用户会话、Runtime Store、通知权限或移动端认证。
 
 ## Quiet Workbench UX-70 候选收口（2026-08-29）
+
+> 以下 Quiet Workbench 章节保留远端 2026-08-29 候选原始证据，并非本轮合并后验收。旧会话/Composer 呈现以随后 Sema 重建及 2026-09-10 公开进展、只读队列和恢复合同为准；历史 Android、浸泡和 Release 结果不自动关闭当前候选门槛。
 
 ### Expected behavior
 
@@ -3962,21 +4377,25 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Steps
 1. Open Settings and locate `权限控制`.
-2. Toggle `完全放行权限请求`.
-3. Confirm `命令执行权限`、`文件变更权限`、`MCP 工具权限` become disabled while full allow is on.
-4. Turn full allow off and cycle each permission row between `自动允许` and `每次询问`.
-5. Restart the app server and reopen Settings.
-6. Trigger a command approval or MCP tool permission request.
+2. Confirm the section contains exactly one switch row `自动批准权限请求` (a focusable native button with `role="switch"` and a boolean `aria-checked`) and no `命令执行权限` / `文件变更权限` / `MCP 工具权限` rows.
+3. Confirm the permission help paragraph is actually rendered in both switch states (visible text, not only a tooltip): it stays at the standard hint size/padding, is referenced by the switch through `aria-describedby` (stable id `permission-switch-help`), and always ends with `关闭不会撤销已有会话授权。` on both a desktop and a `393×852` viewport. Confirm no other previously hidden settings hint became visible.
+4. Toggle the switch off and on with mouse/touch, then with the keyboard (Tab to focus, Enter/Space to toggle); confirm the row keeps a touch target of at least 44px.
+5. While a save is in flight click the switch again: the row stays disabled, no second `PUT /codex-api/web-settings` is sent, and a saving status is visible and announced (the permission status paragraph keeps `role="status"` and `aria-live="polite"` for busy and error text).
+6. Force the save to fail (stop the app server or make the PUT fail) while the switch is ON: an announced error status appears, the switch rolls back to the last credible value, and the panel then shows the authoritative value read back with `GET`.
+7. Restart the app server and reopen Settings.
+8. Trigger a command approval, a file change approval and an MCP tool permission request, plus a dedicated permission range request.
 
 #### Expected Results
-- Permission changes are saved to `~/.codex/web-bridge-settings.json`.
-- Saved permission state survives restart.
-- When a permission is set to `自动允许`, matching permission requests are approved without showing a pending card.
-- When a permission is set to `每次询问`, matching requests show the normal confirmation card.
+- The single switch persists `allowAllPermissionRequests` through `PUT /codex-api/web-settings` into `~/.codex/web-bridge-settings.json`; the `GET`/refresh/restart value is the same boolean and matches the UI.
+- The legacy `commandExecution` / `fileChange` / `mcpTools` fields stay in the saved payload (wire compatibility) but have no UI control and no effect on the effective policy; an invalid or missing value normalizes to `ask`, and only a literal boolean `true` turns the switch ON.
+- OFF (default): new command, file and recognized MCP tool permission requests show the normal confirmation card and are never auto approved, even when a legacy field still holds `allowForSession`.
+- ON: new command, file and recognized MCP tool permission requests are auto approved without a pending card; a dedicated `item/permissions/requestApproval` range request still waits for an explicit decision for the current turn, and unsupported `item/tool/call` requests are still rejected.
+- Turning the switch off only affects new permission requests: it does not revoke session grants the Runtime has already remembered, and a repeated request may never arrive again; it does not change the sandbox, network or permission profile.
+- Settings copy only promises the handling of new permission requests.
 - Telegram settings and Telegram endpoints are no longer present.
 
 #### Rollback/Cleanup
-- Delete `~/.codex/web-bridge-settings.json` to restore defaults.
+- Restore the switch to the value recorded before the test, or delete `~/.codex/web-bridge-settings.json` to restore the defaults.
 
 ### Feature: Mobile dictation control
 
@@ -4821,7 +5240,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 准备一个当前无运行任务的已有会话。
 
 #### Steps
-1. 打开会话，点击输入区上方的 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
+1. 打开会话，点击输入区的 `+`，选择 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
 2. 确认目标条显示目标、运行提示、预算使用百分比和耗时；刷新页面并重新进入会话。
 3. 在目标运行时点击 `暂停`，确认任务完成后不会自动继续；再点击 `继续`，确认空闲时继续推进。
 4. 点击 `编辑` 修改目标，确认状态和已用量保持为服务端返回值。
@@ -4841,6 +5260,53 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Rollback/Cleanup
 - 清除回归目标；若需回退，恢复 `threadGoal.ts`、`useDesktopState.ts`、`ThreadGoalBar.vue` 及 App 接线改动。
+
+---
+
+### Feature: 最新过程优先与持续目标菜单入口（2026-08-31）
+
+#### Prerequisites
+
+- 会话内容继续以固定 Sema 参考下的唯一 `ConversationProjection` 为语义来源，不引入 7420 原有消息归并、final 推断或恢复回退。
+- 准备包含多条 commentary/activity、一个显式 final 和空持续目标的结构化回归夹具。
+
+#### Steps
+
+1. 打开运行中的会话，确认过程区域默认只挂载最新一条过程信息；当存在历史过程时，最新过程正文最多显示三行。
+2. 点击 `查看历史过程（N）`，确认首次只增加 17 条历史过程；继续点击 `再看更早过程（N）` 可分批加载，点击 `收起历史过程` 回到最新一条。
+3. 展开已完成回合的过程，确认同样先显示最新一条，并可按需查看完整结构化历史；最终回复保持独立、清晰且位于视觉主层级。
+4. 打开包含多文件变更的回合，确认文件变更默认只占一行紧凑摘要且不挂载可见文件行；点击摘要后才显示路径、增删统计和差异入口。
+5. 打开没有显式 `phase: final_answer` 的普通终态回合，确认不显示“本轮没有可确认的最终回复”等占位提示；没有真实计时且没有过程入口的回合也不显示“执行耗时不可用”，只保留轻量分隔线。打开失败、中断或停止回合，确认可行动状态仍可见；终态 final 不显示持续闪烁光标。
+6. 在 393 x 852 手机宽度和 884 x 1104 粗指针宽度重复步骤 1-5，确认历史与文件入口至少 44px、目标条正文保持单行紧凑且页面无横向溢出。
+7. 在没有持续目标的会话点击输入区 `+`，确认菜单内出现 `设置持续目标`；点击后菜单关闭、原目标编辑器打开并自动聚焦。
+8. 确认输入区上方不再出现独立的 `设置持续目标` 按钮；已有活跃目标的目标栏及暂停、继续、编辑、清除操作保持不变。
+9. 在有更新实时事件的长会话中冷启动手机宽度页面，令初始 Runtime 快照的 `lastEventSeq` 落后于已缓冲事件；确认快照内的结构化历史回合仍进入投影，而旧运行态字段不覆盖新事件。
+
+#### Expected Results
+
+- 完整过程历史仍保留在唯一结构化投影中；本功能只限制默认渲染窗口，不删除、不重排、不改写语义。
+- 运行中和显式展开的已完成过程均以最新内容为默认摘要，历史必须由用户主动展开并按 17 条一批有界加载。
+- 最终回复是会话正文的视觉主体；过程、状态和历史入口保持次级但可访问。
+- 文件变更默认摘要高度不超过 56px，文件行仅按需展示；普通终态缺失显式 final 时视觉静默，无真实计时且无过程入口时不渲染不可用提示，失败/中断/停止保持可见，终态 final 不保留闪烁光标。
+- 持续目标创建入口位于 Composer 的 `+` 菜单，移动端菜单项和历史操作满足 44px 触控目标。
+- `thread/read` 历史窗口与 Runtime 状态采用不同的接纳边界：较旧快照的结构化回合仍按稳定 turn/item identity 进入唯一投影，较旧 execution/stop/active-turn 字段继续被事件序号门禁拒绝。
+
+#### Regression Evidence
+
+- `vue-tsc --noEmit`、前端 source-only、normalizer、conversation transcript、生产 Vite、local-preview Vite 和预压缩脚本均直接退出 0；最终投影压力为 26.5ms/1602 回合、5.5ms/1600 活动。`npm.cmd run build:frontend` 的内部完整构建成功，但旧 npm 包装器因无法清理全局日志返回 EPERM，随后按同一构建步骤直接复验为 0。
+- 候选页面的独立 Headless Playwright 验证桌面、手机、折叠屏默认过程数为 1、三行截断、首批展开后挂载 18 条、收起后恢复为 1；手机和折叠屏历史入口为 44px，零横向溢出。
+- 当前真实 `http://127.0.0.1:7420` 返回的首页 SHA-256 为 `013BB44446D03F6F21E517081E41B86D5C0AE93CE4FEBE2FF44CE112FF2254D9`。真实地址的 CDP 夹具在 1600 条投影活动下仅挂载 1 条默认过程；桌面、393 x 852 手机和 884 x 1104 折叠屏均无横向溢出，移动端触控目标最小 44px。
+- 真实 7420 Composer 回归确认独立创建按钮为 0；`+` 菜单内目标项在手机宽度为 302 x 52px，点击后菜单为 0、编辑器为 1 且获得焦点。证据位于 `output/regression-7420/latest-process-goal-20260831`。
+- 修复前真实手机冷启动只保留 1 个当前回合和 0 个 final，而服务端同一结构化窗口有 10 个 completed turn / 8 个 `final_answer`。修复后的 500ms-20s 冷启动采样持续保持 10/8；严格真实会话脚本在桌面、手机和折叠宽度均通过 10 个回合、8 个 final、每回合最多一个 final、零旧叠层、零内部上下文泄漏、零横向溢出和零浏览器错误。截图位于 `output/regression-7420/latest-process-goal-20260831/current-7420-real-fixed-retry`。
+- 全量 `test:7420:frontend` 的浏览器矩阵被真实运行态的 `uncertainRequestCount=1` 空闲门禁阻止；其余 pending/queued/server-request/plan-turn 计数均为 0。未清除或取消真实任务来强行通过门禁，产品定向 Web 夹具已在同一真实 7420 地址独立通过。
+- 最新候选夹具在桌面、393 x 852 手机和 884 x 1104 粗指针折叠屏均为 `openFileSummaryCount=0`、`visibleFileRowCount=0`，摘要高度分别为 48/46/46px；缺失 final 占位数和终态闪烁 final 数均为 0，手机/折叠屏最小触控目标为 44px且横向溢出为 0。1600 活动压力窗 `maxLongTaskMs=0`、按钮保持响应；截图位于 `output/regression-7420/mobile-ui-candidate-20260831/fixture`。
+- 隔离候选 Bridge 的真实长会话严格缓存重载通过：`source=local-cache`、`selectionLatencyMs=283`，满足 300ms 门槛；三种视口均为 8 个文件摘要默认折叠、0 个可见文件行、0 个缺失-final 占位、0 个终态闪烁 final、0 个旧浮层、0 个内部上下文泄漏和 0 横向溢出。证据位于 `output/regression-7420/mobile-ui-candidate-20260831/isolated-cache-real`。
+- 已将最新静态候选可回滚切换到当前 `http://127.0.0.1:7420`，首页 SHA-256 为 `72F7302FAB455F048E5D08101192284F24CCDCEA6008B8E8171C33B0586BFFFD`，最近备份为 `E:\javaword\CXCodex\codexui-sidebar-shortcuts\dist.web-previous-20260831-085628`。当前 7420 的 fixture、真实目标 thread、Composer、合同视图、Shell、Sidebar 与 hardening CDP 回归均通过：手机/折叠屏最小触控目标 44px、横向溢出 0；文件摘要 46px 且默认折叠；没有真实计时且没有过程入口时仅保留分隔线，三种会话视口 `unavailableTimingCopyCount=0`；1600 活动窗口 68 次更新/65 次心跳、`maxLagMs=11`、`maxLongTaskMs=0`；Composer 本地反馈 12.4ms，目标入口只在 `+` 菜单内且点击后编辑器获得焦点。证据位于 `output/regression-7420/mobile-ui-current-7420-20260831`。
+- 最终收口中 conversation transcript 为 23.1ms/1602 回合、5.1ms/1600 活动；frontend normalizers、frontend source-only、server modules、治理、`vue-tsc --noEmit`、生产/local-preview Vite、CLI、预压缩、`node --check` 和 `git diff --check` 均直接退出 0。隔离候选的旧完整 PowerShell 浏览器矩阵两次通过健康、诊断和工作区前置检查后，都在 `agent-browser set viewport 1440 900` 首步返回 `CDP response channel closed`；清空其专用会话并重启守护进程后结果不变，因此记录为测试工具故障，不将其冒充产品失败或完整矩阵通过。
+
+#### Rollback/Cleanup
+
+- 若需回退，整体恢复过程披露窗口、Composer 菜单入口与对应回归断言；不得恢复旧 7420 会话推断、双投影或缓存兼容路径。
 
 ---
 
@@ -12587,26 +13053,42 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Android settings update entry consolidation
 
 #### Prerequisites
-- Local 7420 is running from the latest `C:\src\CX-Codex` build.
-- Android shell assets have been synced after the frontend build.
-- For the native download prompt branch, GitHub latest release must have an Android APK asset and a version greater than the installed app version.
+- The current frontend dist (`npm.cmd run build:frontend`) served from a normally started local backend. A short-lived instance on its own isolated port is enough for this section; restarting real 7420 is not required.
+- Native-only and unverified here (optional): a synced Android shell build, plus a GitHub latest release carrying an Android APK asset newer than the installed app version, are needed only for the native download-prompt step below.
 
 #### Steps
 1. Run `git diff --check`.
-2. Run `npm.cmd run build`.
-3. Run `npm.cmd run mobile:android:sync`.
-4. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
-5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry`.
-6. On Android, open Settings and confirm there is no separate `APP 更新`, `版本状态`, `更新包`, or `重新安装` block.
-7. Tap the `当前版本` card and confirm it shows a checking/loading state while reading GitHub release metadata.
-8. If GitHub latest version is greater than the installed app version and has an Android APK asset, confirm the settings sheet closes and the download confirmation dialog appears.
-9. If the installed version is current, confirm the card settles to `已是最新` and no download dialog appears.
+2. Run `npm.cmd run build:frontend` (skip the Android sync unless the native-only step is being checked).
+3. Start the App from that dist on an isolated port and open Settings in an ordinary browser; a 7420 restart is not required.
+4. Open Settings in an ordinary browser (not the Android shell) and confirm the about block's brand kicker reads `CX-Codex Web`, not `Android Shell`; `Android Shell` only appears when a real native bridge is present.
+5. Confirm each version source is labelled separately: `网页构建版本` (always readable; the Vite build-time version), `连接的后端` (from `GET /codex-api/updates/backend`), and, only on the native Android build, `此设备 Android APK` (native `versionName`; shows `未读取` when unavailable and never falls back to the web version).
+6. Confirm the `连接的后端` row shows the frozen run identity (version · build id · build kind), the instance id, the unverified source (`来源未核验`), and the installation applicability reason once; no install/apply/restart control exists for the backend, and a placeholder `unknown` identity/value renders as `未知`/`此后端暂不提供版本信息` rather than `vunknown`.
+7. Confirm opening Settings performs only the read-only status GET; the metadata check (`POST /codex-api/updates/backend/check`) happens exactly once per explicit `检测后端更新` click and carries `X-CX-Codex-Intent: backend-update-check` with the empty JSON body `{}`.
+8. While a check runs the button is disabled (44px hit target) and no second request is sent; on failure the lock releases for retry, the frozen identity stays visible, and the previous comparison is cleared.
+9. Read the backend version once, then make the status endpoint fail for the App (for example an isolated proxy or harness answering 404) and close/reopen Settings: the last successfully read version stays visible, the previous comparison is gone, and a visible readable error line states that the read failed and can be retried, without presenting the cached version as freshly verified. When the status endpoint answers again, the stale error clears.
+10. On the native build the existing user-triggered APK action (version card → check/download prompt) still behaves as before; this step is not evidence of a real-device install.
 
 #### Expected Results
-- Settings keeps a single update entry under the app/version card: `当前版本` plus the current check/update action.
+- Settings keeps a single permission switch and a single user-triggered update entry; the P1 permission help stays visible and the G1 list filtering is unaffected.
 - The old App update section, repeated update package field, release page button, and same-version reinstall path are no longer shown.
 - Loading feedback appears inline while checking or downloading.
 - Download confirmation appears only when GitHub latest Android release is newer than the installed version and has an installable APK asset.
+- The about block labels `网页构建版本`, `连接的后端` and (native only) `此设备 Android APK` separately; the web build version is never used as the backend version or as the APK version.
+- Backend comparison labels stay honest about `newer` / `equal` / `ahead` / `unknown` / `error`, always state the unverified source, and never describe a metadata result as an installed or applied update.
+- While `automaticUpdateSupported === false` the server reason stays visible even when a newer release is found, and there is no download/apply/install/restart control for the backend.
+- A backend that cannot be identified (old backend 404/unknown) shows unavailable/unknown and is not backfilled from the page build version.
+- A failed read of the running backend (status endpoint unavailable/404, timeout, transport error) keeps the last successfully read version visible on screen, clears the previous comparison, and shows a visible readable error/status line saying the read failed and can be retried; the retained value is never presented as freshly verified, and the line clears on the next successful read. With no prior identity the row stays an honest unknown/unavailable instead of a fabricated version.
+- A late or mismatched result from another backend instance never replaces the current identity; closing and reopening settings re-reads the authoritative status.
+
+#### Unverified scope (U1a2 read-only detection)
+- Not covered by this feature section: real managed installation/rollback (no install transaction exists), acceptance of a real GitHub metadata request, real-device APK download/install, native integrity checks, and any real 7420/deployment switch.
+- The Android APK label and the native action are checked as labels/UI only; a simulated APK value is not native-device proof. A metadata result never proves that an update was installed.
+
+#### Executed evidence (U1a2, 2026-10-16; Node v22.19.0 via `export PATH="/d/nvm/v22.19.0:$PATH"`)
+- `npm.cmd run build:frontend` → exit **0** (`vue-tsc --noEmit` clean; both Vite builds and the Brotli precompress step succeeded). Raw log `output/hermes-codex-upgrade-20261015/followup-20261016/u1a2-app-build-frontend.log`, raw exit `u1a2-app-build-frontend.exit.txt`.
+- `git diff --check` → exit **0**, log 0 bytes (`u1a2-app-git-diff-check.log` / `.exit.txt`).
+- Source hashes at that measurement (`u1a2-app-after.sha256`): `src/App.vue` `54ceb7e4…`, `src/api/codexGateway.ts` `b082961f…`; `tests.md` was `6022e4b6…` before this evidence paragraph (the paragraph itself changes its hash). Pre-change byte copies/hashes: `u1a2-before/` + `u1a2-before.sha256` (App.vue `d692ab34…`, codexGateway.ts `661dbcb4…`, tests.md `7d2a7a07…`).
+- Not re-run: `verify:server-modules` / `build:cli` are reused from the accepted `u1-final-cleanup-*` runs (exit 0 each); backend and CLI sources were not modified in this substage. There is no frontend unit/e2e harness for this block, so the browser-level assertions above stay root's actual-dist acceptance rather than claims recorded here.
 
 #### Rollback/Cleanup Notes
 - Screenshot artifacts are saved under `output/regression-7420/p1-settings-mobile-update-entry/` when `-CaptureScreenshots` is used.
@@ -16699,9 +17181,9 @@ Verification:
 ## Windows 服务管理 CLI
 
 1. `cx-codex service start|stop|restart|status|enable|disable` 必须接受 `--port`、`--config`、`--launcher`、`--task-name`、`--watchdog-task-name` 和 `--json`，且不得改变根服务命令的既有参数。
-2. `start`、`stop` 和 `restart` 只管理与显式配置或 launcher 匹配的进程树；`stop` 不禁用任务，`start` 不启用任务，`restart` 不改变任何任务状态。
+2. `start`、`stop` 和 `restart` 只管理与显式配置或 launcher 匹配的进程树；`stop` 不禁用任务但会写入持久待机标记，`start`/`restart` 会清除标记；三者均不改变任务启用状态。
 3. `enable` 和 `disable` 只修改已存在的登录启动与 watchdog 任务，不启动或停止服务进程；任务名必须精确匹配。
-4. `status` 只读；服务未运行、资源缺失或 PID 标记过期应作为状态返回。非托管进程占用目标端口时，进程控制命令必须以稳定错误码拒绝操作。
+4. `status` 只读并报告待机标记；服务未运行、资源缺失或 PID 标记过期应作为状态返回。非托管进程占用目标端口时，进程控制命令必须以稳定错误码拒绝操作。
 5. `--json` 成功和失败均只输出一个结构稳定的 JSON 对象；npm 包必须显式包含 PowerShell 运行器和服务管理脚本。
 
 Verification:
@@ -16753,6 +17235,8 @@ Verification:
 
 ## 重复发送与历史失败消息恢复（2026-08-28）
 
+> 历史兼容记录：下述无 client ID 的旧 outbox 基线确认不适用于现代发送。现代 clientMessageId 必须按当前精确身份证据确认；没有证据时保守保留，见本文 2026-09-10 的消息身份闭环章节。
+
 ### Expected behavior
 
 1. 乐观消息一旦取得本次发送对应的权威 `turnId`，只由该轮确认；分页窗口外存在同文历史消息时，不得把本次消息误判为已确认，也不得因文本相同隐藏用户连续发送的第二条消息。
@@ -16792,6 +17276,351 @@ Verification:
 
 - 回退队列恢复端点、前端可恢复交接与对应夹具即可；不需要迁移或清理 Runtime SQLite。回退后应停止提供“直接引用”入口，避免恢复能力缺失时再次丢消息。
 
+## 桌面端 writer 共存与 7420 持久待机（2026-08-28）
+
+### Expected behavior
+
+1. 打开、切换、刷新或恢复任务历史只能使用 `thread/read`、缓存和本地 session log，不得由读取路径调用 `thread/resume`；仅查看 7420 不能夺取官方桌面端的 writer。
+2. 发送时若另一个 Codex 已拥有 writer，继续使用稳定 `clientUserMessageId` 交给原生 `thread/queue/*`；输入文字、图片、文件、技能和顺序保留在可编辑队列中，不显示通用“发送失败”。
+3. `cx-codex service stop` 在终止受管进程前写入 `cx-codex-<port>.standby`。每分钟 watchdog 和登录启动器必须在任何启动/重启动作前识别该标记并正常退出。
+4. `cx-codex service start` 与 `restart` 清除待机标记；`status` 同时报告 `standby.active/path`。待机不删除配置、Runtime SQLite、会话或附件，也不更改计划任务启用状态。
+5. CX-Codex 与官方桌面端仍遵守单 writer 边界：允许双方只读同步和跨进程排队，不承诺两个独立 app-server 同时写同一任务。需要官方桌面立即独占时使用持久待机。
+
+### Verification
+
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 必须断言 `loadMessages` 不含 `ensureThreadResumed`，并保留 active-writer 原生队列、附件和稳定消息 ID 契约。
+- `npm.cmd run verify:windows-productization` 必须在隔离临时目录验证服务停止/启动待机边界，并静态检查 watchdog 与登录 launcher 使用同一标记；不得改动机器上的真实计划任务。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:server-modules` 与 `git diff --check`。
+- 在 `393 x 852` Headless Playwright 中渲染 native-writer 队列：两条消息均可见、已接受行不显示失败重试、每行保留删除动作、没有虚假同步动画或横向溢出，并保留截图证据。
+- 本轮以上源码回归、完整 Windows productization、前端/CLI 构建、服务模块、frontend normalizer 与 `git diff --check` 均通过；Playwright 实测为 2 条、0 个重试、2 个删除、0 个 loading、页面宽度 393/393，且无 console/page error。截图为 `output/regression-7420/writer-standby-20260828/native-writer-queue-phone.png`。
+- 本机候选以可回滚方式更新到实际 7420 后，配置与认证文件 SHA-256 保持不变，`/health` 与 `/codex-api/health` 均正常，计划任务保持启用且待机标记为 false；旧安装保留在 `C:\Users\SW\AppData\Local\CX-Codex.rollback-writer-standby-20260828-233052`。
+- 真实 H5 任务回归首个可用画面为 1353 ms、缓存重开 206 ms、7 次前台恢复 P95 为 1836 ms；最近 RPC 持续收敛为 `thread/read`，没有由打开或刷新触发的 `thread/resume`。截图为 `output/regression-7420/writer-standby-live-20260828/thread-phone.png`。
+- Android 16 真机 `fdaf77ad` 同时打开当前官方桌面任务时，文本探针和带 1 张 PNG 的图片探针均未显示“发送失败”，而是各自以 `waitReason=native_writer` 进入 1 条原生队列；图片请求保留 `text + localImage` 与上传缓存地址。两条探针均从手机端删除，随后服务端队列计数为 0。截图为 `output/android-device/writer-standby-20260828/cx-queue-sent.png` 与 `output/android-device/writer-standby-20260828/cx-image-queued.png`。
+- 真机移除 USB reverse 后仍通过已保存的公开地址冷启动成功；临时 ADB 输入法已卸载并恢复原输入法，手机测试文件已清理。`Snapshot`、5 秒 `ScreenOff` 与 5 秒 `Doze` 采样及恢复记录位于 `output/android-background/writer-standby-20260828/`。当时悬浮宠物服务未启用且没有终态任务，因此这些记录只证明设备状态安全恢复，不等同于终态通知、设备 ACK、悬浮窗渲染或长时 Deep Doze 验收。
+
+### Rollback
+
+- 回退只读加载约束与待机标记即可。标记文件没有数据库语义，回退时可手动删除；不得因此清理 Runtime SQLite、会话或附件。
+
+## Android 对话发送稳定性真机复测（2026-08-29）
+
+### Device matrix
+
+- OPPO PKH110、Android 16 / SDK 36、`com.cxcodex.bridge` v2.8.0，通过 USB ADB `fdaf77ad` 连接；H5 使用已保存的公网地址，未配置 USB reverse。
+- 当前官方桌面任务持续占用 writer，真机发送必须进入 `waitReason=native_writer` 队列；本轮不允许测试探针实际执行。
+
+### Verified behavior
+
+- 中文文字探针、连续文字探针及带 1 张 PNG 的文字探针均使用不同 `clientMessageId` 进入原生队列，服务端顺序与手机队列顺序一致；图片请求保留 `text + localImage` 和 `1 张图` 元数据。另连续发送两条完全相同的 `USBSAME0829`，服务端得到 2 个不同 `clientMessageId` 和 2 个不同请求 ID，手机显示 2 行且没有失败或错误合并；证据为 `output/android-device/conversation-stability-20260829/same-two-valid.png`。
+- 在可见队列中点“引用”，目标请求被删除并以新请求 ID 移到队尾，其他消息顺序不变；点删除后服务端计数由 4 变为 3。
+- Home 切后台 6 秒再回前台后，4 条服务端队列、图片行和未发送草稿均保留。强制结束 Android App 后，服务端队列仍为 4；冷启动先进入“新会话”，手动重新打开原任务后队列、图片和草稿重新出现。
+- 本轮没有 Android `FATAL EXCEPTION` 或 ANR，也没有新的 `Bridge request failed`。本地和公网 `/health` 最终均返回 `ok`。
+
+### Reproduced UX risks
+
+- 连续发送自动化只在编辑、输入和点击之间各等待 180ms 时，第三条乐观消息显示“发送失败”，服务端没有对应请求；使用 600ms 输入稳定等待后同内容正常入队。这说明队列重排期间仍可能吞掉快速点击，不是服务端已接收后丢消息。
+- 失败气泡右侧的悬浮复制按钮覆盖“重试”按钮中心区域：点击 `x=986,y=365` 没有产生请求，点击未被覆盖的左侧 `x=930,y=365` 后成功入队。截图证据为 `output/android-device/conversation-stability-20260829/retry-c-valid.png` 和 `retry-c-success.png`。
+- 冷启动不会自动恢复上次打开的任务，而是回到“新会话”；原任务数据未丢失，但用户必须重新展开侧栏并打开任务，容易被理解为消息、队列或思考状态消失。
+- 测试窗口内日志记录 36 次慢 App Server RPC，主要 `thread/read` / `thread/queue/list` 为约 1.8-3.1 秒；6 次发送均先记录 active-writer 冲突再由原生队列接管。该延迟会放大快速点击和状态闪烁问题。
+- DocumentsUI 能完成图片选择，但本轮通过 ADB 新推送的 MD/TXT 未出现在“最近/搜索”结果，因此普通文件附件没有形成有效真机结论，不能据此标记通过或失败。
+
+### Cleanup
+
+- 所有探针最终清理：1 条从手机队列删除，其余 6 条通过 Runtime 队列删除接口清理，最终队列为 0；草稿清空，临时 ADB 输入法卸载并恢复微信输入法，手机上的 3 个测试文件删除。7420 和 Android App 保持运行。
+
+## 基于 Sema 的会话投影重建（2026-08-30）
+
+### Expected behavior
+
+1. 会话展示必须以 `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` 的事件、轮次、过程活动、文件变化与完成态设计为强制语义基线；不得复用或兼容 7420 原有扁平消息归并、最后助手消息推断 final、`Worked for`/命令累计耗时、阶段回复折叠、尾部过程浮层及 `fileChange` 丢弃逻辑。
+2. UI 只消费纯 `ConversationProjection`。每轮必须区分用户开场、commentary、结构化活动、待处理交互、文件变更、真实执行/等待耗时和唯一显式 final；无 `phase: final_answer` 的普通终态轮次不得猜测 final，也不生成无行动价值的占位提示，失败、中断和停止仍必须可见。审批、补充输入、MCP 授权/批准和不支持工具的类型、标题、摘要、问题、授权地址及响应身份必须由投影给出，`ThreadConversation.vue` 不得读取原始 request method/params。
+3. 运行中过程默认展开，完成过程默认收起；过程历史在模型中完整保留，高密度运行轮次只限制 DOM 挂载数量。通知重放、分页、恢复与乐观消息必须按稳定 ID 合并，不能按文本去重。
+4. 桌面和移动端不得再出现尾部过程浮层。权限/输入请求属于轮次正文；移动端操作目标至少 44px，页面不得产生横向溢出。
+5. 允许继续使用经验证必要且不定义会话语义的传输、鉴权、队列、恢复和移动端基础设施；这些基础设施不得重新成为 final、轮次或耗时的推断来源。
+6. UI 必须保持一轮一个 Sema 式耗时/过程分隔，不显示重复的 Codex 头像/状态头；文件变更默认只显示紧凑摘要，文件行和差异按需展开；只有活动 turn 可显示轻量持续反馈，终态 final 不得保留闪烁光标，回到底部使用居中紧凑控件。动效只使用短时 opacity/transform/color，reduced-motion 下停止持续动画，不得增加卡片堆叠或页面编舞。
+7. 可见 Composer 边框必须与 `48rem` 会话阅读列同轴，保持输入在上、控制条在下；默认使用 `12px` 轻边框且无浮卡阴影，聚焦只增加一像素强调环。桌面主控件不得小于 32px，粗指针手机/折叠屏不得小于 44px。
+
+### Verification
+
+- 运行 `npm.cmd run verify:conversation-transcript`，覆盖精确 final、commentary、命令/MCP/搜索/计划/fileChange、等待耗时扣除、重复通知、分页合并、恢复终态、无 final 和 1600 轮性能。
+- 运行 `npm.cmd run verify:server-modules` 与 `npm.cmd run verify:frontend-normalizers`，确认服务端保留结构化事件与相位，前端恢复/通知路径仍保持稳定身份。
+- `verify:server-modules` 的 session-log 回放必须覆盖 `thread not loaded` 精确路径恢复、隐藏内部续跑 user item 的 `turn_id` 边界、同正文 event/response final 去重及 `patch_apply_end.changes` 到同轮 `fileChange` 的转换；内部提示正文不得进入 payload。
+- 运行 `node scripts/conversation-browser-smoke.mjs --cdp-port <isolated-port> --base-url <candidate-preview> --output-dir output/regression-7420/conversation-sema-rebuild-20260830`。桌面 `1440 x 900`、移动端 `393 x 852` 和粗指针折叠屏 `884 x 1104` 必须只有一个显式 final、每轮一个 divider、重复助手头为 0、文件摘要默认折叠且不超过 56px、文件行按需可见、缺失 final 占位和终态闪烁 final 均为 0、请求卡存在、运行状态反馈存在、旧浮层为 0、横向溢出为 0，且手机/折叠屏最小操作目标不小于 44px；脚本还必须验证正常动效与 reduced-motion 停止持续动画。
+- 运行 `node scripts/conversation-browser-smoke.mjs --mode composer --cdp-port <isolated-port> --base-url <candidate-preview> --output-dir output/regression-7420/conversation-sema-composer-20260830`。桌面和粗指针折叠屏可见 shell 必须为 `48rem`，三种视口都必须保持双层结构、`12px` 圆角、无默认阴影、无横向溢出；桌面最小主控件至少 32px，手机/折叠屏至少 44px，桌面聚焦必须出现轻量强调环。
+- 运行 `node scripts/conversation-browser-smoke.mjs --mode sidebar --cdp-port <isolated-port> --base-url <candidate-preview> --output-dir output/regression-7420/quiet-sidebar-regression-20260830`。手机夹具必须保持项目新近排序、有意 pinned shortcut、等待文字状态、触控 row、项目菜单与新建任务入口；stale-search、查询前缀保持/分叉/恢复、后台重排锚点和当前任务定位必须通过，横向溢出为 0。
+- 对真实会话运行 `node scripts/conversation-browser-smoke.mjs --mode real --cdp-port <isolated-port> --base-url <真实或隔离候选> --thread-id <精确 UUID> --output-dir <证据目录>`。该模式必须核对路由与投影线程身份、至少一个历史显式 final、任一 turn 最多一个 final、结构化文件摘要、内部上下文泄漏为 0、旧浮层为 0、横向溢出为 0，并在桌面、手机和粗指针折叠屏分别截图；默认还要求冷重载来源为 `local-cache` 且首屏不超过 300ms。只读 spectator 因没有生产 writer 而预期出现原始 RPC/goal 502 时，可显式增加 `--allow-isolated-rpc-errors true --require-cache-reload false`，脚本会把被允许的 502 单独列出，该结果不得冒充真实 7420 无错误或缓存首屏证据。
+- 压力夹具必须保留至少 1600 条投影活动、DOM 挂载不超过 20 条，并在流式更新期间保持心跳、最长主线程任务低于 80ms 和按钮响应；计时器排队延迟单独记录，不能冒充单次主线程阻塞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。真实 7420、Android 真机和发布状态必须分别报告；未执行时不得标记为通过。
+
+### Current local candidate evidence
+
+- UX-00 设计契约与回归基线本地验收通过：当前 Codex.app 包为 `OpenAI.Codex_26.818.5229.0_x64`，`DESIGN.md` 已固定 `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` 的源码映射并禁止恢复 7420 原有会话归并/final/elapsed/阶段浮层/fileChange 语义。`conversation-browser-smoke.mjs --mode contract` 在 1440×900、884×1104、768×1024、393×852、852×393 五个视口分别验证首页、运行、完成、等待输入，产出 20 张状态截图和 `contract-baseline.json`；所有视口均为一个命名主地标、一个显式 final、一个未作答选择器，首页和会话横向溢出为 0。独立 Headless Playwright 的 393×852 会话截图与关键桌面/折叠屏/横屏截图已目视复核，证据位于 `output/regression-7420/ux00-contract-baseline-20260830`。历史改造前截图仍单独保存在 `output/regression-7420/p5-screenshot-baseline`；本次矩阵是当前候选合同基线，不冒充完整的改造前证据。独立 Vite 预览缺少 7420 Bridge，首页 `/codex-api` 404 作为预期环境限制单独记录，会话夹具浏览器错误为 0。此次没有业务代码变更；`node --check`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、`npm.cmd run verify:conversation-transcript`、UTF-8 等价 frontend source-only/governance 和 `git diff --check` 均通过。未执行生产切换、Android、真实 Windows 辅助技术、提交、推送、CI 或发布。
+- `verify:conversation-transcript` 通过；本次待处理交互所有权复跑中 1602 轮首次投影为 21.1 ms、1600 条活动投影为 3.5 ms。精确 final、无 final 不回退到 commentary、分页、重复文本、恢复终态、等待扣除及结构化命令/MCP/搜索/计划/fileChange 均通过；新增夹具覆盖 file approval、用户问题、MCP 授权、MCP 工具批准和不支持工具，并证明底层 Runtime 即使滞后为 `running`，有待处理交互的轮次仍投影为 `waiting`。
+- 类型检查、前端主构建与本地预览构建、预压缩、CLI 构建、server modules、frontend normalizers、frontend source-only、governance 和 `git diff --check` 均通过；server smoke 中的 warn/error 为预期故障注入。
+- frontend source-only 现额外禁止 `filteredMessages`、`displayedThreadMessages` 和 `visibleConversationMessages` 会话展示旁路；路由空态、fallback 标题、回滚轮次、收藏跳转就绪及 Android 已读确认统一从 `ConversationProjection`/投影 turn 读取。真实会话 CDP 回归已固化为 `test:conversation:real-session`，不再依赖一次性脚本。
+- 独立 CDP 浏览器和 Headless Playwright 在 `1440 x 900`、`393 x 852` 与粗指针 `884 x 1104` 验证：唯一显式 final、文件摘要、两个请求卡、完成过程折叠/按需展开、旧尾部浮层为 0、横向溢出为 0；手机和折叠屏最小操作目标均为 44px。截图保存在 `output/regression-7420/conversation-sema-rebuild-20260830` 并完成目视检查。
+- 1600 条活动完整保留且只挂载 18 条。五轮隔离流式窗口分别完成 69-70 次更新和 66-67 次心跳，`maxLongTaskMs = 0`（未出现浏览器可报告的 50ms 以上 Long Task），计时器排队延迟为 88-125 ms，按钮仍响应；该排队诊断不冒充单次主线程阻塞。
+- 额外冷导航追踪在不同压力项数量下记录 123-207 ms Long Task，主要耗时来自整页首次 Layout，且零压力项仍可复现；该数据只作诊断，不得误当成 1600 条流式窗口的 <80ms 门禁，也不能替代真实 `local-cache` 首屏 ≤300ms 证据。本轮没有把候选部署到真实 7420，也没有执行 Android/物理折叠屏真机、APK、提交、推送或发布，所以这些门禁不得标记为通过。
+- 隔离候选在 `127.0.0.1:17435` 对当前真实 session JSONL 完成只读 spectator 回放：8 个 turn、6 个历史明确 final、每轮最多一个 final、4 组文件摘要；桌面、393 x 852 手机和 884 x 1104 粗指针折叠屏均为 0 内部上下文泄漏、0 旧浮层、0 横向溢出，手机/折叠屏独立控件最小高度 44px。截图保存在 `output/regression-7420/conversation-sema-real-runtime-20260830` 并完成目视检查。隔离 App Server 未持有生产 writer，预期的原始 thread/goal RPC 502 被单独记录并未算作生产无错误证据；当前会话最后一轮仍在本次目标中执行，且隔离实例无法提供其生产运行态，所以这项回放不替代真实 7420 的缓存刷新、运行态或最终回复验收。
+- 最新 UI/交互/动效复核由固化 CDP 脚本完成：每轮保持单一 divider、旧 Codex 轮次头为 0、显式 final 每轮最多一个；完成过程默认收拢且可按需展开，活动过程保持展开。2026-08-31 候选进一步把文件摘要改为默认折叠，桌面/手机/粗指针折叠屏摘要高度为 48/46/46px、可见文件行为 0；缺失 final 占位与终态闪烁 final 均为 0。三种视口横向溢出与旧浮层均为 0，手机和折叠屏最小触控目标为 44px；正常 disclosure 为 180 ms，reduced-motion 为 1 ms 且运行点动画为 `none`。压力 turn 保留 1600 条活动并有界挂载，流式窗口 `maxLongTaskMs = 0` 且按钮仍响应。最新截图保存在 `output/regression-7420/mobile-ui-candidate-20260831/fixture` 并完成目视检查。
+- 待处理交互改为投影单一所有者后，固化浏览器脚本在 `output/regression-7420/conversation-sema-all-interactions-20260830` 通过桌面、393 x 852 手机和 884 x 1104 粗指针折叠屏，真实 DOM 同时覆盖 `approval`、`user-input`、`mcp-input`、`mcp-approval` 与 `unsupported-tool` 五类请求。MCP 卡片显示连接器、工具和有界关键参数，只在 `_meta.persist` 明示时呈现“本次会话允许 / 始终允许”；实际点击得到 `{ action: 'accept', content: {}, _meta: { persist: 'session' | 'always' } }`。用户问题初始明确显示“请选择”且提交禁用，显式选择与补充后回包保留两项答案；URL 授权不再渲染无关文本框。三种视口横向溢出和旧浮层均为 0，手机/折叠屏最小触控目标 44px；压力 turn 保留 1600 条活动、只挂载 18 条，69 次更新和 66 次心跳期间 `maxLongTaskMs = 0`、最大排队延迟 79 ms、操作仍响应。三张截图已目视复核；这是隔离本地候选证据，不是生产 7420 或 Android 真机证据。
+- Composer 专项 CDP 门禁在 `1440 x 900`、`393 x 852` 和粗指针 `884 x 1104` 通过：桌面/折叠屏可见 shell 均为 768px，三种视口均为输入在上、控制条在下、12px 圆角、无默认阴影、零横向溢出；桌面主控件最小宽/高为 36/32px，手机和折叠屏均为 44/44px，聚焦后的 1px 强调环可见。截图保存在 `output/regression-7420/conversation-sema-composer-20260830` 并完成目视检查。
+- 当前 schema 活动审计后的重建候选 `dist/index.html` SHA-256 为 `7F01FDFDB3813D46E5448E81B14DBEEE0EC8CF9C3546DA0FBAD592CB3279C854`，生产安装仍为 `C00C1ED84E6A7AFA5E71F6D07506F9F4FF82DA3A1CF1E57C650096C671E8B577`，两者明确不同。2026-08-30 只读健康检查显示生产状态 `ok`、App Server 已初始化、pending/queued RPC 与交互请求均为 0、Runtime uncertain 为 0，但本目标仍运行使 `restartProtection.blockingRequestCount = 1`；Android SDK 的 ADB 可用但设备列表为空。未获生产切换授权且没有授权真机，不能执行剩余门槛。
+- UX-10 Quiet Shell 本地验收通过：1440×900 默认侧栏/顶栏/内容轴分别为 288/44/768px，保存的 340px 偏好保持，Header 与 Composer 轴线偏差 0；状态从“同步正常”变为“正在重新连接，等待恢复”后标题和主轴坐标不变。393×852 手机与 852×393 横屏没有固定侧栏、内容遮挡或横向溢出；明暗主题中的正文与用户消息背景均完成自动断言和目视复核。固化 CDP 截图位于 `output/regression-7420/quiet-shell-20260830`，独立 Headless Playwright 桌面/手机截图位于 `output/regression-7420/quiet-shell-playwright-20260830`。本轮同时通过 `vue-tsc --noEmit`、Vite 主构建/本地预览构建/预压缩、CLI 构建、conversation transcript、frontend normalizers、server modules 和 governance；系统 PowerShell 5.1 直接读取无 BOM 中文脚本会误解析，治理门禁改以等价 UTF-8 读取执行后通过。会话夹具三视口和 1600 活动窗口、Composer 三视口也再次通过，未执行生产切换、Android、提交、推送或发布。
+- UX-20 Sidebar 本地验收通过：桌面操作区为两行，`新会话` 主操作覆盖完整 271px 轴线且高 36px，搜索/工作台/工具为 32px 第二行；340px 保存宽度下轴线同步扩展为 323px。深色主操作背景/文字分别为 `rgb(39, 39, 42)` / `rgb(244, 244, 245)`，明暗主题和手机/横屏均无横向溢出。聚焦手机夹具验证 10 条 row、58px 粗指针行高、项目顺序、唯一有意 pinned shortcut、等待文字、项目菜单/新建任务、stale-search、查询连续性和当前任务定位；首项目顶部边界修复后，后台项目上浮将 scrollTop 从 220 补偿至 348，原项目相对顶部保持 7.046875px。CDP 与独立 Headless Playwright 截图保存在 `output/regression-7420/quiet-sidebar-20260830`、`output/regression-7420/quiet-sidebar-regression-20260830` 和 `output/regression-7420/quiet-sidebar-playwright-20260830`；未执行真实 7420、Android、Git 或发布动作。
+- UX-40 Compact Composer 本地验收通过：桌面和 884×1104 粗指针折叠屏 shell 宽 768px，393×852 手机 shell 宽 353px；三种视口输入均位于控制条之上，12px 圆角、无默认阴影、无点击目标重叠或横向溢出，手机/折叠屏最小控制目标 44px。五行输入分别增长到 124px/107px，二十行封顶 128px，清空回到 32px/44px，展开达到 400px/368px；IME composing 与 keyCode 229 均未提交或误选，语音文本只进入 draft。桌面 Enter 提交、手机 Enter 换行、Ctrl+Enter 提交；附件/Runtime 面板桌面非模态、手机 `aria-modal=true` 且锁定背景滚动，关闭后恢复触发器焦点。两次本地反馈分别为 12.9ms 与 12.8ms。队列重排夹具在 393×852 下展示首条下移和末条上移两个 44×44 控件，实际顺序完成反转和恢复，横向溢出 0；生产接线仅在全部已持久化、单一所有者、未处理、首条未失败时允许重排，先写本地顺序再复用现有 durable queue/server reconciliation。`node --check scripts/conversation-browser-smoke.mjs`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、UTF-8 等价 `scripts/regression-7420-frontend.ps1 -SourceOnly` 和 `git diff --check` 均通过；截图在 `output/regression-7420/quiet-composer-audit-20260830`。系统 PowerShell 5.1 直接 `-File` 读取无 BOM 中文脚本仍会误解析，故源码门禁使用 UTF-8 显式读取执行；未执行真实 7420、Android、提交、推送或发布。
+- UX-60 响应式、主题与可访问性本地验收通过：`conversation-browser-smoke.mjs --mode hardening` 覆盖 1440×900、884×1104、768×1024、393×852、852×393 的浅色/深色组合；十个组合均为零横向溢出、唯一命名主地标、命名导航、可见交互控件有名称、无隐藏命中目标或重复 ID，抽样必要文字无 WCAG AA 失败，状态保留文本。粗指针菜单与侧栏调宽轨的有效命中区至少 44px；forced-colors 媒体查询生效，真实 Tab 将焦点移至调宽轨并显示 2px solid 轮廓；reduced-motion 下持续动画列表为空。393×852 抽屉为命名 modal dialog，背景完全 inert、页面滚动锁定，Tab/Shift+Tab 双向闭环，背景触发器不能夺取焦点，关闭后清除隔离并归还焦点。`node --check scripts/conversation-browser-smoke.mjs`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、UTF-8 等价 frontend source-only、UTF-8 等价 governance、`npm.cmd run verify:frontend-normalizers` 与 `git diff --check` 通过；Shell/Sidebar 回归再次通过。系统 PowerShell 5.1 的 npm 治理包装仍会把无 BOM 中文误解码并在解析阶段失败，显式 UTF-8 读取同一治理脚本后断言通过。独立 Headless Playwright 使用已安装 Chrome 捕获 768×1024 候选，关键桌面、手机抽屉、forced-colors 与深色手机截图已人工复核；证据位于 `output/regression-7420/ux60-hardening-20260830` 和 `output/regression-7420/ux60-final-20260830`。浏览器仿真不替代真实 Windows 高对比度、系统屏幕阅读器、Android 或物理折叠屏；未执行生产切换、提交、推送或发布。
+
+- UX-25 Sema Conversation Transcript module 本地验收通过：完整 `ConversationProjection` 在实时事件、刷新快照和乱序/重复 replay 间逐字段相同；同文不同 ID 的 commentary 保持独立，终态缺少 `completedAt` 时 `activeElapsedMs=null` 且 `timingStatus=unavailable`，多个显式 final 冲突时不猜测。reasoning 只保留类型、身份、状态、起止/耗时等有界元数据，原始思维链正文不进入客户端；fileChange/MCP 压缩、50k 文本限制、未知事件、失败、中断、等待扣除及 1600+ 活动均通过。session-log smoke 继续证明 spectator 按精确 UUID 只读定位且不 resume writer、隐藏续跑只保留 `turn_id`、同轮同 phase 同正文 final 去重、`patch_apply_end` 归入同轮文件变化。`npm.cmd run verify:conversation-transcript` 最新为 1602 turns 20.6ms、1600 activities 5.6ms；frontend normalizers、server modules、`vue-tsc --noEmit`、`build:frontend`、`build:cli` 与内容相同的 UTF-8 BOM governance 脚本均通过。本机 PowerShell 5.1 直接解析无 BOM 中文治理脚本失败属于启动器编码问题，临时 BOM 文件已删除。`output/regression-7420/ux25-transcript-20260830/missing-terminal-timing.png` 只保留为投影阶段历史证据；其中无行动价值的耗时提示已由当前 Web 收口移除，并新增源码与浏览器门禁防止回流。这不是 Android、Windows 高对比度、屏幕阅读器、CI 或 Release 证据。
+
+- UX-30 Turn-based Conversation 本地验收通过：`ThreadConversation.vue` 不再引用或构造旧 `UiMessage`，收藏与计划执行只回传投影原生窄类型意图；commentary 与 `activityGroups` 按 `ConversationProjection.blocks` 原事件顺序呈现，活动轮次固定展开、完成轮次默认收起。`sync-degraded` 恢复轮次保持 active 与固定展开，1600 项投影只挂载 18 项。`npm.cmd run verify:conversation-transcript` 最新为 1602 turns 19.8ms、1600 activities 4.8ms；frontend normalizers、`build:frontend`、内容相同的 UTF-8 BOM `-SourceOnly` 门禁、浏览器脚本语法和定向 `git diff --check` 通过。CDP 回归在 1440×900、393×852、884×1104 下验证显式 final、完成态折叠、五类首层交互、文件摘要、活动组、reduced-motion、44px 移动触控与零横向溢出；70 次流式更新、67 次心跳期间 `maxLongTaskMs=0`、最大心跳延迟 79ms、操作响应正常。恢复专用夹具为 1 个 active `sync-degraded` turn、1600 项投影/18 项挂载、0 横向溢出。独立 Playwright 1.55 使用本机 Chrome 等待真实恢复状态后截图并目视复核，证据为 `output/ux30-conversation/conversation-sync-degraded-playwright.png`。未验证真实 7420、Android 真机、系统辅助技术、远端 CI、部署或 Release。
+
+- UX-30 长会话门禁补强：新增 `longTurns=1` 权威 thread/turn/item 夹具，801 个 projected turn 共 1602 条 user/assistant 消息，最后一轮每 48ms 增量更新 commentary。`ThreadConversation.vue` 仅对 `ConversationProjection.turns` 做动态测高虚拟化，最多挂载 10 个 turn/20 条消息节点，并用顶部/底部 spacer、用户阅读锚点和 `overflow-anchor: none` 保持唯一滚动所有者；静态门禁禁止恢复 `v-for="turn in props.projection.turns"`、`UiMessage` 或旧 final/elapsed/folding/overlay。CDP 回归在 393×852 下验证尾部 `791–800`、顶部 `0–9`、中段 `397–406` 三个窗口都为 10/20，流式尾部 78 次更新、70 次心跳、最大排队延迟 29ms、`maxLongTaskMs=0`，点击后更新继续、横向溢出为 0；同次回归的 1600 活动和 `sync-degraded` 场景继续为 18 项挂载和 0 长任务。`npm.cmd run build:frontend`、`npm.cmd run verify:conversation-transcript`（1602 turns 20.6ms；1600 activities 5.0ms）、浏览器脚本语法和定向 `git diff --check` 通过。独立 Headless Playwright 使用本机 Chrome 通过完整 regression URL 截图并目视复核，证据在 `output/ux30-turn-virtualization-20260830`。最初两轮浏览器回归暴露的陈旧跟随底部帧与原生 scroll anchoring 竞争已修复并由顶部/中段断言固化。本证据不替代真实缓存首屏、生产 7420、Android 真机、CI、部署或 Release。
+
+- UX-70 本地候选收口：`npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:17438 -SourceOnly` 和不带 `-SourceOnly` 的完整浏览器矩阵均以退出码 0 通过，启动器明确选择 `C:\Program Files\PowerShell\7\pwsh.exe` 7.5.5。矩阵覆盖桌面、393×852 手机、884×1104 折叠屏、横屏、侧栏搜索连续性/滚动锚点/当前会话揭示、命令面板焦点闭环、Composer、会话投影、五类交互、队列转移失败恢复、原生 writer 队列、加载失败、任务完成通知和“返回最新消息”；专用 `scrollReturn=1` 夹具验证原生 DOM 点击后滚动距离归零、返回按钮消失且焦点归还会话列表。1600 活动压力轮只挂载 18 项，115 次更新/110 次心跳最大延迟 22ms；独立长会话 CDP 门禁还验证 801 轮/1602 条消息最多挂载 10 轮/20 条消息、离屏第 400 轮定位与高位 prepend 761→801 轮时 5.875px 阅读锚点漂移。`npm.cmd run verify:conversation-transcript` 通过（1602 turns 20.7ms；1600 activities 5.7ms），`npm.cmd run verify:governance`、`npm.cmd run build:frontend`、`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:cli`、`npm.cmd run verify:server-modules` 与 `git diff --check` 均通过；server smoke 的慢 RPC/失败日志为既有故障注入。`npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:17438` 读取 289 个活动会话、首屏 100 项和 23 个项目组，页内重复为 0；一个跨游标重叠 ID 被记录并只展示一次，App Server augment 对同页重复 ID 保留首项且重复执行结果幂等。以上均为隔离本地候选证据；当前生产 7420、Android 真机、物理折叠屏、系统辅助技术、远端 CI、Git、部署和 Release 未因此通过，本轮也未提交、推送、安装或切换生产。
+
+- M4-C 完成审计发现并移除两处渲染层外的旧 final/完成推断：`hasSettledSessionLogMessageEvidence` 曾通过“最新 assistant 位于最新 user 之后且 phase 不是 commentary”判断 session-log 已终结；`hasAssistantOutputAfterLatestPersistedRunningCommand` / `hasAssistantOutputAfterLatestUserMessage` 又会让停止按钮、陈旧运行态和 persisted running command 因后续 assistant 文本而提前收敛。现由共享 `latestConversationTurnIsTerminal` 统一判定，session-log 和执行恢复都只接受最新 projected turn 的 `completed`、`failed`、`interrupted` 或 `stopped`，并拒绝 queued、running、waiting 与 sync-degraded；较早 completed 后跟 running、存在 pending interaction 或 fresh active Runtime 时同样不得误判。`verify:frontend-normalizers`、frontend source-only、`npm.cmd run build:frontend` 与 `git diff --check` 通过；源码门禁禁止 `latestAssistant`、`message.phase`、两个 assistant-order helper 和旧 message-evidence helper 回流。该修复改变的是前端旧残留运行态的恢复判据，不改变 Runtime 协议/存储、队列、outbox、审批、通知协议或可见渲染，也不是生产 7420/Android 证据。
+
+- Sema 结构活动补充回归：`collabAgentToolCall` 继续由唯一 `ConversationProjection` 投影为现有 generic activity，但按 `spawnAgent`、`sendInput`、`resumeAgent`、`wait`、`closeAgent` 显示创建、补充、继续、等待、结束协同子任务，并仅显示最长 800 字符的 prompt 摘要，未知工具安全回退为“协同子任务”。`verify:conversation-transcript` 联合覆盖 MCP、Web Search、计划与两类协同活动，最新为 1602 turns 20.7ms、1600 activities 5.5ms；`verify:frontend-normalizers`、`build:frontend`、frontend source-only 与 `git diff --check` 通过。CDP 浏览器回归确认展开完成轮次包含可读协同标题与摘要，1440×900、393×852、884×1104 均零横向溢出，手机/折叠屏最小触控目标 44px，长会话与 1600 活动压力门禁继续通过；可视证据为 `output/regression-7420/conversation-collaboration-20260830/conversation-collaboration-activity.png`。本轮没有切换生产 7420、提交、推送、安装或发布。
+
+- 完成 turn 的无状态结构活动收拢回归：generated App Server `ThreadItem` 证明 `webSearch`、`plan`、`imageView`、`enteredReviewMode`、`exitedReviewMode` 与 `contextCompaction` 不携带 item status/时间。新增纯投影用例先复现六项在已完成 turn 中全部错误显示为 `pending`，修复后全部为 `completed`；只收拢缺失状态产生的 pending，显式 `inProgress` 协同活动继续保持进行中，failed/declined 也不被覆盖。`npm.cmd run verify:conversation-transcript` 通过（1602 turns 22.1ms；1600 activities 5.2ms），`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:frontend`、浏览器脚本语法和 `git diff --check` 通过。固化 CDP 完整门禁在 1440×900、393×852、884×1104 验证展开完成轮次的无状态 Web Search 显示“完成”而非“等待中”，三视口横向溢出为 0、移动/折叠屏最小触控目标 44px；801 轮/1602 消息保持 10 轮/20 消息挂载，流式长会话最大排队延迟 28ms、1600 活动压力最大延迟 11ms，二者 `maxLongTaskMs=0`。截图经人工复核，证据位于 `output/regression-7420/conversation-structural-settlement-20260830`。未切换生产 7420，未执行 Android、真实 Windows 辅助技术、Git、部署或 Release。
+
+- 当前 App Server schema 活动回归：以 `output/app-server-schema-audit/20260828-232442/typescript/v2/ThreadItem.ts` 复现 `hookPrompt`、`dynamicToolCall`、`imageGeneration` 全部落入“执行活动”兜底；修复后内部 hook 完全不投影，动态工具只显示“创建任务 / codex_app”，图片生成只显示“生成图片 / savedPath”。纯投影明确断言 hook fragments、dynamic arguments/content items、revised prompt 和 data URL 均不出现在序列化结果。`npm.cmd run verify:conversation-transcript` 通过（1602 turns 21.4ms；1600 activities 5.5ms），`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:frontend` 与浏览器脚本语法通过。固化 CDP 完整门禁在 1440×900、393×852、884×1104 下通过泄漏、状态、横向溢出和 44px 粗指针断言；801 轮/1602 消息保持 10/20 挂载，流式窗口 80 次更新/72 次心跳、最大延迟 34ms、`maxLongTaskMs=0`，1600 活动窗口 68 次更新/65 次心跳、最大延迟 11ms、`maxLongTaskMs=0`。独立 Headless Playwright 1.60 使用本机 Chrome 再次通过三视口标签、载荷隔离与零横向溢出断言；CDP 与 Playwright 截图均位于 `output/regression-7420/conversation-current-schema-20260830`，手机图已目视复核。未切换生产 7420，未执行 Android、真实 Windows 辅助技术、Git、部署或 Release。
+
+- UX-50 Artifact Inspector 准入已完成并判定 No-go：现有 inline 文件行、按需 diff/命令/计划详情没有两个已证实的高频阅读打断场景，低保真路径也未证明右栏比 inline/modal 少一次以上上下文切换；尽管只读与小屏覆盖层可行，四条准入未同时满足。保持现有 inline/modal，不新增 Inspector、权限、状态、持久化、固定移动栏或回滚负担。
+
+### Rollback
+
+- 回退会话投影模块、投影接线与新轮次 UI；不要恢复上述 7420 旧会话语义作为兼容层。传输、鉴权、原生队列、Runtime 恢复数据库和移动端生命周期没有数据迁移，可独立保留。
+
+---
+
+### Feature: Current App Server notification classification without transcript leakage
+
+#### Prerequisites
+
+- Use `output/live-appserver-schema-20260828/ServerNotification.json` from the current 2026-08-28 CLI schema audit.
+- Keep `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` as the transcript semantic baseline; Codex.app is only the host interaction/safety cross-check.
+
+#### Steps
+
+1. Extract `oneOf[].properties.method.enum[0]` from the live schema and compare all 75 methods with `isKnownAppServerNotificationMethod()`.
+2. Run `npm.cmd run verify:server-modules` and confirm the smoke contains exactly 75 unique current-schema methods; `rawResponseItem/completed` remains a separate known union notification rather than being counted in that JSON set.
+3. Run `npm.cmd run verify:conversation-transcript` and confirm `turn/moderationMetadata` plus `model/safetyBuffering/updated` keep the owning turn running but create no activity, commentary, or final and leak no metadata body.
+4. Run the smallest relevant CLI/governance/diff checks.
+
+#### Expected Results
+
+- The comparison reports `OfficialCount=75` and `UnknownOfficial=[]`.
+- Official host metadata no longer increments unknown-notification diagnostics merely because it has no CX UI owner.
+- Classification does not create a transcript item, UI banner, state owner, queue action, or legacy 7420 fallback.
+
+#### Regression Evidence
+
+- The test-first server smoke failed with `false !== true` at the first missing current-schema notification, then passed after the known-classification update.
+- `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- `npm.cmd run verify:conversation-transcript` passed at 22.9 ms for 1602 turns and 6.0 ms for 1600 activities.
+- `npm.cmd run build:cli`, `npm.cmd run verify:governance`, and `git diff --check` passed.
+
+#### Rollback
+
+- Remove only the ten newly classified methods and their current-schema assertions. Do not replace the Sema projection with raw notification rendering or restore an old 7420 inference path.
+
+---
+
+### Feature: Projection-owned rollback and older-history reconciliation
+
+#### Prerequisites
+
+- Keep `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` as the mandatory transcript baseline.
+- Use a recent history window whose absolute `turnsStartIndex` is greater than zero, plus a newer realtime turn.
+
+#### Steps
+
+1. Run `npm.cmd run verify:conversation-transcript` and confirm a recent window containing absolute turns 10 and 11 plus a realtime `turn/started` event projects indexes `[10, 11, 12]`.
+2. Run `npm.cmd run test:7420:frontend -- -SourceOnly` and confirm older-history and rollback source checks reject `persistedMessagesByThreadId` / flattened `UiMessage[]` as the decision owner.
+3. Run `npm.cmd run build:frontend`.
+4. In a 393 x 852 headless Playwright fixture, focus `回退到此轮`, activate once, and confirm it changes to `确认回退` without emitting. Activate again and confirm it returns to the idle label.
+5. In a real-candidate follow-up, rollback a non-latest projected turn and confirm the accepted `thread/rollback` response immediately removes that turn and every later turn; refresh and load older history to prove none reappear.
+
+#### Expected Results
+
+- Live turns after a bounded recent window continue from the latest absolute projected index, not from the number of loaded rows.
+- Older-history `beforeTurnIndex`, rollback target/count, and worktree rollback text come from `ConversationProjection`.
+- A successful rollback replaces retained structured `threadRead` pages and clears pre-rollback transcript notifications before authoritative refresh.
+- The compact two-step inline confirmation remains keyboard/touch operable and creates no modal or legacy transcript overlay.
+
+#### Regression Evidence
+
+- The test-first projection assertion failed with actual `[10, 11, 2]` and expected `[10, 11, 12]`, then passed after absolute turn continuation was fixed.
+- `npm.cmd run verify:conversation-transcript` passed at 22.1 ms for 1602 turns and 4.7 ms for 1600 activities.
+- `npm.cmd run test:7420:frontend -- -SourceOnly`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:cli`, `npm.cmd run verify:governance`, and `git diff --check` passed.
+- Headless Playwright on Chromium at 393 x 852 observed `确认回退`, then `回退到此轮`, with no page errors. Screenshot: `output/codex-app-parity/sema-rollback-confirmation-phone-20260830.png`.
+- Real 7420 rollback, Android, physical foldable, and system assistive-technology evidence remain pending.
+
+#### Rollback
+
+- Revert this candidate as one UX-25/UX-30 change. Do not restore flattened `UiMessage[]` history or rollback decisions as a compatibility fallback.
+
+---
+
+### Feature: Projection-owned execution and recovery state
+
+#### Prerequisites
+
+- Keep `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` as the mandatory conversation semantic baseline.
+- Use installed Windows Codex `26.818.5229` only to cross-check structured turn/item status ownership and stop/recovery interaction safety.
+
+#### Steps
+
+1. Run `npm.cmd run test:7420:frontend -- -SourceOnly` and reject execution helpers that inspect flattened persisted/live `commandExecution` messages.
+2. Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+3. In Headless Playwright at 393 x 852, open the `syncDegraded` structured projection fixture and confirm one active recovery turn, an expanded process disclosure, `正在恢复实时状态`, zero page errors, and no horizontal overflow.
+
+#### Expected Results
+
+- Execution activity comes from the latest `ConversationProjection` turn/activity, gated by fresh Runtime/event/request authority.
+- A terminal projected turn wins even if an old flattened cache still contains an `inProgress` command.
+- Stop, recovery, queue continuation, and task-pet status cannot be revived by legacy 7420 command-message semantics.
+
+#### Regression Evidence
+
+- The test-first source gate failed with `execution, stop, and recovery state must use projected turn activities instead of flat 7420 command messages`, then passed after the semantic owner was replaced.
+- `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and production/local-preview builds.
+- Independent Headless Playwright observed one active `sync-degraded` turn, expanded process disclosure, exact recovery copy, zero errors, and zero horizontal overflow. Screenshot: `output/codex-app-parity/projection-owned-execution-20260830/projection-running-phone.png`.
+- Production 7420, Android, physical foldable, and system assistive-technology evidence remain pending.
+
+#### Rollback
+
+- Revert this projection-owner change together with its source gate. Do not restore flattened `commandExecution` messages as an execution-state fallback.
+
+## Projection-only realtime state (2026-08-30)
+
+### Purpose
+
+Prove that realtime assistant, plan, reasoning, command, and turn activity no longer accumulate in a second flat 7420 state model after `ConversationProjection` became the visible and behavioral owner.
+
+### Steps
+
+1. Run `npm.cmd run test:7420:frontend -- -SourceOnly`; reject `liveAgentMessagesByThreadId`, `livePlanMessagesByThreadId`, `liveReasoningTextByThreadId`, `liveCommandsByThreadId`, or `turnActivityByThreadId` in `useDesktopState.ts`.
+2. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run verify:conversation-transcript`, `npm.cmd run verify:governance`, and `git diff --check`.
+3. In Headless Playwright at 393 x 852, open the structured `syncDegraded` fixture and require one active projected turn, 1600 retained activities with at most 20 mounted rows, expanded recovery process, exact `正在恢复实时状态`, zero legacy overlays, zero page errors, and no horizontal overflow.
+
+### Expected Results
+
+- `conversationNotificationsByThreadId` is the only realtime conversation-event input; the normal authoritative `thread/read` remains the durable snapshot input.
+- Execution state uses projected activities plus Runtime/event/request freshness. Raw reasoning text, flattened plan/agent/command messages, and a legacy `turnActivity` copy cannot revive or label a turn.
+- Message outbox, durable queue, Runtime recovery, pending interaction, first-assistant-data measurement, and bottom-follow behavior remain intact because they are infrastructure and feedback paths rather than transcript semantics.
+
+### Regression Evidence
+
+- The new source gate first failed with `structured conversation notifications and projected turns must replace the legacy flat live-state side channel`, then passed after the five legacy state owners and their buffering/parsing paths were removed.
+- `npm.cmd run build:frontend`, frontend source-only, frontend normalizers, conversation transcript verification, governance verification, and `git diff --check` passed. Projection stress completed in 22.8ms for 1602 turns and 5.6ms for 1600 activities.
+- Independent Headless Playwright observed one active `sync-degraded` turn, 1600 projected / 18 mounted activities, expanded process disclosure, exact recovery copy, zero legacy overlays, zero page errors, and zero horizontal overflow. Screenshot: `output/codex-app-parity/projection-only-live-state-20260830/projection-only-live-state-phone.png`.
+- Current production 7420, Android, physical foldable, and real Windows assistive-technology evidence remain pending.
+
+### Rollback
+
+- Revert this deletion together with its source gate. Do not restore any flattened realtime state as a rendering, execution, stop, or recovery fallback.
+
+## Structured-only conversation cache and fixtures (2026-08-30)
+
+### Purpose
+
+Close the remaining local dual-semantics gap after `ConversationProjection` became authoritative: only acknowledged user-message identity may support browser cache/outbox delivery evidence, and neither production code nor regression fixtures may retain assistant/phase/command data or reinterpret old 7420 role/phase/live-message rules.
+
+### Steps
+
+1. Run `npm.cmd run test:7420:frontend -- -SourceOnly`; require the old `src/composables/conversationProjection.ts` file to be absent, `useDesktopState.ts` to import `threadMessageCache.ts`, and the cache module to exclude assistant, phase, command, plan, live-agent, and visible-conversation inference.
+2. Require `ConversationRegressionFixture.vue` to call `projectStructuredFixtureItems` with structured App Server items and `localUserMessages`; reject `projectFixtureMessages`, `agentMessage.live`, and `WeakMap<UiMessage` adapters.
+3. Require `DocumentationShowcaseFixture.vue` to provide structured turn items directly; reject `UiMessage`, `message.role`, or `message.turnIndex` adapters that would infer every assistant row as `final_answer`.
+4. Require gateway/thread normalization to expose `acknowledgedUserMessages` only; reject `normalizeThreadMessagesV2`, `toUiMessages`, assistant/plan/command flattening, or a generic flat `messages` contract alongside the authoritative structured response.
+5. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run verify:conversation-transcript`, `npm.cmd run verify:governance`, and `git diff --check`.
+6. Open the structured fixture at 393 x 852 in Headless Playwright. Confirm the explicit final, commentary, structured activities, file summary, pending interactions, missing-final explanation, older-history action, zero legacy overlay, zero page errors, and no horizontal overflow. Expand completed process detail and confirm MCP, search, and file facts remain visible.
+7. Open `streamStress=1` and `longTurns=1`; confirm 1600 projected activities remain bounded in the DOM and 801 projected turns mount no more than 10 turn shells while incremental updates and an action still progress.
+
+### Expected Results
+
+- Gateway/thread normalizers and `threadMessageCache.ts` may reconcile acknowledged user identity for delivery confirmation only through `AcknowledgedUserMessage`; local sending and failed-message recovery use `OptimisticUserMessage`. Both are user-only, and the former cannot carry raw delivery metadata. The assistant-capable `UiMessage`, `UiPlan`, and `CommandExecutionData` types must be absent from `src` so neither path can decide visible turn grouping, final selection, execution status, timing, rollback, or recovery.
+- Regression and documentation fixtures exercise the same structured interface as realtime/snapshot/replay production inputs instead of maintaining a second compatibility projection.
+- Completed process stays collapsed by default, active process stays expanded, and structured facts remain available on demand without restoring old tail overlays or raw JSON text.
+
+### Regression Evidence
+
+- The cache source gate first failed because `src/composables/conversationProjection.ts` still existed; after the rename it failed again because assistant/phase/command reconciliation still survived inside the cache. The fixture gate separately failed because `projectFixtureMessages` and `agentMessage.live` recreated replaced semantics. All pass after the cache was reduced to acknowledged user identity and the fixtures were replaced.
+- A later completion audit found `DocumentationShowcaseFixture.vue` still constructed `UiMessage[]` and promoted every assistant role to `final_answer`. The new source gate failed on that adapter first; after direct structured turn/item replacement, source-only and `build:frontend` passed. Headless Playwright at 393 x 852 rendered two turns, two user prompts, two explicit finals, zero missing-final rows, zero horizontal overflow, and zero page errors. Screenshot: `output/codex-app-parity/documentation-structured-fixture-20260830/docs-showcase-phone.png`.
+- A following normalizer audit found `normalizeThreadMessagesV2` still rebuilt assistant, plan, image, command, history-notice and unknown structured items into a second flat `UiMessage[]` model, including the invalid inference that every non-commentary agent message was final. The source gate failed first; after replacement with `normalizeAcknowledgedUserMessagesV2`, thread details, runtime snapshots and rollback preserve the structured response and carry user delivery evidence only. Source-only, frontend normalizers and `build:frontend` passed; the main app bundle dropped from 443.50 kB to 439.77 kB minified.
+- A final type-boundary audit found those user-only values still used the broad `UiMessage` contract, which could compile assistant/final/command fields back into delivery infrastructure. The new source gate failed first. `AcknowledgedUserMessage` now limits gateway, rollback, runtime snapshots and both memory/browser caches to user content, attachments and turn identity. The remaining optimistic/failure references were also user-only in behavior, so they moved to `OptimisticUserMessage`; unused `UiMessage`, `UiPlan`, and `CommandExecutionData` were deleted. A recursive source gate rejects their return. Frontend source-only, frontend normalizers, `vue-tsc --noEmit` and `build:frontend` passed; the main app bundle is 439.58 kB minified.
+- Headless Playwright at 393 x 852 rendered 14 projected turns, one explicit final, zero legacy Runtime bars and zero horizontal overflow. A fresh page opened with `detachedFailure=1`, expanded one `OptimisticUserMessage` failure row with preview `帮我进行下一步`, and retained zero page errors and zero overflow. Screenshot: `output/codex-app-parity/user-delivery-types-20260830/detached-failure-phone.png`.
+- Post-replacement Headless Playwright at 393 x 852 rendered the documentation fixture as 2 turns / 2 users / 2 explicit finals, and the conversation fixture as 14 turns / 7 users / 1 explicit final / 1 commentary / 1 file summary / 5 requests. Both had zero legacy overlay, zero page errors and zero horizontal overflow. Screenshots: `output/codex-app-parity/user-only-normalizer-20260830/docs-phone.png` and `output/codex-app-parity/user-only-normalizer-20260830/conversation-phone.png`.
+- `npm.cmd run build:frontend`, frontend source-only, frontend normalizers, conversation transcript verification, governance verification, and `git diff --check` passed. The final transcript rerun completed in 22.9 ms for 1602 turns and 4.9 ms for 1600 activities.
+- Headless Playwright at 393 x 852 observed 14 turns / 14 dividers, one explicit final, one commentary block, one file summary, five request cards, a projected activity maximum of 8, no internal noise, no page errors, and no horizontal overflow. Expanding completed process detail mounted 15 activities and retained MCP, search, and file facts.
+- The streaming fixture retained 1600 projected / 18 mounted activities while updates, heartbeat, and action counters advanced. The 801-turn fixture mounted 10 turn shells. Screenshot: `output/codex-app-parity/structured-fixture-20260830/structured-fixture-phone.png`.
+- Production 7420, Android, physical foldable, and real Windows assistive-technology evidence remain pending.
+
+### Rollback
+
+- Revert the cache rename, fixture replacement, and source gate together if the candidate itself must be reverted. Do not restore the old flat projection or fixture adapter as a runtime compatibility option.
+
+## Current 7420 Web-only candidate switch (2026-08-30)
+
+### Scope
+
+- Switch and validate the current 7420 Web frontend only, as explicitly requested by the user.
+- Exclude Android and Windows-environment checks from this run.
+- Do not restart the active Node/App Server while this goal turn owns the only restart-protection slot.
+
+### Steps
+
+1. Resolve the active launcher and compare the HTTP `/` body with all candidate/install `dist/index.html` files. Confirm the active 7420 serves `E:\javaword\CXCodex\codexui-sidebar-shortcuts\dist`, not the stale `C:\Users\SW\AppData\Local\CX-Codex\dist` copy.
+2. Copy the built candidate `dist` into a sibling staging directory, verify its SHA-256, atomically move the old live `dist` to `dist.web-previous-20260830-224606`, and move staging to the live name. Do not stop or force the service.
+3. Fetch the real 7420 `/`, every JS/CSS entry asset, `/health`, and `/codex-api/health` with cache bypass headers.
+4. Run `scripts/conversation-browser-smoke.mjs --mode fixture --base-url http://127.0.0.1:7420` in hidden headless Chrome.
+5. Run the same script in `real` mode against thread `01a04e9c-8aaf-7952-bbdf-556f4e70d703`, requiring the selected transcript plus a historical explicit final before taking metrics. Validate desktop, 393 x 852 phone width, and 884 x 1104 foldable width.
+6. Run the smallest syntax, governance, and diff checks after updating the Web regression harness and evidence.
+
+### Expected Results
+
+- The HTTP entry hash equals the candidate hash and all referenced entry assets return 200.
+- Existing App Server/runtime work remains healthy and uninterrupted throughout the Web-only switch.
+- Fixture and real-session Web views preserve explicit final ownership, one final at most per turn, active-turn feedback, bounded DOM, no legacy tail overlay, no internal-context leakage, and no horizontal overflow.
+- A real transcript with no currently visible controls reports an empty undersized-control list instead of inventing a 0px control failure.
+
+### Evidence
+
+- Candidate, live file, and actual HTTP response SHA-256: `893AEDCEFBF76C32C8E68EDED085A1B9E5978A0DA69F45FB85F6551110939295`.
+- Previous live Web SHA-256 retained for rollback: `23D5A076D648B9BADD7209039AC4079B7A3684CCAE870485F2A36794BC67E75D`.
+- `/health` and `/codex-api/health` returned `ok`; App Server remained running and initialized with zero pending RPC, queued RPC, and pending interactions. The one blocking/uncertain request was this still-running goal turn and was not interrupted.
+- All five entry JS/CSS assets returned HTTP 200.
+- Production-served fixture passed desktop, phone, and foldable assertions. The 801-turn case mounted 10 turns / 20 messages; its streaming window completed 78 updates and 71 heartbeats with `maxLagMs=29`, `maxLongTaskMs=0`, and one responsive action. The 1600-activity window mounted 18 activities and completed 68 updates / 65 heartbeats with `maxLongTaskMs=0`.
+- Real thread projection passed all three Web widths with 9 historical explicit finals, no multiple-final turn, one active turn, zero legacy overlays, zero internal-context leaks, zero horizontal overflow, and zero browser errors. Screenshots are under `output/codex-app-parity/production-7420-sema-20260830`, including `real-session/conversation-real-desktop.png` and `real-session/conversation-real-mobile.png`.
+- The first strict real-session probe exposed two harness timing/empty-set defects, not product failures: raw `thread/read` contained 32 completed turns and 32 `final_answer` items, while the cache-first page required a short background-history convergence; visual capture confirmed the final before the updated waiter passed. Mobile then had no visible transcript controls and an empty undersized list, so the assertion now applies 44px only when a target exists.
+- Android, Windows environment/accessibility, backend CLI restart, Git, push, and Release were intentionally not run in this Web-only scope.
+
+### Rollback
+
+- Restore the timestamped `dist.web-previous-20260830-224606` directory to the active `dist` name using the same verified sibling-directory swap. This rollback is Web-only and does not touch configuration, Runtime data, App Server state, Git, or the fixed Sema semantic baseline.
+
+## Current 7420 backend switch and Web regression (2026-08-30)
+
+### Scope
+
+- Load the already-staged Sema candidate backend only after the active 7420 reaches a genuine zero-blocker window.
+- Re-run the current real 7420 Web regression after the process restart; exclude Android and Windows-environment checks as requested.
+
+### Evidence
+
+- The one-time idle switch recorded `runtime_idle`, a successful managed restart, and `candidate_ready`; it did not use the force override and did not enter rollback.
+- Active `dist-cli/index.js` SHA-256 is `75D53C41C582D114E4B53040E22C397060DF44366DAF05BDB2E240F61852B138`; the previous CLI remains recoverable as `dist-cli.sema-previous-20260830-230129`.
+- The restarted App Server reports PID `78328`, `startedAtIso=2026-08-30T15:11:26.861Z`, zero pending/queued RPC, zero pending server requests, zero uncertain Runtime requests, and zero unknown notifications after startup.
+- `/codex-api/state/thread/01a04e9c-8aaf-7952-bbdf-556f4e70d703` returns structured `thread.turns/items`; its payload has no legacy `messages` or `commandExecution` property.
+- The production-served fixture passed desktop, 393 x 852 phone, and 884 x 1104 foldable-width assertions. The 801-turn case mounted 10 turns / 20 messages; streaming completed 78 updates / 71 heartbeats with `maxLagMs=35` and `maxLongTaskMs=0`. The 1600-activity case mounted 18 rows, completed 68 updates / 65 heartbeats with `maxLagMs=17`, and retained a responsive action.
+- The real goal thread passed all three Web widths with at most one explicit final per turn, visible active-turn feedback, seven visible file-summary groups in the sampled window, zero legacy overlays, zero internal-context leakage, zero browser errors, and zero horizontal overflow. Because the thread remained active, the newest two turns and active-turn count changed naturally between viewport captures rather than being treated as a fixed snapshot.
+- Screenshots were visually reviewed at `output/codex-app-parity/production-7420-sema-20260830/backend-regression`, including `real-session/conversation-real-desktop.png`, `conversation-real-mobile.png`, and `conversation-real-foldable.png`.
+
+### Rollback
+
+- Restore `dist-cli.sema-previous-20260830-230129` through the same verified sibling-directory swap and managed restart if the backend candidate must be reverted. Keep the Web rollback and backend rollback independent; neither rollback may restore 7420 legacy conversation semantics into the authoritative source tree.
 ## 会话正文语义 Markdown 与轻量阅读面（2026-08-29）
 
 ### Expected behavior
@@ -16833,6 +17662,8 @@ Verification:
 - 回退附件信封投影及其回归夹具即可；无需改动会话日志、附件缓存、Runtime SQLite、语义 Markdown 或用户配置。
 
 ## Android 真机综合回归与前台恢复计时收口（2026-08-29）
+
+> 恢复反馈计时与正文新鲜度是两条合同：HTTP 快照返回可以结束本次短暂恢复反馈，但落后的 Runtime 字段仍须被版本门禁拒绝；明确的刷新正文意图仍须完成权威补读，不能以反馈结算代替 fresh 正文。历史 P95、真机及浸泡结果仅对应下述原候选。
 
 ### Expected behavior
 
@@ -16895,3 +17726,350 @@ Verification:
 ### Rollback
 
 - 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。
+
+## 会话正文与公开过程的桌面体验对齐（2026-09-11）
+
+### Expected behavior
+
+- 用户正文、公开进展、计划和最终回复共用语义富文本：标题、嵌套列表、只读任务勾选、引用、代码与表格正常排版；手机正文为 16px / 1.65，长代码和表格只在块内横向滚动。
+- 流式增量不重建内容未变化的顶层块；用户选中正在增长的段落或代码时，仅保留选中块的当前显示及 DOM，其他块继续更新。清除选区后，无需下一次网络消息便追上最新完整内容。Markdown 结构改变导致选中块身份消失时，暂保留该条消息显示至清除选区；不冻结底层数据或运行状态。
+- 正在运行时公开进展、真实状态动画和计时可直接看到，命令/输出按需展开；完成后默认收起过程，但选中文字或离开底部阅读时不得强制折叠、跳到底部。
+- 用户气泡外仅保留复制、更多，以及必要的真实发送失败操作；收藏/两步回退进入更多菜单。同一时刻最多一个消息菜单，支持键盘方向键、Escape/Tab 退出和焦点恢复。手机触控目标至少 44px。
+- 复制成功在原按钮反馈，不弹成功提示；复制失败明确反馈，并清除上一次成功状态。代码复制保持原始代码内容。
+- 本地绝对文件阅读链接进入受限预览，路径与行号说明保留，权限仍由现有文件接口验证；HTML/SVG 不作为同源顶层文档直接打开。明确的 `download=1` 下载语义保留。
+- 浅色与暗色下气泡圆角一致，操作栏不被气泡底色包围；减少动态效果设置下关闭脉冲动画。
+
+### Reusable verification
+
+- `npm run build:frontend`
+- `npm run verify:conversation-rich-text`
+- `npm run verify:conversation-transcript`
+- `npm run verify:core-flows`
+- `npm run verify:frontend-normalizers`
+- `npm run test:7420:frontend -- -SourceOnly`
+- `npm run test:reply-quality:browser -- --base-url http://127.0.0.1:17423 --output-dir output/reply-quality-browser`
+- 浏览器命令使用已安装的 `agent-browser`，在独立会话中屏蔽 `/codex-api/**`；仅测试固定样本，不读取服务认证信息、不发送真实消息。可通过 `CX_CODEX_AGENT_BROWSER` 指定原生 CLI 路径。
+- 固定页面为 `/#/__regression/reply-quality`，覆盖六种内容和 1440×900、393×852、884×1104 三种视口。视口仿真不是 Android 真机证据，也不是 Codex 桌面端像素一致性证明。
+- 实际 7420 验收另行验证新资源哈希、旧资源可用、原服务 PID 与认证门禁，以及真实发送→公开进展→完成→刷新后的唯一正文。截图和部署回退点放在 `output/conversation-desktop-parity-20260911`。
+
+### Rollback
+
+- 前端部署只追加哈希资源并原子替换入口，保留旧入口备份；回滚入口即可恢复上一版前端，不重启后端、不清理会话、SQLite、附件或认证状态。
+- 源码回退时同时恢复 `ThreadConversation.vue` 的旧渲染路径及对应样式/断言，不修改 ConversationProjection、Runtime、消息身份、队列或恢复版本门禁。
+
+## 补充问题与选项说明完整性（2026-09-11）
+
+### Expected behavior
+
+- 补充问题同时显示简短标题和完整问题；两者完全相同时只显示一次。选项的取舍说明在选择前可见，以纯文本呈现，不解析 HTML。
+- 单一会话投影保留与 `options` 同索引的 `optionDescriptions`；无标签的无效选项整体忽略，不能让说明错配。没有说明的旧请求与自由输入仍然可用。
+- 保留原生选择框与明确的“请选择”状态，不预选、不自动提交；发送值仍为原选项标签与用户补充，不包含说明文字。请求 ID、响应 ID、审批和队列所有权不改变。
+- 手机与粗指针布局的选择框、补充输入和回复框高度至少 44px；问题与说明允许自然换行，不制造页面横向溢出。
+
+### Reusable verification
+
+- `npm run verify:conversation-transcript`：先确认新增断言在旧投影上失败，再验证选项说明、无效选项对齐、嵌套请求、旧请求/自由输入与原响应身份。
+- `npm run build:frontend`
+- 浏览器打开 `/#/__regression/conversation-blocks?uxState=waiting`，使用 `.request-card[data-interaction-type="user-input"]` 验证完整问题、`.request-option-descriptions` 内两项说明、未回答时禁用提交和 44px 输入目标。选择并补充后，结果仍须为 request `742004` 与原 `verification-scope` 标签值。
+- 以上固定夹具不是实际模型/设备验证；真实会话与部署证据由本次候选验收记录另行给出。
+
+### Rollback
+
+- 整体恢复本项投影字段、提问模板/样式和固定夹具即可；不回退任何请求执行、Runtime、消息队列或持久化数据。
+
+## 异步代码高亮（2026-09-11）
+
+- 原文先显示，高亮不能阻塞或延迟流式文字。明确标注的 11 类常用语言使用独立 Worker；未知/无标签/超过 20,000 字符的代码保留纯文本，不自动猜测，不弹错误提示。
+- 浅深色配色可区分语法且不改变字体、行高或布局。复制仍取原始代码，不能包含语言栏、按钮或高亮 HTML。
+- Worker 单任务串行、最多 64 项等待、取消后丢弃旧结果、3 秒失败降级、空闲 10 秒销毁。页面已卸载、代码已变化或用户正在选择代码时，迟到结果不得替换原 DOM。
+- `npm run verify:conversation-rich-text` 同时运行语义富文本、11 语法/别名/字符保真和 Worker 调度生命周期测试；`npm run test:reply-quality:browser -- --base-url http://127.0.0.1:17423` 覆盖 49 项固定样本验收。
+- 密集代码样本使用 `window.__CX_REPLY_QUALITY__.setCodeText` 输入 20,000 字符，检查高亮前后逐字一致、2,000 语法标记、无横向页面溢出，并分别记录浏览器 Long Task（门槛小于 80ms）和心跳延迟。一次浏览器测量不代表真机、P95 或整个产品性能门槛。
+- 本轮证据位于 `output/code-reading-20260911`；独立依赖构建避免改动正在运行的 7420 Node 模块。静态部署只追加新哈希资源及随包许可证，再原子替换入口；可恢复备份入口，后端/会话数据不变。新依赖用途、预算和移除路径见 `docs/conversation-code-highlighting.md`。
+
+## 流式阅读连续性（2026-09-11）
+
+- `node scripts/reading-stream-browser-smoke.mjs --base-url http://127.0.0.1:17423 --output-dir output/reading-stream-browser` 使用独立 agent-browser 固定夹具；桌面/手机宽度分别在正常与减少动态效果媒体下运行，共 24 项。
+- 正在增长的代码/段落选区与原 DOM 不丢失；释放选区后 250ms 内显示完整最新内容且无重复块。已完成段落被选中不应阻止旁边代码增长。
+- 历史公开进展和任务完成不得抢走阅读位置；底部跟随正常，801 轮历史下保留阅读锚点和虚拟化窗口。不将宽度仿真解释为手机真机或外网延迟证据。
+- 回退只涉及共享富文本的选区呈现策略与回归断言，不回退模型、Runtime、原生队列或持久化数据。本轮红绿证据保留在 `output/stream-continuity-20260911`。
+
+## 本机 7420 启动入口对齐（2026-09-11）
+
+- 本机唯一启用的 Startup 入口与手动启动复用同一启动脚本，指向当前验证部署；不再由旧 `codexui-sidebar-shortcuts` 工作树接管 7420。禁用计划任务及独立 FRP 服务不变。
+- 保留切换时正在使用的配置、密码、监听地址和 Runtime 数据库；不能以旧临时部署数据库覆盖重启后接受的请求。启动不固定已被桌面更新器移除的 Codex 版本目录，复用项目的可执行文件发现逻辑。
+- 停机前双向核对 RPC、原生加载任务、队列、目标、持久请求和租约；`completed_pending_sync` 按生产状态机视为已执行结束，单独报告但不删除。仍需检查 `can_stop`、`stop_requested` 等真实阻塞字段。
+- 用同一入口实际启动，再核对进程链、HTTP 入口与资源哈希、伪造 Host 下匿名 HTTP/WS 拒绝，以及既有请求 ID 全保留。真实发送后验证标题/列表/代码、运行到完成、桌面/手机宽度和刷新后无重复；不将模拟宽度解释为真机或外网证据。
+- 本机证据与可回退脚本在 `output/startup-alignment-20260911`。回退启动入口时保留上线后的数据库，避免丢弃新增任务。该部署目录及它引用的依赖目录正在使用，不可作为普通测试输出清理。
+
+## 社区安装与公式反馈回归（2026-10-15）
+
+- 安装源：`node --test scripts/dependency-security.test.mjs` 验证官方 HTTPS 源可通过，镜像、HTTP、非默认端口、伪造域名、URL 凭据及无效 URL 在执行审计前被拒绝。本轮 7 项通过；`npm run verify:dependency-security` 校验 430 条官方源 URL，实时审计 0 漏洞。
+- 严格安装：隔离 Node 22.22.2 / npm 12.2.0，使用 `npm ci --allow-remote=none --ignore-scripts`。镜像负例退出 1 且报 EALLOWREMOTE；最终官方锁干净安装退出 0。该证据不包括安装脚本、Windows bootstrap、服务启动或正式发布包。
+- 公式：`npm run verify:conversation-rich-text` 共 48 项通过，覆盖四种公式分隔符、代码与价格保留、价格后接行内代码、`$$x` → `$$x$` → `$$x$$` 流式边界、错误/未闭合/超长输入回退，以及不可信公式与普通 Markdown 的消毒隔离。
+- 页面：`node scripts/reply-quality-browser-smoke.mjs --base-url http://127.0.0.1:17425 --output-dir output/operations-20261015/browser --session cx-operations-suite-1015` 使用独立 agent-browser 空白 profile、候选静态预览并阻断 Codex API；桌面、手机和折叠屏宽度、深色主题、字体、矩阵、长公式局部滚动、复制及阅读位置等 54/54 通过。手机公式截图已人工检查；宽度仿真不等于 Android 真机或真实发送验收。
+- 构建与相邻能力：`npm run build:frontend`、`npm run build:cli`、`npm run verify:server-modules`、`npm run verify:frontend-normalizers` 均通过。服务模块首次遇到沙箱临时目录限制及 SQLite 原生构件缺失，改用隔离临时目录并恢复已锁定构件后通过；没有据此变更数据库业务逻辑。
+- 证据：`output/operations-20261015/verification.json`、浏览器 `report.json` 和构建/安装日志。正式包、Android APK、FCM 深度 Doze 和 PRODUCT_GOAL 的其余门禁仍须各自验收。
+
+## 公式审查问题修复回归（2026-10-15）
+
+- 使用 `npm run verify:conversation-rich-text`，新增边界、资源与逐消息缓存三个专项入口。宏放大、价格吞公式、代码分隔符、未闭合扫描和流式重算均先保留 RED，再执行 GREEN；原始日志在 `output/fix-review-20261015/`。
+- 公式执行合同：单公式进入 KaTeX 前最多 4000 字符、128 个控制序列、32 个未转义开组；自定义宏/别名、动态扩展、私有控制词与超额输入保留可读源码。内置公式、矩阵、积分、Braket、公开 tag 继续渲染，不声称完整 TeX 支持或任意输入硬超时。未闭合输入不能吞掉行内代码或围栏代码；中文/英文价格后仍须显示真正公式及加粗，数字数学表达式继续支持。
+- 流式合同：仅在当前消息渲染器中复用当次使用的公式结果及失败回退，区分显示模式；最多 128 条和 512 Ki 字符，移除公式时释放对应缓存。原 100 个相同 4×4 矩阵的消息追加一字后，KaTeX 调用必须为 0，旧矩阵块保持身份；不同消息不共享缓存。
+- 页面入口：`http://127.0.0.1:17425/#/__regression/reply-quality?case=math`。检查价格 `$10；**重要**；结果$x+1$`、代码中的关闭分隔符、长行内与独立公式、错误/受限源码回退。393px 下只允许公式内部横向滚动；溢出的行内公式可键盘聚焦并用方向键滚动，宽窗口容纳公式后移除额外焦点。
+- 固化页面回归：`node scripts/reply-quality-browser-smoke.mjs --base-url http://127.0.0.1:17425 --output-dir output/fix-review-20261015/browser-confirm --session cx-fix-confirm-1015`；使用独立空白 profile、阻断 `/codex-api/**`，测试结果以对应 `report.json` 为准。该入口使用固定样本，不能作为真实任务发送、生产 7420、Android 真机或发布验收。
+- 最终结果：富文本 70/70，前端构建通过；完整页面回归 57 通过、1 项 native 浏览器连接超时。用新空白 profile 加 `--only math-currency-preserves-markdown,math-code-delimiters-stay-literal,phone-math-inline-scroll-keyboard,math-macro-budget-readable-fallback,dark-code,dark-math` 定向复测 6/6，补齐失败场景，合计 58 个唯一场景已覆盖。报告位于 `browser-confirm/report.json` 与 `browser-targeted/report.json`，都相对于 `output/fix-review-20261015/`；不覆盖原失败。最终源码指纹及六项映射见同目录 `result.json`。
+
+## 模型拒绝不再隐式换模型（2026-10-15，B1）
+
+- 行为：请求的模型被明确拒绝时，保留原始错误与可恢复的消息状态；不再隐式选择或持久化 `gpt-5.2-codex`，不向模型目录注入虚构模型及其推理能力，不自动回滚会话，也不在另一个模型或新 `clientMessageId` 上重放。用户仍可显式改选模型、编辑、重试与回滚。
+- 保留的契约：传输/无效响应类不确定投递仍按同一 `clientMessageId` 查询并按需重放同一请求体；新会话确认中/等待、失败气泡与预览、outbox 与 `FailedUserMessageRequest`、队列与终态记账、自定义渠道选择不变；成功通知、目标续跑与自动提交只在没有 turn 错误时触发。`rollbackThread` 仅保留给用户主动回滚。
+- 合成用例：`D:\nvm\v22.19.0\node.exe scripts/verify-delivery-contract.mjs` 46/46 通过（退出 0）。新建会话与既有会话各新增一项“显式模型拒绝保持所选模型”样本，断言第二次发送为 0、无边界传输重试、原始 400 模型错误留存、localStorage 模型选择与 `availableModels`/`availableModelIds` 不变、outbox 仍为 `failed` 且失败气泡/预览保留；原有 44 项投递、恢复、outbox 与队列用例全部保持通过。先前 RED 见 `output/hermes-codex-upgrade-20261015/b1a-red.log`（发送数 2≠1）。
+- 用户主动重试：失败请求记录仍携带原始 `modelId` 与参数，直接重试沿用该模型（本次仅保留既有代码路径，未新增该分支的合成样本）；要换模型须由用户显式改选后重新发送。
+- 未验证：异步通知分支的合成覆盖、浏览器/真机、真实模型运行时与当前 Codex 桌面一致性未由本批证明；`npm run build:frontend`（vue-tsc `--noEmit` + 两次 vite build + 预压缩）退出 0 只表示类型与构建通过，不构成 UI 或发布验收。
+
+## 模型拒绝的异步通知与用户重试合成覆盖（2026-10-15，B1C，仅测试）
+
+- 入口与结果：`D:\nvm\v22.19.0\node.exe scripts/verify-delivery-contract.mjs` 在保留原 46 条用例的基础上新增 4 条，实际 49/50 通过、退出 1。日志 `output/hermes-codex-upgrade-20261015/b1c-tests.log`；结论见同目录 `b1c-result.json`。本轮未改产品源码。
+- 通过：与已接受回合并列同一 turn 身份的 `turn/completed` 失败回合被消费、不重放、无边界重试、无配置写入或回滚依赖、模型与 localStorage 与模型目录不变，且执行态收敛为结束；不带任何 ID 的 `error` 通知（含重复注入一次）被消费、不结算也不打断运行中的任务、不新增发送、可见用户消息不重复；显式 `retryFailedUserMessage` 使用失败气泡的真实 ID 时正好产生第二次发送，并沿用存储的 `requestedModelId`、原文本与线程，用户新改选的模型保持不变。
+- 未通过（按契约保留、未弱化、未改产品源码）：带 `threadId`+`turnId` 的 `error` 通知（同一 `MODEL_REJECTED_MESSAGE` 文本）在“错误已消费、发送数 1、无额外 HTTP 依赖、模型快照不变、气泡不重复”五项断言全部通过后，`selectedThreadExecutionActive` 由 true 变为 false。同一文本在无 ID 时不会结算，因此差异来自通知携带的线程/回合身份而非文本分类器。该条判定（合法归属结算或缺陷）留待监督复核。
+- 夹具限制：仅文本负载（附件/图片未覆盖）、这 4 条仅既有会话模式、未排空全局假计时器、新会话模式的异步变体未覆盖。浏览器、真机、Android、真实 7420 运行时与当前桌面一致性仍未验证；本次未重跑前端构建。
+
+## 更正：带 ID 的 error 通知前提（2026-10-15，B1D，仅测试）
+
+- 契约更正：B1C 记录中“带 `threadId`+`turnId` 的 error 通知为非终态、不得结算任务”的前提不成立，属监督任务契约错误，本批按更正后的前提重写该用例；B1C 原始日志与结论保留不改（`b1c-tests.log` 49/50、退出 1）。这不表示隐藏缺陷：`documentation/app-server-schemas/typescript/v2/ErrorNotification.ts` 定义 `error`、`willRetry`、`threadId`、`turnId`；`applyRuntimeNotificationState`（B1 未改动）对已归属的 `method=error` 置为 `failed`，文本分类器只决定是否附加处理分支。
+- 更正后的用例：`params={threadId,turnId,willRetry:false,error:{message,codexErrorInfo:null,additionalDetails:null}}`，断言该已归属的非重试任务错误被消费、恰好一次发送、无边界重试、无配置写入或回滚依赖、模型/localStorage/模型目录与 outbox 标识不变、可见用户消息不重复，且匹配任务的执行态收敛为结束。这与既有的 `turn/completed` 失败回合用例互不相同，互为补充。
+- 强化后的无 ID 用例：注入前断言恰好一个可见用户块并记录其 id/text/deliveryState 与 outbox 投影；第一次与重复注入后分别比对同一完整投影、运行态、模型快照、发送数与额外 HTTP 依赖；无归属通知不得停止所选任务或把其用户消息标为失败。outbox 比对保留身份/状态/载荷字段，排除可能被恢复流程合法刷新的尝试/时间戳记账字段。
+- 结果：`D:\nvm\v22.19.0\node.exe scripts/verify-delivery-contract.mjs` 50/50 通过、退出 0（日志 `output/hermes-codex-upgrade-20261015/b1d-tests.log`）。`willRetry:true` 的语义不在本批判断范围，留作独立的协议校验问题。仍未验证：新会话模式的异步变体、附件类负载、浏览器/真机/Android/真实 7420 运行时与当前桌面一致性；未重跑前端构建。
+
+## 阶段正文 partial_answer（2026-10-15，B2）
+
+`partial_answer` 保留为独立的 assistant `phase=partial`，不混入公开进展，也不冒充最终回复；只有显式 `final_answer` 提供唯一最终正文。完成、失败或中断的权威终态会收敛阶段正文的 streaming 标记；只有 partial 的完成回合在投影中保持缺少 final，导出保留说明，页面不伪造最终回复。历史读取保留原始 phase 与既有去重规则，Markdown 导出按块顺序输出阶段正文、过程和最终回复，partial 正文只出现一次。页面中的阶段正文不随过程折叠、历史窗口或阅读冻结隐藏；复用既有富文本、公式/代码与原文复制组件，保留稳定消息 ID。
+
+本地合成验证已通过：`b2f-transcript.log` 为 NATIVE_EXIT=0；历史测试 `b2c1-history-green.log` 为 22/22；使用真实生产 reader/projector/export 的独立 holdout `b2-independent-probe.json` 为 12/12、退出 0。`build:cli`、`verify:server-modules`、F/G 前端构建均有退出 0 日志。候选静态入口的独立 agent-browser 回归 `b2-browser-green2/report.json` 为 44 通过、0 失败、0 未验证，`b2-browser-green2.log` 为 NATIVE_EXIT=0；root 实际查看桌面交错过程、手机纯 partial、手机冻结后新 partial 三图，记录于 `b2-browser-visual-review.json`。green1 的 18/44 与原失败报告保留：query 切换未重新初始化夹具导致 harness 误报，green2 的 loadCase 强制真实 reload 并核对页面 marker 后通过，期间没有靠修改产品源码消除这些误报。复制 Vue 算法的 `b2f-segment-probe.mjs` 不计为产品独立验收。上述文件均位于 `output/hermes-codex-upgrade-20261015/`。
+
+手工合同：在候选预览打开 `/#/__regression/conversation-blocks?partialAnswers=completed`，折叠/展开过程，检查两段正文持续可见、工具展开后仍在二者之间、显式 final 唯一、代码/公式与复制原文正确；`partialAnswers=no-final` 保留两段正文且不生成最终回复。用 `partialAnswers=running` 追加同 ID 正文，分别验证底部跟随、离开底部阅读位置和既有 DOM 身份；再检查 `partialAnswers=completed&variant=pure`、`variant=interleaved`、`partialAnswers=running&variant=frozen` 的纯 partial、交错过程与冻结工具组扩展/新 partial，并核对无 partial 的原场景。浏览器证据使用本地合成原始条目、生产投影与生产 Vue，阻断 Codex API；桌面/手机宽度仿真不代表实际设备。真实 7420、真实模型/当前原生 Runtime、Android/真机、安装升级和发布仍未由 B2 覆盖。
+
+## 专用权限请求审批（item/permissions/requestApproval，2026-10-15，B3B）
+
+- 行为：`item/permissions/requestApproval` 单独识别为 `permissions-approval` 交互（即使请求结构未知也不回落 generic），只提供“本轮允许”和“拒绝”两个动作，统一显式 `scope:'turn'`；不提供 session/always 记忆、不暴露 `strictAutoReview`、不复用 legacy `decision` 结果。计划模式直接返回 `{permissions:{},scope:'turn'}` 空授予；非计划模式即使 `allowAllPermissionRequests` 或某项 `allowForSession` 为真也一律排队等待用户显式决定。command/file/MCP 审批的既有语义、优先级与自动批准保持不变。
+- 服务端次序与失败保留：按 id 只读查 pending 原请求 → 用该原请求校验并重建响应 → 同步发送 → 消费 → 发出 resolved。没有 pending、响应为 error envelope、`{}`、legacy decision、`scope` 非 turn、`strictAutoReview`、未知字段、非对象 permissions，或授予分量不是原请求的完整已识别分量（扩大路径/glob 深度、新增 special root、删除或改写 `none`/`deny` 限制项、改变数组顺序、授予请求中不存在的分量）时不发送、不消费、不产生 resolved；同步发送抛错时原请求与 id 保留在唯一 store，可由用户用同一 id 重试，成功后只消费一次，重复响应不再发送。该保证只覆盖同步写入未抛错，不表示 Codex 已处理或工具已获得/被拒权限。
+- 展示合同：投影为专用交互附带 `permissionsApproval` 视图 `{canApprove, unavailableReason, rows, grant}`。rows 完整表达 environmentId（缺省明确“未提供”）、cwd、reason、network.enabled 的 true/false/null、全部 read/write 路径、globScanMaxDepth、entries 的 `path`/`glob_pattern`/`special` 与 access；保留原始文本，不 path.resolve、不检查存在性、不推断本机环境。0.130 的 `none` 与 0.162.1 的 `deny` 都作为限制项原样保留，不相互改名、不删除；`special` 的 root/minimal/project_roots(subpath)/tmpdir/slash_tmp 全部显示，`special.unknown` 保守标为不可授权。wire 合法的省略/null（environmentId、reason、network、fileSystem、read/write、entries、globScanMaxDepth）不判为未知结构。
+- 合成验证：`D:\nvm\v22.19.0\node.exe scripts/verify-server-modules.mjs` 退出 0（`server module smoke ok`，日志 `output/hermes-codex-upgrade-20261015/b3b1-green-server-4.log`）；`D:\nvm\v22.19.0\node.exe scripts/verify-conversation-transcript.mjs` 退出 0（`Conversation transcript smoke passed`，日志 `b3b1-green-transcript-2.log`）。实现前两套脚本的运行期 RED 为 `b3b1-red-server.log`（同步 send 抛错后 pending 被消费，`0 !== 1`）与 `b3b1-red-transcript.log`（交互类型仍为 generic），退出码见 `b3b1-red-exits.txt`。
+- 手工合同（B3C 完成后生效）：在隔离夹具中打开权限请求交互，核对环境/工作目录/原因/网络/读写路径/glob/范围项逐项显示与原始文本一致；确认只有“仅本轮允许”和“拒绝”两个动作、计划模式直接拒绝、未知结构的“仅本轮允许”禁用而“拒绝”仍可用且说明不可授权；重复点击只提交一次；服务端拒收时页面提示且请求仍待处理。
+- 未知结构处理修正（B3B2，2026-10-15）：路径 union 的每个变体（`path`/`glob_pattern`/`special`）各自校验成员，任何未知成员（例如外层 `futureRestriction`、路径对象上的 `followAliases`/遗留 `access`）只记入“未识别项”，请求保持仅可拒绝，不会被剥离后批准；`special.kind` 查表改为 own-key 安全的 Map，`toString`/`constructor`/`__proto__` 等原型名 kind 不再抛异常，仍是 `permissions-approval` 专用交互（可显示、可拒绝，空 grant 经真实 handler 生效并保留待处理状态直到被拒），未识别明细保留原始 kind/字段文本，已知路径与 pattern 在“范围项”行中原样显示。
+- 未验证：本批没有专用 UI（`ThreadConversation.vue`、`useDesktopState.ts` 未改），真实 pending 即使出现在旧 generic 按钮上也会被服务端拒绝而不产生授权；实际 7420 运行版本、Runtime 授权/拒权行为、空 grant 在引擎中的语义、浏览器/真机与发布均未由本轮证明。
+
+## 专用权限卡 UI 与单请求失败回执（2026-10-15，B3C2）
+
+- 卡片：`permissions-approval` 交互渲染专用卡（卡根元素带 `data-permissions-request-id="<numeric id>"`，numeric ID 也在卡内可见），卡内**只有**“仅本轮允许”（`data-permissions-action="allow-turn"`）与“拒绝”（`data-permissions-action="deny"`）两颗按钮；不出现 generic“继续”、session/always、`strictAutoReview`、legacy `decision` 或空 result。command/file/MCP/用户输入与 generic 分支保持原样。
+- 完整范围：`interaction.permissionsApproval.rows` 逐行渲染为 `dt` 加 `dd[data-permission-row]`，顺序与原文一致；环境（缺省明确“未提供”）、cwd、reason、network 的 允许/不允许/未指定、全部 read/write 路径、globScanMaxDepth（深度 3 可见）、entries 的 `path`/`glob_pattern`/`special`（root/minimal/project_roots(subpath)/tmpdir/slash_tmp）与 read/write/none/deny 原样保留。路径是纯文本：不 `path.resolve`、不做存在性检查、不改写为本机路径，不使用 `v-html`；长值换行、手机宽度无横向溢出。
+- 未知结构（deny-only）：`canApprove=false` 时卡内显示 `data-permissions-unavailable-reason` 的真实可见原因，“仅本轮允许”禁用而“拒绝”仍可用；拒绝发精确 `{permissions:{},scope:'turn'}`，不回落 generic“继续”，不默认同意。
+- payload：允许发 `{id:<numeric responseId>,result:{permissions:<完整已识别 grant>,scope:'turn'}}`；拒绝发 `{id,result:{permissions:{},scope:'turn'}}`。本地 `onResponseError` 回调只存在于 Vue emit 与 composable 参数，App 原对象转交、composable 调用 gateway 时只摘 result/error，回调绝不进入 HTTP JSON。
+- 单请求失败回执与同页重试：真实按钮点击后该 numeric ID 进入 responding（两按钮禁用，双击只发一次）；HTTP 非 2xx 时生产 `respondToPendingServerRequest` 先保留原全局 error 赋值与 pending，再调用**该次 reply** 的 `onResponseError`。卡片保留、显示 `data-permissions-response-error`（`role="alert"`，文本为真实错误）并只释放该 ID 的提交锁，不刷新/不切聊天即可再次点击同一颗按钮；第二次成功后只移除该 ID，成功路径不触发失败回调，无关 pending（例如 7315）始终保留。再次点击清掉该 ID 旧错误，pending 离开时清理该 ID 的错误；不维护第二份 pending、不清空其他锁、不靠 loadError 或全局 error 变化解锁别的卡。
+- 合成验证：`node scripts/verify-delivery-contract.mjs` 退出 0（51/51；C1 的 HTTP500 后 callback 0 次 RED 转 GREEN，两次同 ID/同 result、callback 仅一次、无关 pending 保留、wire 不含函数，日志 `output/hermes-codex-upgrade-20261015/b3c2-delivery-green.log`）；`node scripts/verify-conversation-transcript.mjs` 退出 0（B2 partial/order/terminal 与 B3B 权限投影无退化，日志 `b3c2-conversation-green.log`）；`npm.cmd run build:frontend` 退出 0（含 `vue-tsc --noEmit`，日志 `b3c2-frontend-build.log`）。
+- 独立浏览器验收：root在隔离17439服务运行固定完整B3 probe，桌面1365×900/手机393×852共24/24通过、0失败/0未验证，真实HTTP两次状态为500→200、numeric ID均7314且只剩无关7315；见 `output/hermes-codex-upgrade-20261015/b3-browser-green1/report.json`。Codex已看图复核完整范围、手机unknown禁用允许、500后同卡错误及可重试状态（`b3-browser-visual-review.json`）；这是AI截图复核，不冒称人员验收。相同构建重跑原B2 probe44/44通过（`b2-browser-after-b3/report.json`），CLI/server沿未变输入复用B3B2的有效检查。
+- 隔离证据边界：覆盖真实Vue组件/生产composable与同源合成HTTP，不证明真实Codex引擎按grant执行或拒绝、当前7420 CLI版本、Android/真机、安装浸泡与发布行为；完整24项而非`--only`作为本地浏览器放行条件。root本地候选接受见 `b3-review.md`。
+
+## model/list 会话缓存清理与迟到回写（2026-10-15，B4A1）
+
+- 行为：新增 `AppServerRpcCache.clearModelList()`，递增独立的 model generation，清空全部 `model/list` params key 的缓存与对应的 model 在途共享读取；`clearAppServerSessionStores` 在原有 `clearSharedReads` → `invalidateThreadList` 之后追加调用它，pending/token/plan 的清理顺序与含义不变。`invalidateThreadList` 未被改成 `clearThreadList`：cleanup 后 thread/list 旧值仍按原失效合同可读为 stale，刷新后的同代写入与持久快照重载不受影响。
+- 迟到回写保护：普通 miss 与后台 stale refresh 都在 enqueue 前捕获当时的 model generation，只有同代才允许写模型缓存；旧 generation 的成功结果不再落地，旧 refresh 的 bookkeeping 更新也只在同代发生。`deleteSharedRead(key, request)` 的身份保护保留，旧 promise 的 `finally` 只清理自己，不会丢掉新 generation 的共享读取。
+- 合成验证：`node scripts/verify-server-modules.mjs` 退出 0（`server module smoke ok`，日志 `output/hermes-codex-upgrade-20261015/b4a1-verify-server-modules.log`，原始退出存 `b4a1-verify-server-modules.exit.txt`）；`npm.cmd run build:cli` 退出 0（tsup `Build success`，日志 `b4a1-build-cli.log`）。实现前的真实运行期 RED 为 `b4a-model-cleanup-red.log`/`.exit.txt`（Compile 通过进入 Run，actual A / expected B）及 root 独立隔离复现 `b4a-codex-isolated-red2.log`/`.exit.txt`（同为 actual A / expected B）。
+- 新增覆盖（`smokeAppServerRpcCache`，全部使用合成 cache 与 `threadListCachePath:''`，一个持久例使用临时隔离路径）：cleanup 后不同 model params key 全部读为 null、在途 model 读取被丢弃且不被复用、cleanup 后首次读取重新取数恰好一次并缓存；同代 fresh 命中不发起取数；旧 A 成功或失败都不得覆盖新代缓存，也不得删除新代共享读取（第三读与新读取同一 promise、enqueue 计数仍为 1）；stale model 读取立即返回旧值、后台 refresh 最多一次、cleanup 后旧 refresh 的成功与失败都不落地；cleanup 后 thread/list 仍按原失效合同可读旧值，同代刷新仍能写缓存并从文件重载。
+- 未验证/边界：除 B4A 既有四行断言外，本轮新增的 holdout 断言只在实现后运行（GREEN），未单独观察 RED；后台 refresh 的 bookkeeping 代际守卫属防御性改动，本轮无可公开观察的区分性断言，不宣称已被行为例证明。合成缓存不代表真实 Codex 模型目录、正在运行的 CLI 版本、进程身份或 Runtime 已升级，也不覆盖前端/浏览器/真实服务与 7420 验收。
+
+## 活动启动身份 owner 与 health（2026-10-15，B4B1）
+
+- 身份捕获：`src/commandResolution.ts` 新增只读 `CodexLaunchIdentity`（`generation`、绝对 `launchPath`、`versionRaw`、`sha256`、`identityKind: native|launcher|unknown`，必要时一个短 `reason`）与 `captureCodexLaunchIdentity()`。helper 把最终裸名/相对候选绝对固定（裸名取 PATH 上首个真实命中，相对路径按 cwd resolve），`--version` 探测、真实文件 SHA 与之后的启动都绑定这同一个标注目标，不再二次 resolve，raw version 原样保留。probe/hash 任一失败或候选无法绝对固定时整条身份降级为 `unknown`，把不可信 `versionRaw`/`sha256` 置空并只保留已固定 `launchPath` 与短原因（`version-probe-failed`/`hash-failed`/`version-probe-and-hash-failed`/`unresolved-launch-path`/`empty-launch-command`）；helper 不新增启动阻断，原解析/spawn/握手失败合同不变。
+- 分代与冻结：`src/server/appServerProcess.ts` 只在 `start()` 真实创建/替换 child 时分配自增 generation 并冻结身份，启动只用捕获的目标加原 Windows shim 语义；捕获后到 spawn 之间文件指纹变化会把该身份降级为 `unknown`（`launch-window-fingerprint-changed`），既不假造可信身份也不重启、不改模型任务。候选 A→B 或 PATH 变动、同路径文件在 A 活动时改变都不能改写仍在运行的 A 的已冻结身份；只有真实替换才捕获新 SHA，A/B 同 `versionRaw` 不同 bytes 也能区分。
+- 发布时机：公开 `getActiveLaunchIdentity()` 与 `getStatus().activeLaunchIdentity` 只在**当前 child initialize 握手成功之后**返回；未启动、启动失败、握手 pending/失败、当前 child 退出、restart/dispose 清理后一律无活动身份。既有握手失败若保留 child，则该 child 的内部身份与 generation 保留，重试不再 resolve/probe/spawn，原 child 握手成功后才发布。身份 probe/hash 失败但握手成功时发布 `unknown`（与握手失败返回无身份不同）。initialize 的成功/失败/finally 都带当前 child 与该次 promise 的身份保护：迟到结果不给新 child 发 `initialized`、不置新 child 的 `initialized`、也不清新 child 的 `initializePromise`；旧 child 的 stdout/error/exit 在 B 活动时既不清 B 也不污染 B 的初始化状态。
+- seam 与隔离：`AppServerProcess` 增加可选 constructor 依赖（候选解析、`--version` 探测 transport、spawn），生产默认仍走原 `resolveCodexCommand`/真实 probe/真实 `spawn`。`smokeAppServerProcess` 改为 async 并在入口 await，在**构造第一个 owner 之前**把 `CODEX_HOME` 指向 `new URL('./b4b1-owner-home-', import.meta.url)` 下的 mkdtemp 合成目录，finally 处置 owner 并恢复原 env；合成目录落在编译 smoke 的 outputRoot 内，由既有 verifier 在子进程退出后清理，不新增 flush API、不访问私有 cache、不读用户目录。
+- 合成验证：`node scripts/verify-server-modules.mjs` 退出 0（`server module smoke ok`，日志 `output/hermes-codex-upgrade-20261015/b4b1-owner-server-modules.log`，原始退出码 `b4b1-owner-server-modules.exit.txt`）；`npm.cmd run build:cli` 退出 0（tsup `Build success`，日志 `b4b1-owner-build-cli.log`，原始退出码 `b4b1-owner-build-cli.exit.txt`）。有效运行期 RED：`b4b1-owner-server-modules-red.log`/`.exit.txt`，编译通过并进入 Run，真实 start→warmup/initialize 的前置断言（含 spawn/resolve/probe 计数与 initialize 参数）全部通过后在 `active launch identity must be published after the initialize handshake` 处 `actual: undefined`；该 RED 通过在同一 seam 上临时收回公开发布门取得，非编译错误、非未接参数。**修正（supervisor）：这条只是 mutation control，不是原实现 RED，也不构成“先 RED 后实现”的合规证据；相关结论与原始源码对照见文末“B4B1 修正”一节。**
+- 新增覆盖（`smokeCodexLaunchIdentityCapture` 与 `smokeAppServerProcess`，全部合成文件与合成 child，不启动真实 app-server）：绝对 native 目标的 version/hash 绑定、相对候选绝对固定、PATH-only 裸名首个命中固定、`.cmd` launcher 与 native 区分（launcher SHA 是 launcher 文件本身而非其内部 native）、不可解析候选与 probe/hash 失败降级 unknown、生产 hash helper 与独立计算一致、冻结身份保留真实 generation；fake child 走真实 JSON-RPC initialize 并收到 `initialized` 通知，公开身份与 health 的 launchPath/rawVersion/合成文件 SHA/generation 同源，clientInfo 仍为 CX 包版本（name `codex-web-local`、title `CX-Codex`）、launchPolicy 默认值与 restartProtection 0 保留；多次 status/health 读取不重新 resolve/probe/hash，health 快照是可改写副本且改它不影响 owner；候选切换与同路径改字节不改写已捕获身份；真实替换才新 generation；旧 A 的 stdout/error/exit 无影响；握手失败无活动身份且重试不新增 resolve/probe/spawn；probe 失败 + 握手成功发布 unknown；dispose/重复 dispose、initialize 窗口内 dispose、启动失败（无 codex 命令）均无身份且不写入被放弃的 child。
+- 未验证/边界：本批只声明并验收 owner/health 接口，未接 methodCatalog/catalog/factory（留给 B4B2），未改 cache/sessionCleanup/audit/summary/diagnostics/UI/schema baseline（B4A1 cache `945b7b00…` 与 cleanup `2010ac40…` 未变）。合成 fake child 与合成文件 hash 不代表真实新版 Runtime/7420 已升级、Active 可执行身份、模型可用性、Android/真机、安装浸泡或发布；未启动真实 app-server、未连网、无 Git/发布/凭据/持久配置改动。同路径字节改变、health 副本不可回写等保护项未单独观察 RED，作为实现后 holdout 一次通过（迟到 A stdout 事件后续已在修正批里先观察到 RED，见下节）。
+
+## B4B1 修正（supervisor correction，2026-10-15）
+
+- 证据分层，不得混淆：①本 run 开头的 `b4b1-owner-checkpoint.md` 短初稿是当时状态记录；②`b4b1-owner-server-modules-red` 是 **mutation control**——通过临时把新写的公开 getter 直接 `return null`、并让 status 不带该字段取得，不是原实现 RED，也不满足“先 RED 后实现”（补丁操作存档在 `b4b1-gate-mutation-operations.json`）；③root 在**未被改动的原实现**上独立执行的 `b4b1-original-owner-red-probe.result.json`（RUNTIME_RED_ORIGINAL_CONTROL、rawExit1，fake 握手真实成功后才卡在缺失身份断言）是本批之后的原源码对照，不是本 run 自己的 RED；④本 run 的 server smoke / CLI 退出 0 只是**自检**，不构成 root 独立验收。
+- 修正的缺陷（每条都先在同一 seam 上观察到真实运行期 RED 再做最小修复）：RED 汇总 `b4b1-correction-red.log`/`.exit.txt`，raw exit 1，7/7 用例失败，失败模式与 review/独立证据一致。
+  1. 版本探测窗口：`captureCodexLaunchIdentity` 原先先 probe 再首次 hash，探测期间文件 A→B 会发布 version(A)+SHA(B) 并在 spawn 后复核里过关。现在**探测前后各读一次真实 hash 并要求相同**；不同或任一次读取失败则整条 `unknown`（新增 reason `identity-changed-during-version-probe`；hash 不可用时沿用 `hash-failed`），保留已固定 `launchPath` 与真实 generation，不改启动阻断、不重解析到别的候选、不给运行中的进程重贴标签；原 spawn 后指纹复核保留。RED：probe 回调内改写真实隔离文件，未修前得到 `native`、修后 `unknown`。
+  2. 原始 stdout 与探测语义：`versionRaw` 现在保留 probe 的**原始 stdout（含结尾换行）**，只用 trim 判断空；native 与 `.cmd`/`.bat` 的默认 `--version` 改走 `getSpawnInvocation` + `spawnSync`（与 launch 同一 shim 语义）并带 5s 有界超时。RED：合成 probe stdout 带 `\n` 未修前被裁掉；真实 `.cmd` 目标未修前直接 spawn 失败得到 `unknown`，修后经 cmd.exe 得到 `launcher` 且保留换行。低层例：真实 `process.execPath --version`、真实合成 `.cmd` 回显。
+  3. 被放弃的握手：`ensureInitialized` 中 child 变化原先 `return`（把放弃当成功），公开 `rpc()` 会继续 `call/start` 拉起替换 child 并写出未 initialize 的业务 RPC。现在改为用既有 transport 错误**拒绝**本次握手（`assertCurrentChildForInitialization`）：无新 child、无业务请求；显式 `warmup` 重试与迟到 A 保护保留。RED：`owner.rpc('model/list',{})` 后立即 dispose，未修前 spawn 2、修后 spawn 1 且原调用 rejected。
+  4. 迟到 A stdout：owner 回调新增当前 child 守卫（`this.process !== proc` 时丢弃该 chunk），不扩大共享 handler 的白名单。RED：A 退出并被 B 真实替换后，A 的 stdout 通知未修前会送达 B 的监听器，修后 0 条；当前 B 的通知正常送达 1 条。
+- 修正后自检：`npm.cmd run verify:server-modules` 退出 0（`server module smoke ok`，7/7 correction 用例 passed，日志 `b4b1-correction-verify-server-modules.log`/`.exit.txt`）；`npm.cmd run build:cli` 退出 0（tsup `Build success in 71ms`，日志 `b4b1-correction-build-cli.log`/`.exit.txt`）。白名单仍只有五个文件，B4A1 cache `945b7b00…` / cleanup `2010ac40…`、`utils/commandInvocation.ts`、`server/appServerProcessHandlers.ts` 未改（见 `b4b1-correction-scope.txt`）。
+- 撤回的表述：guided 日志里的两次 `~/.codex` 元数据列举（只有文件名与时间戳）不能证明活动来源，也不能证明“没有写真实目录”；本批隔离证据只来自任务自带的合成 `CODEX_HOME` 与受控合成数据/transport。此后不再列出、检查或比较真实 `~/.codex`、凭据、会话及其元数据，也不做无谓的目录扫描去证明否定命题。
+- 仍未验证：H1–H5 独立 holdout 需 root 重跑；H6 catalog / H7 / H8、audit/summary、真实新版 Runtime/7420/授权/Android/安装浸泡与发布全部未验；合成 owner 接线通过不等于整个 B4 通过，也不代表真实 Codex 二进制版本或模型可用性。
+
+### B4B1 RPC 续体修正（第二轮，supervisor correction，2026-10-15）
+
+- root 独立 `b4b1-independent-owner-green1/report.json`：30 例全部执行，**29 passed / 1 failed**（H1 3/3、H2 7/7、H3 7/7、H4 10/11、H5 2/2），源码哈希稳定 → B4B1 仍未接受、不得进入 B4B2。
+- 唯一失败：`initialized public rpc disposed synchronously must reject across its resolved initialize await`（`spawn 2 !== 1`）。成因是**公开续体窗口**：owner 完成真实 initialize 之后，`rpc()` 里 `await ensureInitialized()` 即便已经 fulfilled 仍会让出一次事件循环；在这期间同步 dispose，续体恢复后 GUARD（都在 `ensureInitialized` 内部、早已返回）全都不适用，于是继续走 cache 失效 → `call()` → `start()`，拉起一个**未 initialize 的替换 child** 并写出业务 RPC。
+- 本 run 先在既有合成 correction smoke 里加了 already-initialized 变体并观察到同名真实 RED：`b4b1-rpc-continuation-red.log`/`.exit.txt` = `1`，correction 用例 **1/8 失败**（正是该变体，其余 7 例仍 passed）。未使用 getter/字段置空类 mutation，未覆盖任何旧日志名。
+- 最小修复（本轮产品改动只有 `src/server/appServerProcess.ts`）：`rpc()` 先把 `ensureInitialized()` 落成 promise（同步跑到首个 await），**await 之前**捕获当时的 `this.process`，await 之后用新增私有 `assertSameInitializedChild` 校验同一 child 仍是当前 `this.process` 且 `this.initialized` 为真，再允许 cache 失效 / enqueue / call；不重试或重启被放弃的请求，不新增生命周期计数器/公开接口，显式 `warmup` 重试、generation、迟到 A 保护与 H1–H3/H5 行为均不变。
+- 修正后自检（非 root 接受）：`npm.cmd run verify:server-modules` `.exit.txt` = `0`（8/8 correction 用例 passed、`server module smoke ok`）；`npm.cmd run build:cli` `.exit.txt` = `0`（tsup `Build success in 91ms`）。白名单仍只有五个文件，`tests.md` 与任务输出外无其他改动；run 末原始退出码见 `b4b1-rpc-continuation-scope.txt`。
+- 仍未验证：独立 30 例需 root 重跑后才谈接受；H6–H8/catalog、audit/summary、真实新版 Runtime/7420/授权/Android/安装浸泡/发布全部未验；本 run 的全部退出 0 都只是自检。
+
+## method catalog 身份绑定与 launcher 信任边界（2026-10-15，B4B2）
+
+- 消费已验收 owner 身份：`src/server/appServerMethodCatalog.ts` 的构造参数由裸 generator 改为显式 provider `getActiveLaunchIdentity(): CodexLaunchIdentity|null`；catalog 只读该身份，不写回、不推测 generation、不因 PATH/文件变化替 owner 重新归属身份。`src/server/codexBridgeSharedState.ts` 的 catalog factory 改为 `(appServer) => TMethodCatalog`，`createMethodCatalog` 收到**同一个已创建 owner**（`appServer`），不再可能创建第二个 owner；`src/server/codexAppServerBridge.ts` 的私有 `getSharedBridgeState()` 用 `(appServer) => new AppServerMethodCatalog({ getActiveLaunchIdentity: () => appServer.getActiveLaunchIdentity() })` 接线，全局仍只有一个 appServer 与一个 catalog。
+- 身份键与冻结：cache/inflight 键 = generation + 绝对 launchPath + rawVersion + sha256 + identityKind；命中按冻结身份，不重新 probe/hash/version（热路径零全文件 hash、零 resolve）。生成前先冻结本次身份副本，生成前/后各做一次窗口核对：当前 owner 身份键仍等于冻结键，且冻结 `launchPath` 的真实文件 SHA 仍等于冻结 SHA；任一不符即按既有明确错误合同结束，不写 cache、不把磁盘上的 B 解释成 active A，也不把 A 的结果冒充当前 B。
+- 默认生成路径绑定：真实 schema 子命令只对冻结身份的绝对 `launchPath` 调用 `getSpawnInvocation(launchPath, ['app-server','generate-json-schema','--out',outDir])`，保留原 Windows shim 语义；**移除了生产独立 `resolveCodexCommand()` 回退**。低层 runner seam 只用于让默认路径在测试里用 fake child 执行并记录真实 command/args，生产默认仍是原 `spawn` + stderr/exit 语义。
+- 并发与迟到：同一活动身份的 methods/notifications 共享一次生成；每个 promise 的 finalizer 只清理自己持有的当前 key/promise，迟到 A 的成功/失败/finally 不清 B 的 inflight、不加第三次生成；过期调用按明确 unavailable 或生成器错误结束，不返回 B 的内容。generator 失败只清自己当代 inflight，同代重试合法且会重新走真实核对。
+- **launcher 信任边界（本批收紧，最小改动）**：`isCompleteLaunchIdentity` 现在只接受**完整 native** 身份（非空绝对 path、`identityKind === 'native'`、非空 sha256 与非空 rawVersion）。`launcher`（如 `.cmd`/`.bat` wrapper）与 `unknown`/不完整身份一律返回既有明确 unavailable（reason 沿用 `incomplete-launch-identity`），且这些调用**不进入 generator、不 spawn、不 hash**。理由：wrapper 字节不变也可能执行不同的下游 native 二进制，wrapper 指纹与其 raw version 不能证明生成的 schema 描述当前活动的 native 实例；不逆向 wrapper。owner 侧启动策略不变（启动 wrapper 与信任 wrapper 的 schema 身份是两个不同边界）。
+- RED 分层（不得混淆）：
+  1. **S1 运行时 RED（有效）**：`b4b2-catalog-red.log`/`.exit.txt` raw **1**，进入运行时断言后在 `a replacement identity must not be served from A cache` 处 actual `b4b2/catalog/methods-a` / expected `…-b`；使用本批显式允许的最小 provider/seam，不是未改动原实现的执行，root 见 `b4b2-red-review.md`。
+  2. **launcher 运行时 RED（有效，与 S1 不同）**：`b4b2-catalog-launcher-red1.log`/`.exit.txt` raw **1**，23 例中 22 passed、唯一失败 `S3L launcher-only identity cannot bind the native target`，detail 为 `Missing expected rejection` —— 在仍未收紧的产品上 launcher 身份实际到达了 generator；随后才做上述最小 native-only guard。
+  3. 历史失败（保留，不称通过）：green1 曾在 TypeScript 编译期失败（`TS2339`，property identityKind on never），同一 `b4b2-catalog-green1.log/.exit.txt` 名称随后被 S1 成功运行覆盖；root 已把原始文本归档为 `b4b2-observed-compile-failure.txt`，本批自那以后一律用全新编号且 create-only 的日志名。green2 停在新测试夹具的编译错误（`not callable`/`never`），不是运行时产品 RED。
+  4. green3 自检 21 例 19 passed、S3/S10 failed（`build:cli` raw 0），两者均为**测试 oracle 错误**并已公开更正：S3 旧断言同时要求 cmd 包装后的 args 与未包装原生 argv（与 Windows `getSpawnInvocation` 的 `/d /s /c <command>` 合同矛盾），现拆为「native 目标 + 默认生成路径」成功例与「launcher → unavailable 零生成」例；S10 旧断言要求 4 次 hash，但失败的生成只有 pre-hash，合法总数为 3（失败 pre + 成功 pre/post）。产品未为迎合计数而改动，失败工件保留。
+- 合成验证（本 run 自检，不构成 root 接受）：`node E:/javaword/CXCodex/codexui/scripts/verify-server-modules.mjs` 原始退出 **0**（`server module smoke ok`，catalog 用例 **23/23 passed**；日志 `b4b2-catalog-green4.log`，原始退出码 `b4b2-catalog-green4.exit.txt`）；`npm.cmd run build:cli` 原始退出 **0**（tsup `Build success in 74ms`；日志 `b4b2-catalog-green4-build-cli.log`，原始退出码 `b4b2-catalog-green4-build-cli.exit.txt`）。native Node22、command-local `export PATH="/d/nvm/v22.19.0:$PATH"`，两处 raw exit 均在命令内紧接着写入。
+- 覆盖矩阵（`smokeB4b2CatalogIdentity`，全部合成 provider/fake child/隔离目录，无真实 app-server/网络/7420）：
+  - S1 身份 A→B 跟随 owner，各自一次生成、methods/notifications 独立标记；S2 命中零 hash/零生成；S3 native 默认生成路径记录真实 command/args（直接 spawn，无 wrapper）；S3L launcher → unavailable 且零生成零 hash；S4 同 path/version/generation 新 SHA 重新生成；S5 同文件/同 SHA 新 generation 重新生成；S6 已有 A cache 时磁盘改为 B 仍返回 A 且不重 hash；S7 无 cache 且磁盘已变 → fail closed、零生成，真 replacement 后按 B 生成；S8 生成窗口内改字节 → 拒收、不缓存、后续不再从改动字节生成；S9 无 active / unknown / 缺 SHA / 缺 rawVersion / 空 path 全部明确 unavailable 且零生成零 hash；S10 生成失败只清当代、同代重试成功（hash 3）；S11 迟到 A 成功而 B 已缓存 → 不覆盖 B；S12 迟到 A 成功而 B pending → 不清 B、第三读仍共享同一次 B 生成；S13 迟到 A 失败而 B pending → 不清 B；S14 迟到 A 失败而 B 已缓存 → B 目录保持、A settle 后再次读仍为 B。
+  - F1 shared factory 严格收到同一真实 owner 且全局只创建一次；F2 真实 owner 未 warmup → meta 路由明确 unavailable、零生成零 spawn；F3 warmup 后 methods/notifications 共享一次生成并返回两个 `{data:[marker]}`，记录的默认 command/args 等于冻结 native 目标的 `getSpawnInvocation` 结果、hash 2 次；F4 meta 命中与 health 读取不新增 resolve/probe/hash/生成；F5 运行 A 时出现新安装/PATH 候选 B 仍生成 A、generation 不变、catalog 不 re-resolve；F6 真实替换发布 B 后两类 list 并发仅一次新生成、各含 B 标记、参数与计数断言；F7 dispose 后 meta 与 catalog 均明确 unavailable、不冒用先前 cache；F8 握手失败无活动身份且不生成，重试沿用保留 child 后 catalog 正常生成（resolve/probe/spawn 各 1）。
+  - 既有 `smokeAppServerMethodCatalog` 旧缓存断言（并发一次生成、二次命中仍 1）在改为显式身份 provider 后逐条保留；`smokeCodexBridgeSharedState` 增加「catalog factory 收到的 owner 严格等于首次创建的 appServer」断言。
+- 隔离与 transport：所有 catalog 断言用合成 provider + 标记化合成 schema JSON；真实 owner 例复用 B4B1 已验收的 `createB4b1OwnerHarness` 与 `withB4b1SyntheticHome`，在**构造第一个 `AppServerProcess` 之前**把 `CODEX_HOME` 指向编译 smoke outputRoot 内的 mkdtemp 合成目录，finally 处置 owner 并恢复 env，由既有 verifier 在子进程退出后清理。业务 spawn 全为 fake child；meta 路由用真实导出 handler + 合成 req/res 直接调用，不启动 HTTP 服务或整个 middleware。计数用 hasher 包装**委托真实** `readCodexLaunchFileSha256`（只计次数，不替换算法）；catalog 自身的 mkdtemp schema 目录由其 finally 清理，仅清理已知产物。
+- 未验证/边界：本批只做本地自检，**root 独立验收仍待完成**（root 独立 probe 的 H8 曾以 launcher 到达 generator 记录真实失败，见 `b4b2-independent-catalog-red1/report.json`；本批不编辑、不执行该 probe）。wrapper limitation：真实 Windows 上以 `.cmd`/`.bat` shim 安装的 Codex 会因本边界返回 unavailable（有意 fail closed），在未证明 wrapper→native 绑定之前不接受其 schema 身份；这不等同于声称 native 同源，也不改 owner 启动策略。合成运行只证明模块接线与该边界，不证明真实 0.162.1 app-server/7420 已升级、实际授权、模型可用性、Android/真机或安装浸泡；B4C audit provenance/diagnostics 未开始，整体 B4 未通过。
+
+## audit provenance 与同一活动身份的诊断比较（2026-10-16，B4C recovery，编写未执行）
+
+- 状态：**待 root 验证**。本 run 只有文件工具、未执行任何命令；下面所有 authored 覆盖与请求命令一律由 root 运行，本文件不记录任何自跑原始退出码（不编造 raw exit）。
+- 白名单：`scripts/audit-app-server-schemas.ps1`、`scripts/update-app-server-schema-audit-summary.mjs`、`src/server/appServerSchemaAuditSummary.ts`、`src/server/diagnosticsRoutes.ts`、`scripts/server-module-smoke.ts`、`tests.md`，新增小型 `scripts/schema-audit-identity-smoke.mjs`。输出一律 `output/hermes-codex-upgrade-20261015/b4c-*`。
+- 首个运行期 RED（保留原测试并修正 oracle 投影，不弱化语义）：`smokeAppServerSchemaAuditSummary` 中「synthetic generatedBy + raw CRLF」断言。原状：normalize 返回对象无 generatedBy → `asRecord(undefined) = null` → `deepEqual(null, {...})` 失败（见 `b4c-red-review.md`：Node22 verifier exit1、generatedBy=null）。修后：normalized 合法新增 selectionSource/verification/generation/baseline/generated 等已验证 provenance，故 oracle **只投影四个供给字段**（launchPath/versionRaw/sha256/identityKind）再 deepEqual，并额外断言 versionRaw 原样保留 `codex-cli sentinel\r\n`（未 trim），以及旧 summary 无 provenance 时 generatedBy/contentDiff 保持 null。四个字段断言全部保留。
+- 产品改动（四条）：
+  - summary：新增 `SchemaAuditGeneratedBy`（复用 B4B 四字段，**无 generation 计数**——offline 生成没有 active generation，不编造）、`SchemaAuditContentDiff`、`SchemaAuditIdentityMatch`；normalizer 逐项保留/校验，缺字段一律 null/unknown，不从 process.env/当前安装/其他 summary/B4B 活动身份回填；新增纯比较函数 `compareSchemaAuditIdentity(summary, activeStatus)`（不现场 resolve/--version/hash/generate）。
+  - diagnostics：`handleDiagnosticsRoutes` 在**首个 await 之前**用 `createAppServerHealthSnapshot(getAppServerStatus())` 冻结一次状态（含嵌套 identity 副本），health/full 两分支复用同一快照与同一比较结果，输出 `schemaAudit.identityMatch`；仍走既有 `redactDiagnosticsValue`，HTTP status/hook/windowsSandbox 超时/认证/脱敏合同不变。
+  - updater：raw→summary 逐项保留 `generatedBy`（versionRaw 原样、SHA 大小写不归一）；`reviewStatus` 改由真实 contentDiff 驱动（complete 且全 matched → baseline-matched；任一 drift → drift-recorded；error/缺 metadata → unknown；名称计数只能升级为 drift、不能改绿）；**不再读取既有输出**，故旧 raw 缺身份时不会继承既有输出身份。
+  - PS：新增 `-CodexCommand`（explicit > 两组 env > PATH）；生成前绝对化并冻结目标，两阶段与指纹校验均用同一绝对路径；`--version` 失败即停；生成前后指纹变化 → changed；launcher 只发 launcher-only + shim hash（不冒充 native）；versionRaw 用局部 `System.Diagnostics.ProcessStartInfo` 原始捕获（无按行 join/Trim）；raw summary 新增 `generatedBy` 与 `contentDiff`（每目录 status/raw exit）；summary 在 diff 结果已知后写入，失败路径先落盘再以**首个原始退出码**退出。
+- authored 覆盖（合成夹具，无真实 Runtime/7420/网络）：
+  - comparator 矩阵：A/A native matched；SHA 大小写差异仍 matched；Windows 路径大小写/分隔符等价；path/version/SHA 各自 mismatch；同 version 不同 SHA mismatch；旧无身份/缺 SHA/缺 version/launcher-only/changed/failed/未运行/无 active/非 64-hex 全 unknown；available/reviewStatus 与结果正交；comparedAgainstGeneration 来自冻结快照、缺 generation 时为 null；比较不改动输入。
+  - diagnostics：每请求 getAppServerStatus 恰好一次（health=1、full=2）；在 await 期间**真实切换依赖状态并原地替换嵌套身份**，断言输出仍是被捕获的 A（running=true、generation=4、launchPath=A）且 `identityMatch=matched(comparedAgainstGeneration=4)`；原敏感字段脱敏断言保留。
+  - updater：显式 `--input/--output` 往返 provenance（含 CRLF versionRaw、大写 SHA）；同名同数量但 contentDiff=drift → drift-recorded；contentDiff=failed/error 或缺 metadata → unknown；既有输出有身份而 raw 无身份 → 输出 generatedBy=null；docs 默认 summary hash 前后不变。
+  - PS fake launcher（`.cmd`，记录每次调用 `%~f0 %*`）：显式 -CodexCommand 下 PATH 新增候选不得换目标（所有调用行均为冻结 launcher）；合成 schema 后与基线 diff → drift exit 1 且 launcher-only provenance；`--version` 非零保留原退出（7）；generate-ts 非零保留原退出（3）；目标自修改 → `generation.status=changed`、`reason=target-fingerprint-changed`、exit 1；SkipGenerate exit 0 且不产 provenance summary。PowerShell 不可用 → 明确 SKIPPED（unverified），不写 passed。
+- 请求 root 命令（均未由 agent 执行）：
+  1. `node E:/javaword/CXCodex/codexui/scripts/verify-server-modules.mjs`
+  2. `node E:/javaword/CXCodex/codexui/scripts/schema-audit-identity-smoke.mjs`
+  3. `npm.cmd run build:cli`
+  4. 只读复核 portable SHA（期望 `DD13BDB162A184FA04039488B234A8258EF9B76F84E926C505D5742B19249A6A`）后执行 `npm.cmd run audit:app-server-schemas -- -CodexCommand "E:/javaword/CXCodex/codexui/output/b3-schema-0.162.1/codex-x86_64-pc-windows-msvc.exe" -OutputRoot "output/hermes-codex-upgrade-20261015/b4c-audit" -FullDiff`；仅把该 raw summary 经 updater 写到 b4c output（不写 docs 默认路径）。exit 1 是真实 drift 待审，不是生成崩溃。
+- 未验证层级（结论三层，不越界）：① schema 静态生成/审计（可真实 portable 验证）；② 候选运行时身份与缓存（B4B 合成生命周期）；③ 真实 7420/真实新版 app-server 的运行、授权与用户入口（本批未测；不宣称活动服务升级，不关闭 Android/远端/Release/总产品目标）。
+- 已知风险（供 root 判读）：PS stdout 原始字节保真与编码；PS uppercase 与 Node lowercase SHA 依赖 comparator 归一；快照别名（已按需只复制参与比较/返回的状态与嵌套身份，不整库 JSON 克隆）；假 launcher 只能证明 launcher provenance，不证明 native 同源。
+
+## 2026-10-16 升级候选最终收口（B5 文档整理）
+
+- 行为合同（本地候选，限离线／合成范围）：
+  - B1 模型回退：失败后不再静默写入固定旧模型、不虚构模型能力；保留所选模型与原始错误，失败可重试并由用户主动发起。
+  - B2 回复呈现：partial_answer 只作过程正文，不作为最终答案或任务终态；工具交错、明确 final、历史读取与刷新、导出保持同一语义。
+  - B3 权限请求：兼容 0.130.0／0.162.1 两版离线 schema 的 none／deny／path union／environmentId；省略 scope 时默认到当前 turn；产品只对本轮请求返回允许／拒绝，按精确子集匹配，失败保留可重试。
+  - B4 版本绑定：缓存按代际绑定并防迟到回写；活动启动身份冻结后发布；离线 audit 的 generatedBy／contentDiff 与运行身份比较分别记录，不互相替代。
+- 原始结果（引用 Codex 已执行的本地检查，不在本文重跑）：B4C identity 25/25 raw 0、diagnostics 23/23 raw 0、PowerShell／updater green2 15/15 raw 0（green1 为 blocked raw 2，保留）、可选夹具 10 项 raw 0、capture green2 3/3 raw 0（green1 为 inconclusive raw 2，保留）、最终 server 与 CLI 各 raw 0（server-final3／cli-final3）；pinned portable 离线 audit 子阶段 raw 退出码 0/0/0、TS／JSON 内容 diff 原始退出码均为 1（差异数量不由这个 1 表示）、总退出 1 且 drift-recorded，sanitizer raw 0。更早批次：B4A1 独立 probe 15 组、B4B1 独立 owner 30/30、B4B2 独立 catalog 13/13、B3 policy probe 123/123、B1 候选 50/50（原实现 44/50）。逐批接受记录见下方索引所列 review 文件与 `b4c-review.md`。
+- 单一收口索引：`output/hermes-codex-upgrade-20261015/b5-evidence-index.md`；B4C 最终源码快照 `b4c-final-scope2.json`，B5 前快照 `b5-workspace-before-final.json`。
+- 与上方历史检查点的关系：上一节标题里的“编写未执行”是当时的检查点，本轮最终状态以本节为准；旧失败、旧退出码与旧 RED 全部保留，不因后续通过而抹去。旧 B2 接受记录中的“人工核对”实际是 Codex 对截图的 AI 复核，不是用户或真人的验收。
+- 尚未验证层（本轮本地结果不覆盖）：真实新版 Codex Runtime 与模型可用性、真实 OS 授权执行、当前 7420 使用中的 executable 与版本、安装升级回滚与 2h 浸泡、Android 与物理设备、系统辅助技术、remote CI／release。以上均未由本轮本地结果证明，本轮无 Git 写入、发布或部署。
+- Codex 最终验收：B5 治理首次 raw1（旧 catalogPromise 文本要求过期）；最小对齐当前共享 promise 与身份 key 后，治理复测 raw0。原有产品断言未删除，B5 不改产品源码；scope 与最终接受详见 `output/hermes-codex-upgrade-20261015/b5-review.md`。两个隔离浏览器预览已关闭，真实7420未切换。
+
+### 2026-10-16：新版 Runtime 隔离验证合同
+
+- 使用固定摘要的官方 Runtime 0.162.1 及同标签 code-mode host，在随机 loopback 端口、独立 Codex/User 数据目录验证；不切换真实7420、不发布。
+- 模型：目录可读与实际可调用分别验收；选定模型须真实产生流式内容和 `final_answer`。无效模型须真实失败且不静默替换。目录中其他模型不由单模型调用推定可用。
+- 权限：真实请求须按 thread/turn/request ID 关联；正式 UI 展示精确范围并支持本轮允许、拒绝；中断终态只清除相同 thread/turn 的 pending，迟到响应被拒绝，不替 Runtime 生成授权。可重试/缺身份/冲突身份事件不得误清除其他请求。
+- 回复和恢复：页面先连接、后台新建会话并发出权限请求，再切入会话，须无需刷新出现权限卡；实际点击“仅本轮允许”后完成。在同一正式输入框续聊并收到最终答复，完成后刷新仍保留历史且不复活审批卡。
+- 会话刷新回归覆盖：迟到空快照、迟到 bootstrap、正文补读期间的新请求、普通事件序号较新而权限版本未变、未选中新会话被分页目录遗漏；显式 resolved/权威空结果仍能清除。执行状态快照被排序拒绝时，通过独立权威 pending GET 恢复权限事实；目录缺项不代表权限已解决。
+- 检查入口：`node scripts/verify-conversation-refresh-contract.mjs`、`npm run build:frontend`；服务端终态清理另跑 `npm run verify:server-modules` 和 `npm run build:cli`。真实 UI、原始探针退出码及 Runtime 事件须独立验收，不能以 Hermes 自身退出0或合成回归通过代替。
+- 证据目录：`output/hermes-codex-upgrade-20261015/runtime-isolation/`。保留各次失败；最终状态以 `runtime-validation-review.md` 为准。此节更新前述 B5 的部分未验证层，不证明 OS 沙箱强制执行/授权过期、全部模型资格、未实际出现的回复阶段、升级回滚/2h 浸泡、Android、远程 CI 或发布。
+
+## G1：普通会话列表排除内部工作线程（候选实现，待 root 浏览器验收）
+
+用户入口契约（合成数据下可复现）：默认普通会话列表（`thread/list` 省略或空 `sourceKinds`）不再展示结构化来源可确认的内部线程——`subAgent|subagent` 的 `review`/`compact`/`memory_consolidation`/`guardian` 直值、`{other:'guardian'}`、根 `{internal:'guardian'|'memory_consolidation'}`，以及线程自身严格 `ephemeral === true` / `sideConversation === true`。保留：普通会话（含标题/预览写有 “Guardian review”“compact memory_consolidation”者）、thread_spawn、`{other:'worker'|'guardian-worker'}`、未知/未来来源、缺 source、`{internal:<未知>}`、以及 `'true'`/`1` 等非布尔标记。精确枚举逐字比较（不 trim）；原始 source 优先，其次有限布尔分类，最后回退精确归一化 `sourceKind`。普通列表的原始行在**每一页**（含归档页与游标页）过滤，且归档/游标页不触发补充读取；非空 `sourceKinds` 诊断查询语义不变（内部行保留）。隐藏只影响列表可见性：不归档、不删除、不停止、不改 pins/session_index/消息/审批/Runtime。置顶补充命中列表缓存时同样按普通列表谓词输出，隐藏项不占用可见输出预算；缓存仍保存有效原始 summary，普通列表与诊断查询互不污染缓存。
+
+实现入口：`src/shared/threadVisibility.ts`（唯一谓词 `isThreadVisibleInOrdinaryList`）、`src/server/appServerThreadListAugment.ts`、`src/api/normalizers/v2.ts` + `src/types/codex.ts` + `src/utils/projectGroupOrdering.ts`、`src/composables/useDesktopState.ts`（列表缓存版本 1→2、缓存读/写谓词、活动本地补回守卫）。
+
+验证命令与实测退出码（Windows 显式 `PATH="/d/nvm/v22.19.0:$PATH"`，runner 自带合成 CODEX_HOME；日志见 `output/hermes-codex-upgrade-20261015/followup-20261016/g1b4-*.log`）：
+- `node scripts/verify-conversation-retention.mjs` → 0（7/7，含 v1 旧缓存不 hydrate、v2 缓存只 hydrate 可见行、布尔严格标记、活动旧内部项不被补回）
+- `npm.cmd run verify:frontend-normalizers` → 0；`npm.cmd run verify:server-modules` → 0
+- `npm.cmd run build:cli` → 0；`npm.cmd run build:frontend` → 0；`git diff --check` → 0
+
+未验证边界（候选实现，禁止当作已完成验收）：未做浏览器/桌面/手机实机验收；未读真实 Codex 会话、未跑真实 7420、未做 Runtime/Android/release 验收；截图中“五条”未与真实来源逐条对应；`sideConversation` 与 `{internal:...}` 为合成兼容形态。以上均由 root 另行验收。
+
+### G1 候选实现边界（G1B4c 更正）
+
+- 侧栏列表缓存：版本 1→2；读取与写入都按同一普通列表谓词过滤；可见组为空时**删除本列表缓存键**（不再留下旧磁盘行）。只动这一个 key，消息缓存/outbox/认证/hidden IDs/pins 不受影响。
+- 侧栏“活动旧项补回”守卫（`mergeIncomingWithLocalInProgressThreads` 内的可见性过滤）**尚未被测试证明**：现有合成夹具无法在不制造生产可见状态的情况下让活动判定为真，该私有路径留待 root 单独验证。
+- `node scripts/verify-conversation-retention.mjs` 当前为 **7/8（退出码 1）**：空缓存持久化用例已通过；「running ordinary cached row survives an empty refresh」仍未达成，不得当作已通过；`npm.cmd run build:frontend` 与 `git diff --check` 为 0。
+
+### G1B4d 更正（retention 现状与边界）
+
+- `node scripts/verify-conversation-retention.mjs` 现为 **8/8（退出码 0，51 次 mock HTTP）**，`git diff --check` 为 0；此前的 7/8 结论作废（保留于 `g1b4c-checkpoint.md` 与旧日志）。
+- running 夹具已改用独立线程 ID（`thread-running-fixture`）与按请求 ID 返回的 transcript，避免 gateway 模块级 per-thread 快照缓存复用旧的“已完成”状态；`/state`、`/runtime`、`thread/read` 三处对同一 ID 描述同一 transcript。未改产品缓存与活动状态规则。
+- 边界：本套件能证明的是公开路径（缓存 hydrate 过滤、空缓存不落盘、运行中普通行在空列表刷新后保留且旧 completed 文本可读）；私有 `mergeIncomingWithLocalInProgressThreads` 的活动补回守卫由 root 独立用例验证，本套件不声称覆盖。
+
+### K1 任务看板手工验收合同（待 root 在真实构建上执行，当前未通过）
+
+- 正常 App：侧栏既有三格快捷行保持不变，第二行「看板」→ 四列标题与实际计数；搜索与项目下拉（含「全部项目」）改变筛选后计数同步变化；点卡片进入真实 `/thread/:threadId`，浏览器返回仍回到看板；直达与刷新 `/#/task-board`（以及 `/task-board` 干净路径）都落到看板，不会被当成普通会话。
+- 状态反馈：加载中、空筛选、读取失败后可重试、状态未确认/待同步（需关注列）文案与卡片状态一致；离线提示只在浏览器离线时出现；某列超过 20 张时每次只增加 20 张「显示后 N 个」并可「收起」，不会一次渲染全部。
+- 响应式与可达性：393px 单列、884px 两列、桌面四列均无横向溢出；Tab 可达侧栏看板入口、筛选项、刷新、卡片与「显示后 N 个」，焦点可见；深色主题沿用现有变量，无新增全局主题改动。
+- 范围：投影/网关/取数证据均为合成 fetch 与本地脚本；本批只提交源码与合成验证结果，页面通过与否由 root 在真实构建上判定，不覆盖助手对话、派发或后台执行。
+
+### 2026-10-16 root 顺序验收与助手身份合同
+
+- G1：正常构建页面已完成桌面、393px、884px 验证；结构化内部/临时会话不进入普通列表，名称含 Guardian review 的普通会话保留。此前“未做浏览器验收”仅描述当时实现检查点；当前结论见 `output/hermes-codex-upgrade-20261015/followup-20261016/g1-root-acceptance.md`。截图中的真实五条未逐条映射，未清理真实数据。
+- P1：设置只保留「自动批准权限请求」总开关；默认关闭；保存中防重入、失败可见并回读权威值。正常页面已测手机 Enter/Space、保存/刷新、延迟与失败恢复。关闭不会撤销既有会话授权；不能据此宣称 OS 撤权通过。证据见同目录 `p1-root-acceptance.md`。
+- U1a：检测更新区分 Web/后端身份，识别不可读版本、旧接口、查询失败与实例变化。当前仅只读检测；自动安装、Android 真机升级和回滚未实现/未验收。实际页面结果见 `u1-root-acceptance.md`。
+- K1：正常看板页面的筛选、16 张可见卡片（2/2/10/2）、刷新防重、失败/离线/重试、会话跳转与返回、干净/hash 路由刷新、三宽度与暗色已实际验证，见 `k1-root-acceptance.md`。只覆盖当前已加载会话的最近状态；不把整页数据假称全量任务系统。最终独立页面复核另记于本轮报告。
+
+A1 可重复入口：正常 App 侧栏「助手」，直达 `/assistant` 或 `/#/assistant`。首次打开只 GET，不创建记录；用户明确「保存助手」才写入名称和已配置工作区。身份为服务端生成的单例 ID，使用 SQLite 持久化及修订号冲突检查，主对话 ID 为空。
+
+必须保留的用户行为：
+
+- 首次空态、保存、刷新后同一身份；保存期间名称/工作区和保存按钮停用，Enter 不重复写入。
+- 保存失败同时保留已保存摘要和未保存草稿；409 后回读当前身份但保留草稿，只有再次明确保存才使用新修订号写入。
+- 冲突后的回读失败时禁止保存，提供「重试读取」，恢复后仍保留草稿；初次读取失败也不得假称未配置/已保存。
+- 离页取消及旧响应不得污染新页面；手机侧栏导航关闭抽屉；键盘焦点可见；桌面/393px/884px 无横向溢出，主要控件至少44px。
+- 实际停止并新建隔离服务进程，使用同一个任务临时 SQLite，身份 ID/名称/修订号/创建时间不变；这证明助手身份恢复，不证明 Runtime 授权或后台任务恢复。
+- 页面明确「主对话、任务派发、后台执行未接入」，不提供假发送框、自动创建会话或假任务执行。
+
+A1 实测：`node scripts/assistant-gateway-smoke.mjs` 9组通过；`node scripts/assistant-identity-route-smoke.mjs` 27项实际 HTTP/临时 SQLite 检查通过；存储独立并发进程检查通过；前端与 CLI 构建、隔离 server-module 全套通过。正常构建页面操作见 `a1-browser-matrix.raw.log`，重启及最终截图见 `a1-final-capture.raw.log`、`a1-app-run2/root-evidence-result.json`。所有此处路径均相对于上述 followup 目录（公共 scripts 除外）。后续最终页面复核与范围以本轮验收报告为准。
+
+### 2026-10-16 A2 主对话基础与恢复保护（完整功能未验收）
+
+- 新增专用 `POST /codex-api/assistant/conversation` 和服务端原子单例预留；修订号、工作区与内容绑定冲突必须可见。重复请求和重启读取不得再次发送。生产未配置经验证的受限 starter 时，`conversation=false`，有效 POST 返回503并且不预留主对话；普通 starter 不能启用此能力。
+- 受控助手请求在外发前写入不可自动重放的标记。缺失线程/轮次回执、传输断开或不明确的 thread-not-found 文本保持未知，不能冷启动重发或使用其他活动轮次ID冒充成功。该恢复保护不是角色授权；不能凭客户端消息前缀信任请求来源。
+- 可重复局部验证：`node scripts/assistant-conversation-smoke.mjs`（40次实际HTTP、临时SQLite、合成native transport）；`node scripts/assistant-runtime-recovery-smoke.mjs`（9个故障场景，实际Runtime starter）；`node scripts/assistant-gateway-smoke.mjs`（10组API适配）。普通既有身份HTTP/存储回归仍通过；前端构建、CLI构建、隔离server modules通过。精确结果见 `output/hermes-codex-upgrade-20261015/assistant-next-20261016/a2-root-review.md`。
+- 正常构建页面：桌面/393px/884px打开助手→明确保存身份→刷新；注入一次GET503→保存停用→点击重试恢复；实际退出并重启隔离App服务后身份不变。浏览器直接请求主对话端点仍503，无主线程预留、无native start。页面保持“主对话尚未接入”，不提供假发送框。该页面证据仅验收基础状态和错误恢复，不是主对话多轮闭环通过。
+- 原生0.162.1在任务专用数据目录及本地合成模型/MCP端点完成13项协议断言，含worker写入/补丁/资源读取正控，以及主线程与同一线程冷恢复的明确只读拒绝。尚未接入共享生产Bridge、普通发送、队列与动态工具来源校验；真实模型推理、本产品主对话、任务派发和结果回传均未因本轮通过。A2整体未验收，D1/R1未开始；未切换真实7420、未发布。
+
+隔离范围：实际构建的 App/路由/临时身份数据库；会话数据、工作区和更新元数据均为合成。真实 Runtime R5 仍因地区403待验收；Android设备、真实7420切换、发布均未执行。旧测试隔离不足导致真实认证文件是否被旧 smoke 触达无法追溯，已修正后续测试 HOME/CODEX_HOME 隔离，详见 `test-home-root-acceptance.md`；不能宣称本轮所有真实数据绝对未触及。
+
+最终页面复核：独立审查首次要求看板≤1023px补16px边距；Hermes完成后前端构建0、`a1-review-fix-capture.exit.txt=0`，原8张截图重新捕获，旧图已哈希复制保留。复核该项 resolved、disposition ship（仅评分该修正，无新增可见回归）；设计核对 No changes。最终请求审计见 `a1-app-run3/root-evidence-result.json`，0意外请求/执行RPC；完整收口和未完成范围见 `batch-acceptance-report.md`。
+
+### 2026-10-17 运行开销与预览加载回归
+
+- `npm run verify:runtime-slimming`：会话详情缓存保持最多64项的LRU；命中更新顺序、替换、删除和clear不改变数据投影。缓存淘汰只影响可重读的数据，不删除会话或持久状态。
+- 列表缓存的内存失效仍立即生效，同一同步批次及写入期间的多次更新合并序列化；等待落盘必须覆盖最新状态，序列化/磁盘失败不能阻断RPC。不是跨事件限频，也不是可靠消息存储。
+- 宠物任务按原顺序选最多8项后投影；选中任务插入、稳定排序和响应式更新保持。Web不计算仅供原生watch使用的数据，其他Web预览仍可读取投影。Android行为由Vue单测验证，未据此验收真机。
+- PDF与Word引擎分别按需加载；文本/JSON/Markdown/图片不加载两者。实际页面验收使用构建后的`local-preview.html`与合成文件：文本内容、Markdown不执行脚本、图片解码、PDF两页与缩放、Word正文可见；CSP与legacy worker配置保持。仅PDF请求worker，Word不请求PDF引擎。动态import失败仍使用已有文档错误分支（合成边界测试）。
+- 日志路径只合并同home与UUID尚未结束的扫描，成功/空/失败均清理；后续请求仍能发现新日志与较新分片。metadata身份、目录junction和既有软链拒绝保持。`npm run verify:session-identity`可独立复核；Windows文件symlink无法创建时必须报告skip。
+- 生产依赖分类保持所有版本和integrity不变。独立目录`npm ci --omit=dev --ignore-scripts`与CLI help通过，九个前端依赖不可解析；SQLite读写重开使用已存在的同平台原生二进制单独验证。不能把禁用生命周期的安装当作原生addon新装通过；Windows源码安装器仍完整安装并构建。
+- 本轮构建、浏览器、RED/GREEN与安装证据：`output/runtime-slimming-20261017/report.md`。正常App看板和宠物预览仅使用隔离合成数据；真实Runtime、Android设备、真实7420和发布不属于本轮验收。
+
+### 2026-10-17 运行包调试文件分离与小图资源
+
+- `npm run build:cli` 应在 `output/cli-debug/<内容哈希>/` 留存原始JS、含sourcesContent的map和SHA-256清单，运行目录只保留无sourceMappingURL注释的 `index.js`。使用清单的 `runtimeSha256` 对应运行文件，归档中的原始JS与map必须成对保留；调试目录独立于普通运行包。
+- `npm run verify:cli-debug` 覆盖归档/运行文件一致性、源码映射、重复构建幂等、不完整map与归档冲突失败保护。npm模拟打包清单不得携带 `.map` / `output/`，应保留CLI和必要运行资源。归档失败时必须保留未归档的构建文件并使构建失败。
+- 小尺寸品牌图使用 `public/branding/cx-codex-ui-icon-192.png`，逐字节复用既有Android 192px launcher；启动入口、设置品牌、宠物进入按钮与文档夹具的小图引用应指向该资源，CSS尺寸、alt和点击行为不变。原始公开品牌图和Android资源保持；大图预览夹具继续使用原始资源。图片解码、192×192尺寸、资源/构建字节一致以及前端构建已验证。
+- 本批按用户要求未打开浏览器。后续浏览器验收：进入启动入口/设置，展开宠物任务栏与文档夹具，检查小图在明暗主题和高DPI下可辨、未拉伸或偏移，点击行为不变；请求小图资源正常，刷新后仍正常。页面视觉与实际设备当前均待验收，不能以静态解码代替。
+- 精确构建、包清单、哈希、体积和未验证边界见 `output/package-assets-slimming-20261017/report.md`。不启动真实7420、不执行发布命令、不发布或部署；本轮没有新增产品依赖。
+
+### 2026-10-17 更新后本地7420实际浏览器验收
+
+- 用户授权对更新后的真实本地7420进行页面验收和问题修复。新会话请求已接受但尚无线程ID时，通知触发的持久outbox恢复不得把`pending_start`误标成失败；保持相同`clientMessageId`和“正在确认送达”，等待权威线程身份。明确拒绝、断网和已知失败仍走原有分支。
+- `node scripts/verify-delivery-contract.mjs`新增通知与新会话启动竞态用例：修复前51/52、退出1，修复后52/52、退出0；`npm run build:frontend`通过。仅更新本地7420前端，保留旧哈希资源与覆盖文件备份，不重启后端、不发布。
+- BrowserSkill真实页面：桌面1264×715、手机模拟393×852。权限只有一个总开关，关闭后刷新仍关闭，最终恢复原开启状态；网页和后端均显示2.8.1。助手身份保存并刷新保留；看板搜索、项目筛选、执行中/已完成、卡片打开结果可操作。三次新会话和一次追加回复实际返回，刷新保留两轮结果；修复后新会话66次DOM状态采样未出现失败标记。Chrome模拟手机不等同Android真机验收。
+- **未通过项**：助手主对话、任务派发、后台执行和结果回传仍未接入，不得把身份保存或普通会话成功当作助手链路成功。检测后端更新的GitHub官方API实际限流（HTTP403、配额0），当前安装方式不支持自动安装；未执行安装更新、Android升级或发布。
+- 看板只覆盖侧栏已加载会话；本轮曾观察到列表刷新期间新任务短暂缺席/项目未确认，完整页面重载后324个会话含本轮全部3项。未以此证明跨页面列表即时收敛或长时稳定性。
+- 证据、截图、构建/回归日志、实际资源校验与回滚方法：`output/browser-acceptance7420-20261017/report.md`。
+
+## 2026-10-18 助手主对话、文本任务派发与回传候选
+
+- 新验收契约：助手身份对应唯一主对话；主对话使用受限协调角色和三个宿主工具，复杂文本任务交给单一后台执行槽位。任务来源、工作区、模型、提示哈希与权限在服务端冻结；公开 Runtime/RPC 不得伪造内部请求或改变托管 worker。当前只支持提供文本的只读分析，不支持文件、命令、图片或 MCP 执行。
+- 回传复用既有 RuntimeMessageQueue；任务完成与回传完成分别显示。仅匹配原生 worker 线程/轮次的终态及 explicit final_answer 可冻结成功结果；仅匹配主对话汇总轮次的原生终态/最终答案可标记已回传。排队、Runtime.completed、commentary、超时和停止意图均不能代替该证据。持久写入边界之后未知结果保留占位且不自动重发；旧轮次快照不得终结尚未取得 native turn ID 的助手请求。
+- 定向验证：`node --test scripts/assistant-*.test.mjs`；前端 `npm run build:frontend`（只使用 vue-tsc --noEmit）、后端 `npm run build:cli`、`npm run verify:server-modules`。覆盖 SQLite 事务竞争/主机接管、私有原生上下文、伪造来源、晚到 native ID 与停止、最终答案缺失、忙碌排队、回传队首失败、未知写入不重放及超过100轮主对话。
+- 页面验收入口为隔离候选 `http://127.0.0.1:17427/#/assistant`：保存身份→开始主对话→要求派发文本分析→刷新查看任务→查看只读执行记录→回主对话看结果；刷新及受控重启后 ID/数量保持一致。桌面和393×852手机模拟检查任务状态、禁用发送/回退/计划执行入口、回传提示与横向溢出。真实页面实际结果与限制以 `output/hermes-codex-upgrade-20261015/assistant-connect-20261017/report.md` 为准，不能把测试替身当实际模型或设备验收。
+- 候选没有替换真实7420，也没有提交、推送或发布。此前章节“主对话/派发/回传未接入”仍描述此前已安装版本；本节仅描述此次源码候选。Android、OS级执行和长期运行仍待验收。

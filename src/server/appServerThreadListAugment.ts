@@ -1,4 +1,5 @@
 import { readThreadSessionPathFromThreadReadPayload } from './appServerThreadPayload.js'
+import { isThreadVisibleInOrdinaryList } from '../shared/threadVisibility.js'
 
 export const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
@@ -42,6 +43,45 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function deduplicateThreadRowsById(data: unknown[]): unknown[] {
+  const seenThreadIds = new Set<string>()
+  const deduplicated: unknown[] = []
+
+  for (const row of data) {
+    const record = asRecord(row)
+    const threadId = typeof record?.id === 'string' ? record.id.trim() : ''
+    if (threadId && seenThreadIds.has(threadId)) continue
+    if (threadId) seenThreadIds.add(threadId)
+    deduplicated.push(row)
+  }
+
+  return deduplicated.length === data.length ? data : deduplicated
+}
+
+/**
+ * The default normal list: `sourceKinds` omitted or empty. Any non-empty `sourceKinds` is an
+ * explicit diagnostics / sub-agent query and keeps its own contract.
+ */
+function isOrdinaryThreadListParams(params: Record<string, unknown> | null): boolean {
+  const sourceKinds = params?.sourceKinds
+  if (sourceKinds === undefined) return true
+  return Array.isArray(sourceKinds) && sourceKinds.length === 0
+}
+
+/** Returns the same array when nothing had to be removed, so result identity stays intact. */
+function filterOrdinaryListRows(data: unknown[]): unknown[] {
+  let removed = false
+  const visibleRows: unknown[] = []
+  for (const row of data) {
+    if (isThreadVisibleInOrdinaryList(row)) {
+      visibleRows.push(row)
+      continue
+    }
+    removed = true
+  }
+  return removed ? visibleRows : data
+}
+
 export class AppServerThreadListAugmenter {
   private readonly cacheByThreadId = new Map<string, SupplementalThreadSummaryCacheEntry>()
   private readonly ttlMs: number
@@ -71,19 +111,37 @@ export class AppServerThreadListAugmenter {
   }
 
   async augmentThreadListRpcResult(options: ThreadListAugmentOptions): Promise<unknown> {
-    const paramsRecord = asRecord(options.params)
-    if (paramsRecord?.archived === true) return options.result
-    if (typeof paramsRecord?.cursor === 'string' && paramsRecord.cursor.length > 0) return options.result
-
     const resultRecord = asRecord(options.result)
     const data = Array.isArray(resultRecord?.data) ? resultRecord.data : null
     if (!data) return options.result
 
+    // Codex can expose different session files with the same thread id. The web
+    // client keys pagination and selection by thread id, so keep the first
+    // (highest-ranked) row and make every thread/list page stable before adding
+    // local session-index supplements.
+    const deduplicatedData = deduplicateThreadRowsById(data)
+    const normalizedResult = deduplicatedData === data
+      ? options.result
+      : { ...resultRecord, data: deduplicatedData }
+
+    const paramsRecord = asRecord(options.params)
+    // The default normal list hides structured internal work threads, and archived / cursor pages
+    // are still pages of that list, so they are filtered too. Those pages never take local
+    // supplements and never trigger a thread/read.
+    const ordinaryList = isOrdinaryThreadListParams(paramsRecord)
+    const visibleData = ordinaryList ? filterOrdinaryListRows(deduplicatedData) : deduplicatedData
+    const visibleResult = visibleData === deduplicatedData
+      ? normalizedResult
+      : { ...resultRecord, data: visibleData }
+
+    if (paramsRecord?.archived === true) return visibleResult
+    if (typeof paramsRecord?.cursor === 'string' && paramsRecord.cursor.length > 0) return visibleResult
+
     const supplementalThreadIds = await options.readSupplementalThreadIds()
-    if (supplementalThreadIds.length === 0) return options.result
+    if (supplementalThreadIds.length === 0) return visibleResult
 
     const existingThreadIds = new Set<string>()
-    for (const row of data) {
+    for (const row of deduplicatedData) {
       const record = asRecord(row)
       const id = typeof record?.id === 'string' ? record.id : ''
       if (id) existingThreadIds.add(id)
@@ -93,8 +151,9 @@ export class AppServerThreadListAugmenter {
       supplementalThreadIds,
       existingThreadIds,
       options.readThreadById,
+      ordinaryList,
     )
-    if (supplementalThreads.length === 0) return options.result
+    if (supplementalThreads.length === 0) return visibleResult
 
     const appendedThreadIds = supplementalThreads
       .map((thread) => {
@@ -105,15 +164,22 @@ export class AppServerThreadListAugmenter {
 
     return {
       ...resultRecord,
-      data: [...data, ...supplementalThreads],
+      data: [...visibleData, ...supplementalThreads],
       supplementalThreadIds: appendedThreadIds,
     }
   }
 
+  /**
+   * `visibleOnly` is true for the default normal list and false for explicit diagnostics queries.
+   * Hidden rows are dropped before they occupy a visible output slot, so a cached internal row can
+   * never starve a later visible cached pin, while the raw summary stays in the bounded cache and
+   * the read / budget / timeout accounting is untouched.
+   */
   async loadThreadSummariesById(
     threadIds: string[],
     excludedThreadIds: Set<string>,
     readThreadById: (threadId: string) => Promise<unknown>,
+    visibleOnly = false,
   ): Promise<unknown[]> {
     const summaries: unknown[] = []
     const seen = new Set<string>(excludedThreadIds)
@@ -129,7 +195,7 @@ export class AppServerThreadListAugmenter {
 
       const cached = this.cacheByThreadId.get(threadId)
       if (cached && this.nowMs() - cached.cachedAtMs <= this.ttlMs) {
-        if (!cached.failed && cached.value) {
+        if (!cached.failed && cached.value && (!visibleOnly || isThreadVisibleInOrdinaryList(cached.value))) {
           summaries.push(cached.value)
         }
         continue
@@ -145,7 +211,9 @@ export class AppServerThreadListAugmenter {
         Math.min(this.readTimeoutMs, remainingBudgetMs),
       )
       if (readResult.timedOut) break
-      if (readResult.value) summaries.push(readResult.value)
+      if (readResult.value && (!visibleOnly || isThreadVisibleInOrdinaryList(readResult.value))) {
+        summaries.push(readResult.value)
+      }
     }
 
     this.trimCache()

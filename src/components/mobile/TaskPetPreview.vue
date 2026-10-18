@@ -13,7 +13,7 @@
           </span>
           <span v-if="!closeConfirmationVisible" class="task-pet-preview-header-actions">
             <button class="task-pet-preview-brand-action" type="button" aria-label="进入平台" @click.stop="$emit('enter')">
-              <img src="/branding/cx-codex-logo.png" alt="" aria-hidden="true">
+              <img src="/branding/cx-codex-ui-icon-192.png" alt="" aria-hidden="true">
             </button>
             <button class="task-pet-preview-close-action" type="button" aria-label="关闭浮窗" @click.stop="showCloseConfirmation">×</button>
           </span>
