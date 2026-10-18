@@ -146,7 +146,7 @@ export function renderLocalSetupHtml(options: {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>CX-Codex 管理中心</title>
+<title>CX Codex 管理中心</title>
 <style>
 *,*::before,*::after{box-sizing:border-box}
 body{margin:0;background:#f4f7f6;color:#17201e;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -180,7 +180,7 @@ button:disabled{cursor:wait;opacity:.6}
 <body>
 <main><section class="card">
 <p class="kicker">仅限本机</p>
-<h1>CX-Codex 管理中心</h1>
+<h1>CX Codex 管理中心</h1>
 <p class="muted">这里集中保存连接入口和访问密码。二维码只包含外网地址，不包含密码。</p>
 ${pairingGuide}
 <dl>

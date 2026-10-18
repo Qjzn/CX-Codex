@@ -91,7 +91,7 @@ export async function handleStatusRoutes(
   if (req.method === 'POST' && url.pathname === '/codex-api/tunnel-status/start') {
     if (dependencies.remoteAccessProtected !== true) {
       setJson(res, 409, {
-        error: '开启手机访问前必须启用 CX-Codex 访问密码。',
+        error: '开启手机访问前必须启用 CX Codex 访问密码。',
         code: 'AUTH_REQUIRED',
       })
       return true

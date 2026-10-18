@@ -1256,7 +1256,7 @@ const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
-const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
+const MOBILE_SHELL_BRAND_NAME = 'CX Codex'
 const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-ui-icon-192.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
@@ -1984,7 +1984,7 @@ const aboutAppVersionLabel = computed(() => (
 ))
 // Branding is honest about where the page actually runs: the Android kicker only
 // appears when a real native bridge is present, the browser is named as web.
-const aboutBrandKicker = computed(() => (isMobileShellAvailable.value ? 'Android Shell' : 'CX-Codex Web'))
+const aboutBrandKicker = computed(() => (isMobileShellAvailable.value ? 'Android Shell' : 'CX Codex Web'))
 const aboutBrandSubtitle = computed(() => (
   isMobileShellAvailable.value
     ? '面向手机远程访问 Codex 的原生入口'
@@ -2109,9 +2109,9 @@ const mobileShellUpdatePromptTitle = computed(() => {
     return mobileShellLatestRelease.value.releaseName.trim()
   }
   if (mobileShellLatestRelease.value?.tagName.trim()) {
-    return `CX-Codex ${mobileShellLatestRelease.value.tagName.trim()}`
+    return `CX Codex ${mobileShellLatestRelease.value.tagName.trim()}`
   }
-  return 'CX-Codex 新版本'
+  return 'CX Codex 新版本'
 })
 const mobileShellUpdatePublishedAtLabel = computed(() => {
   const iso = mobileShellLatestRelease.value?.publishedAtIso.trim() || ''
@@ -2188,8 +2188,8 @@ const browserHostName =
     ? (window.location.hostname || window.location.host || 'cx-codex')
     : 'cx-codex'
 const browserProductTitle = ['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0'].includes(browserHostName)
-  ? 'CX-Codex'
-  : `CX-Codex · ${browserHostName}`
+  ? 'CX Codex'
+  : `CX Codex · ${browserHostName}`
 const attentionThreadCount = computed(() => {
   const threadIds = new Set<string>()
   for (const group of projectGroups.value) {
@@ -3119,7 +3119,7 @@ async function openMobileShellBackgroundSettings(): Promise<void> {
   isMobileShellBackgroundSettingsOpening.value = true
   try {
     const result = await openMobileShellBatteryOptimizationSettings()
-    setMobileShellStatus(result.opened ? '请在系统中允许 CX-Codex 后台持续运行' : '当前已允许后台持续运行')
+    setMobileShellStatus(result.opened ? '请在系统中允许 CX Codex 后台持续运行' : '当前已允许后台持续运行')
     window.setTimeout(() => { void refreshMobileShellRuntimeInfo() }, 900)
   } catch (error) {
     const message = error instanceof Error ? error.message : '打开后台运行设置失败'

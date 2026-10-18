@@ -310,7 +310,7 @@ function listenOnRequestedPort(server: ReturnType<typeof createServer>, port: nu
       server.off('listening', onListening)
       if (error.code === 'EADDRINUSE') {
         reject(new Error(
-          `Port ${String(port)} is already in use. CX-Codex will not silently start a second broker on another port; open the existing service or stop it before retrying.`,
+          `Port ${String(port)} is already in use. CX Codex will not silently start a second broker on another port; open the existing service or stop it before retrying.`,
         ))
         return
       }
@@ -521,7 +521,7 @@ async function startServer(options: {
 
   const lines = [
     '',
-    'CX-Codex Web is running!',
+    'CX Codex Web is running!',
     `  Version:  ${version}`,
     '  GitHub:   https://github.com/Qjzn/CX-Codex',
     '',
@@ -604,7 +604,7 @@ async function runRuntimeCompact(options: { database?: string }): Promise<void> 
   try {
     const result = runtimeStore.compact()
     if (result.status === 'skipped-active-requests') {
-      throw new Error(`Runtime database still has ${String(result.activeRequestCount)} active request(s). Stop CX-Codex after the task settles, then retry.`)
+      throw new Error(`Runtime database still has ${String(result.activeRequestCount)} active request(s). Stop CX Codex after the task settles, then retry.`)
     }
     console.log([
       'Runtime database compacted.',
@@ -663,13 +663,13 @@ program.command('login').description('Install/check Codex CLI and run `codex log
 
 program
   .command('runtime-compact')
-  .description('Compact the runtime replay database while CX-Codex is stopped')
+  .description('Compact the runtime replay database while CX Codex is stopped')
   .option('--database <path>', 'override the runtime database path')
   .action(runRuntimeCompact)
 
 const serviceCommand = program
   .command('service')
-  .description('Manage the installed CX-Codex Windows service')
+  .description('Manage the installed CX Codex Windows service')
 
 function addWindowsServiceOptions(command: Command): Command {
   return command
@@ -715,13 +715,13 @@ for (const [action, description] of [
     })
 }
 
-program.command('help').description('Show CX-Codex command help').action(() => {
+program.command('help').description('Show CX Codex command help').action(() => {
   program.outputHelp()
 })
 
-program.version(await readCliVersion(), '-V, --version', 'output CX-Codex version')
+program.version(await readCliVersion(), '-V, --version', 'output CX Codex version')
 program.parseAsync(process.argv).catch((error) => {
   const message = error instanceof Error ? error.message : String(error)
-  console.error(`\nFailed to run CX-Codex: ${message}`)
+  console.error(`\nFailed to run CX Codex: ${message}`)
   process.exit(1)
 })

@@ -12037,7 +12037,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.equal(unprotectedTunnelStartResponse.response.statusCode, 409)
   assert.deepEqual(JSON.parse(unprotectedTunnelStartResponse.body), {
-    error: '开启手机访问前必须启用 CX-Codex 访问密码。',
+    error: '开启手机访问前必须启用 CX Codex 访问密码。',
     code: 'AUTH_REQUIRED',
   })
 
