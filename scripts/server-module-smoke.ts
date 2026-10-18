@@ -4319,6 +4319,9 @@ async function smokeAppServerSchemaAuditSummary(): Promise<void> {
 // summary provenance and one frozen active snapshot — it has no probe/hash/generator seam — so these
 // cases exercise the decision table directly.
 function smokeSchemaAuditIdentityMatch(): void {
+  const B4C_ROOT = process.platform === 'win32' ? 'C:/b4c-identity' : '/opt/b4c-identity'
+  const B4C_WIN_ROOT = 'c:\B4C-IDENTITY'
+
   type ActiveIdentityOverrides = {
     generation?: number
     launchPath?: string
@@ -4331,7 +4334,7 @@ function smokeSchemaAuditIdentityMatch(): void {
     available: true,
     reviewStatus: 'baseline-matched',
     generatedBy: {
-      launchPath: 'C:/b4c-identity/codex.exe',
+      launchPath: `${B4C_ROOT}/codex.exe`,
       versionRaw: 'codex-cli 0.162.1\n',
       sha256: 'a'.repeat(64),
       identityKind: 'native',
@@ -4351,7 +4354,7 @@ function smokeSchemaAuditIdentityMatch(): void {
     initialized: statusOverrides.initialized ?? true,
     activeLaunchIdentity: {
       generation: 7,
-      launchPath: 'C:/b4c-identity/codex.exe',
+      launchPath: `${B4C_ROOT}/codex.exe`,
       versionRaw: 'codex-cli 0.162.1\n',
       sha256: 'a'.repeat(64),
       identityKind: 'native',
@@ -4375,12 +4378,12 @@ function smokeSchemaAuditIdentityMatch(): void {
   // The same target reached through different separators/case is still the same target on Windows.
   assert.equal(compareSchemaAuditIdentity(
     buildSummary({ launchPath: 'c:\\B4C-IDENTITY\\codex.exe' }),
-    buildActive({ launchPath: 'C:/b4c-identity/codex.exe' }),
+    buildActive({ launchPath: `${B4C_ROOT}/codex.exe` }),
   ).status, 'matched')
 
   // Path / version / SHA each mismatch, and same-version-different-SHA is still a mismatch.
   assert.deepEqual(compareSchemaAuditIdentity(
-    buildSummary({ launchPath: 'C:/b4c-identity/other.exe' }),
+    buildSummary({ launchPath: `${B4C_ROOT}/other.exe` }),
     buildActive(),
   ), { status: 'mismatch', reason: 'launch-path-mismatch', comparedAgainstGeneration: 7 })
   assert.deepEqual(compareSchemaAuditIdentity(
@@ -4447,7 +4450,7 @@ function smokeSchemaAuditIdentityMatch(): void {
   const withoutGeneration = compareSchemaAuditIdentity(buildSummary(), {
     running: true,
     activeLaunchIdentity: {
-      launchPath: 'C:/b4c-identity/codex.exe',
+      launchPath: `${B4C_ROOT}/codex.exe`,
       versionRaw: 'codex-cli 0.162.1\n',
       sha256: 'a'.repeat(64),
       identityKind: 'native',
