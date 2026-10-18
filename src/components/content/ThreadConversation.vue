@@ -2723,13 +2723,14 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767px) {
   .transcript-list {
-    padding: 22px 14px 48px;
+    /* 手机上 22/48 的上下内边距加上 28px 的轮次间距，一屏只能放下一条半对话。 */
+    padding: 14px 14px 24px;
     scrollbar-gutter: auto;
   }
 
   .turn-shell {
-    gap: 8px;
-    margin-bottom: 28px;
+    gap: 6px;
+    margin-bottom: 18px;
   }
 
   .conversation-jump-to-latest {
