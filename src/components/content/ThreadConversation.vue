@@ -345,24 +345,7 @@
             </div>
           </details>
 
-          <details v-if="turn.fileChanges.length > 0" class="file-summary">
-            <summary>
-              <span class="file-summary-icon" aria-hidden="true">±</span>
-              <span class="file-summary-title">文件变更</span>
-              <span class="file-summary-meta">{{ fileSummaryLabel(turn) }}</span>
-              <span class="file-summary-chevron" aria-hidden="true">›</span>
-            </summary>
-            <div class="file-list">
-              <div v-for="file in turn.fileChanges" :key="file.path" class="file-row">
-                <div class="file-row-head">
-                  <span class="file-kind" :data-kind="file.kind">{{ fileKindLabel(file.kind) }}</span>
-                  <code :title="file.path">{{ file.path }}</code>
-                  <span class="file-stats"><b>+{{ file.additions }}</b> <i>-{{ file.removals }}</i></span>
-                </div>
-                <pre v-if="file.diff" class="file-diff">{{ file.diff }}</pre>
-              </div>
-            </div>
-          </details>
+          <ConversationFileChanges :file-changes="turn.fileChanges" />
 
           <div v-if="pendingInteractionsForTurn(turn).length > 0" class="request-stack" aria-live="polite">
             <article
@@ -579,7 +562,8 @@
 </template>
 
 <script setup lang="ts">
-import { fileKindLabel, fileSummaryLabel, formatDuration } from './conversation/format'
+import { formatDuration } from './conversation/format'
+import ConversationFileChanges from './conversation/ConversationFileChanges.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
 import ConversationRichText from './ConversationRichText.vue'
 import ConversationMessageActions from './ConversationMessageActions.vue'
@@ -1877,8 +1861,7 @@ onBeforeUnmount(() => {
   text-underline-offset: 3px;
 }
 
-.activity-details pre,
-.file-row pre {
+.activity-details pre {
   box-sizing: border-box;
   max-width: 100%;
   margin: 10px 0 0;
@@ -2166,14 +2149,11 @@ onBeforeUnmount(() => {
   color: var(--ui-danger);
 }
 
-.activity-details,
-.file-summary,
-.file-row {
+.activity-details {
   margin-top: 8px;
 }
 
-.activity-details summary,
-.file-summary > summary {
+.activity-details summary {
   cursor: pointer;
   color: var(--ui-text-secondary);
   font-size: 12.5px;
@@ -2242,132 +2222,6 @@ onBeforeUnmount(() => {
   color: var(--ui-text-tertiary);
   font-size: 11.5px;
 }
-
-.file-summary {
-  margin: 6px 0 14px;
-  border: 1px solid var(--ui-border-subtle);
-  border-radius: 12px;
-  background: var(--ui-bg-surface);
-  overflow: hidden;
-}
-
-.file-summary > summary,
-.file-row-head {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-  list-style: none;
-}
-
-.file-summary > summary {
-  min-height: 46px;
-  padding: 5px 10px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.file-summary > summary:hover {
-  background: var(--ui-bg-row-hover);
-}
-
-.file-summary-icon {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-secondary);
-  font-family: var(--font-mono-ui);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.file-summary-title {
-  color: var(--ui-text-primary);
-  font-size: 13.5px;
-  font-weight: 650;
-}
-
-.file-summary-meta {
-  margin-left: auto;
-  color: var(--ui-text-tertiary);
-  font-family: var(--font-mono-ui);
-  font-size: 11.5px;
-}
-
-.file-summary-chevron {
-  display: inline-grid;
-  width: 14px;
-  height: 14px;
-  place-items: center;
-  color: var(--ui-text-tertiary);
-  font-size: 16px;
-  line-height: 1;
-  transform: rotate(0deg);
-  transition: transform var(--motion-duration-base) var(--motion-ease-out);
-}
-
-.file-summary[open] .file-summary-chevron {
-  transform: rotate(90deg);
-}
-
-.file-list {
-  display: grid;
-  /* 手机宽度下 details 的 min-content（长路径 + 行数）会把网格列撑到 419px，
-     父级 overflow hidden 后右侧被裁掉；把列锁成可收缩的 minmax(0, 1fr)。 */
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  padding: 4px;
-  border-top: 1px solid var(--ui-border-subtle);
-}
-
-.file-row {
-  min-width: 0;
-  margin: 0;
-  border: 0;
-}
-
-.file-row-head {
-  min-height: 34px;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.file-row code {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ui-text-secondary);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-row pre {
-  margin: 3px 8px 8px;
-}
-
-.file-kind {
-  flex: 0 0 auto;
-  color: var(--ui-text-tertiary);
-  font-size: 11px;
-}
-
-.file-kind[data-kind='add'] { color: var(--ui-success); }
-.file-kind[data-kind='delete'] { color: var(--ui-danger); }
-
-.file-stats {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 4px;
-  margin-left: auto;
-  font-size: 11px;
-  font-style: normal;
-}
-
-.file-stats b { color: var(--ui-success); }
-.file-stats i { color: var(--ui-danger); font-style: normal; }
 
 .request-stack {
   display: grid;
@@ -2762,33 +2616,6 @@ onBeforeUnmount(() => {
     font-size: 12.5px;
   }
 
-  .file-summary {
-    /* 完全去边框会让它和正文混在一起；留一条 2px 左侧色条做最轻的分组。 */
-    border: 0;
-    border-inline-start: 2px solid var(--ui-border-subtle);
-    background: transparent;
-    padding-inline-start: 8px;
-    border-radius: 0;
-  }
-
-  .file-summary > summary {
-    min-height: 38px;
-    padding-inline: 0;
-  }
-
-  /* 去掉逐文件折叠后 diff 直接展开，单块超过 340px 时内部滚动，避免一轮吃掉整屏。 */
-  .file-diff {
-    max-height: 340px;
-    overflow: auto;
-  }
-
-  .file-summary-icon {
-    width: 20px;
-    height: 20px;
-    flex-basis: 20px;
-    border-radius: 6px;
-  }
-
   .turn-process {
     margin-bottom: 8px;
   }
@@ -2798,25 +2625,6 @@ onBeforeUnmount(() => {
     padding-block: 5px;
   }
 
-  .file-row-head {
-    align-items: center;
-    flex-wrap: nowrap;
-    gap: 7px;
-  }
-
-  .file-row code {
-    width: auto;
-    flex: 1 1 auto;
-    white-space: nowrap;
-  }
-
-  .file-stats {
-    margin-left: auto;
-  }
-
-  .file-row[open] code {
-    white-space: normal;
-  }
 
   .request-context {
     margin-left: 0;
@@ -2860,8 +2668,7 @@ onBeforeUnmount(() => {
 
   .process-reveal-enter-active,
   .process-reveal-leave-active,
-  .process-toggle-icon,
-  .file-summary-chevron {
+  .process-toggle-icon {
     transition-duration: 1ms;
   }
 
