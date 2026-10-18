@@ -232,8 +232,10 @@ onBeforeUnmount(() => {
 .rich-text-block :deep(:is(a, button, pre, .rich-text-table):focus-visible) { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
 
 @media (pointer: coarse), (max-width: 767px) {
-  .rich-text-block :deep(.rich-text-code-toolbar) { min-height: 44px; }
-  .rich-text-block :deep(.rich-text-code-copy) { min-width: 56px; min-height: 44px; }
+  /* 代码块工具栏在手机上原本 44px 高，每块都占一整行；压到 34px 并把复制按钮收小，
+     语言标签与复制同行即可，不牺牲主要可点性。 */
+  .rich-text-block :deep(.rich-text-code-toolbar) { min-height: 34px; padding-inline: 12px 2px; }
+  .rich-text-block :deep(.rich-text-code-copy) { min-width: 48px; min-height: 30px; padding: 2px 6px; }
   /* 手机上 pre 固定宽度会横向滚动，长行只露一半，看着像渲染坏了；改成软换行并保留缩进。 */
   .rich-text-block :deep(.rich-text-code pre) { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
