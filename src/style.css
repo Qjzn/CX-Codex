@@ -51,6 +51,10 @@
   --ui-warning: #9a6700;
   --ui-danger: #c2410c;
   --ui-focus: #2563eb;
+  /* 字号阶梯：只保留三档，元信息/次要正文/正文 */
+  --ui-text-xs: 12px;
+  --ui-text-sm: 13px;
+  --ui-text-base: 14px;
   --ui-sidebar-width: 288px;
   --ui-topbar-height: 44px;
   --ui-content-max: 48rem;

@@ -62,7 +62,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   padding: 5px 10px;
   cursor: pointer;
   color: var(--ui-text-secondary);
-  font-size: 12.5px;
+  font-size: var(--ui-text-sm);
   transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
@@ -80,13 +80,13 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   background: var(--ui-bg-surface-muted);
   color: var(--ui-text-secondary);
   font-family: var(--font-mono-ui);
-  font-size: 13px;
+  font-size: var(--ui-text-sm);
   font-weight: 700;
 }
 
 .file-summary-title {
   color: var(--ui-text-primary);
-  font-size: 13.5px;
+  font-size: var(--ui-text-base);
   font-weight: 650;
 }
 
@@ -94,7 +94,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   margin-left: auto;
   color: var(--ui-text-tertiary);
   font-family: var(--font-mono-ui);
-  font-size: 11.5px;
+  font-size: var(--ui-text-xs);
 }
 
 .file-summary-chevron {
@@ -139,7 +139,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   min-width: 0;
   overflow: hidden;
   color: var(--ui-text-secondary);
-  font-size: 12px;
+  font-size: var(--ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -162,7 +162,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
 .file-kind {
   flex: 0 0 auto;
   color: var(--ui-text-tertiary);
-  font-size: 11px;
+  font-size: var(--ui-text-xs);
 }
 
 .file-kind[data-kind='add'] { color: var(--ui-success); }
@@ -173,7 +173,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   flex: 0 0 auto;
   gap: 4px;
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--ui-text-xs);
   font-style: normal;
 }
 

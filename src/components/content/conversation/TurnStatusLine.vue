@@ -55,7 +55,7 @@ const emit = defineEmits<{ toggle: [] }>()
   gap: 6px 12px;
   margin: 0;
   color: var(--ui-text-tertiary);
-  font-size: 13px;
+  font-size: var(--ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -80,7 +80,7 @@ const emit = defineEmits<{ toggle: [] }>()
   color: var(--ui-text-tertiary);
   cursor: pointer;
   text-align: left;
-  font-size: 13px;
+  font-size: var(--ui-text-sm);
   font-variant-numeric: tabular-nums;
   transition: color var(--motion-duration-fast) var(--motion-ease-standard);
 }
@@ -119,7 +119,7 @@ const emit = defineEmits<{ toggle: [] }>()
 
 .turn-status-counts {
   color: var(--ui-text-tertiary);
-  font-size: 12px;
+  font-size: var(--ui-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -131,7 +131,7 @@ const emit = defineEmits<{ toggle: [] }>()
 @media (max-width: 767px) {
   .process-toggle {
     min-height: 28px;
-    font-size: 12.5px;
+    font-size: var(--ui-text-sm);
   }
 }
 
