@@ -30,10 +30,17 @@ export function isAppServerOverloadedError(error: unknown): boolean {
 export function isThreadMaterializingError(error: unknown): boolean {
   const message = getErrorMessage(error, '').toLowerCase()
   if (!message) return false
+  // App Server 与 Codex CLI 对“尚未产生 rollout 的空线程”有多个措辞：
+  //   thread <id> is not materialized yet; includeTurns is unavailable before first user message
+  //   thread <id> is not materialized yet; thread/turns/list is unavailable before first user message
+  //   no rollout found for thread id <id>
+  //   no rollout found for conversation id <id>
+  // 按整句匹配会在 CLI 换词时退化成“空线程首次读取报错”，所以按稳定片段判断。
   return (
     message.includes('is not materialized yet') ||
     message.includes('includeturns is unavailable before first user message') ||
-    message.includes('no rollout found for thread id') ||
+    message.includes('turns/list is unavailable before first user message') ||
+    message.includes('no rollout found for') ||
     (message.includes('rollout') && message.includes('is empty')) ||
     message.includes('does not start with session metadata') ||
     (message.includes('thread-store internal error') && message.includes('failed to read thread'))
