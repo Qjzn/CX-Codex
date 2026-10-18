@@ -2752,13 +2752,11 @@ onBeforeUnmount(() => {
   .message-action,
   .quiet-button,
   .history-button,
-  .process-toggle,
   .process-history-action,
   .activity-details > summary,
   .request-field select,
   .request-field input,
   .request-field textarea,
-  .file-summary > summary,
   .file-row > summary {
     min-height: 44px;
   }
@@ -2766,6 +2764,34 @@ onBeforeUnmount(() => {
   .process-content {
     margin: 0;
     padding: 0;
+  }
+
+  /* 状态类控件不再撑到 44px：过程记录、文件变更是次要信息，
+     每条 44px 会把一屏挤掉半条对话。 */
+  .process-toggle {
+    min-height: 34px;
+    font-size: 12.5px;
+  }
+
+  .file-summary {
+    /* 完全去边框会让它和正文混在一起；留一条 2px 左侧色条做最轻的分组。 */
+    border: 0;
+    border-inline-start: 2px solid var(--ui-border-subtle);
+    background: transparent;
+    padding-inline-start: 8px;
+    border-radius: 0;
+  }
+
+  .file-summary > summary {
+    min-height: 38px;
+    padding-inline: 0;
+  }
+
+  .file-summary-icon {
+    width: 20px;
+    height: 20px;
+    flex-basis: 20px;
+    border-radius: 6px;
   }
 
   .turn-process {
@@ -2822,13 +2848,11 @@ onBeforeUnmount(() => {
   .message-action,
   .quiet-button,
   .history-button,
-  .process-toggle,
   .process-history-action,
   .activity-details > summary,
   .request-field select,
   .request-field input,
   .request-field textarea,
-  .file-summary > summary,
   .file-row > summary {
     min-height: 44px;
   }
