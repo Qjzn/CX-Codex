@@ -97,7 +97,7 @@ test('code highlighting preserves tabs, CRLF, entities and HTML-looking strings 
   const code = 'const text = "</code><img src=x onerror=alert(1)> &amp; & < > \\\" 中文";\r\n\tconsole.log(text)\r\n'
   const html = highlightConversationCode(code, 'javascript')
   assert.ok(html)
-  assert.doesNotMatch(html, /<img|<script|<\/code>/u)
+  assert.doesNotMatch(html, /<img|<script|<\/code>/iu)
   assert.equal(highlightedPlainText(html), code)
 })
 
