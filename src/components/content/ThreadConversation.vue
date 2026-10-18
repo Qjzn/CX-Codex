@@ -2771,6 +2771,11 @@ onBeforeUnmount(() => {
   .process-content {
     margin: 0;
     padding: 0;
+    /* 展开后限高：过程再长也不超过 60vh，块内滚动，时间线不被撑爆。
+       真正的抽屉（过程/变更独立面板）需要先把过程内容拆成组件，留待下一轮。 */
+    max-height: 60vh;
+    overflow: auto;
+    overscroll-behavior: contain;
   }
 
   /* 状态类控件不再撑到 44px：过程记录、文件变更是次要信息，
