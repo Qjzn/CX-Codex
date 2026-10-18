@@ -129,32 +129,18 @@
 
         <section class="assistant-turn" :aria-label="`Codex 第 ${String(turn.index + 1)} 轮`">
           <div v-if="turn.state !== 'submitting'" class="turn-divider" :data-state="turn.state">
-            <button
-              v-if="hasProcessContent(turn)"
-              type="button"
-              class="process-toggle turn-timing"
-              :data-status="turn.timingStatus"
-              :aria-expanded="isProcessExpanded(turn)"
-              :disabled="isActiveTurn(turn)"
-              @click="toggleProcess(turn)"
-            >
-              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" :detail="turnStatusSummary(turn)" />
-              <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
-              <span
-                v-if="!isActiveTurn(turn)"
-                class="process-toggle-icon"
-                :class="{ 'is-expanded': isProcessExpanded(turn) }"
-                aria-hidden="true"
-              >›</span>
-            </button>
-            <div
-              v-else-if="hasVisibleTiming(turn)"
-              class="turn-timing turn-timing--static"
-              :data-status="turn.timingStatus"
-            >
-              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" :detail="turnStatusSummary(turn)" />
-              <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
-            </div>
+            <TurnStatusLine
+              :turn="turn"
+              :generated-at-ms="projection.generatedAtMs"
+              :thread-id="props.activeThreadId"
+              :detail="turnStatusSummary(turn)"
+              :has-process="hasProcessContent(turn)"
+              :has-timing="hasVisibleTiming(turn)"
+              :active="isActiveTurn(turn)"
+              :expanded="isProcessExpanded(turn)"
+              :wait-label="turn.waitedMs > 0 ? formatDuration(turn.waitedMs) : ''"
+              @toggle="toggleProcess(turn)"
+            />
             <span class="turn-divider-line" aria-hidden="true" />
           </div>
 
@@ -564,6 +550,7 @@
 <script setup lang="ts">
 import { formatDuration } from './conversation/format'
 import ConversationFileChanges from './conversation/ConversationFileChanges.vue'
+import TurnStatusLine from './conversation/TurnStatusLine.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
 import ConversationRichText from './ConversationRichText.vue'
 import ConversationMessageActions from './ConversationMessageActions.vue'
@@ -1840,10 +1827,6 @@ onBeforeUnmount(() => {
   background: var(--ui-border-subtle);
 }
 
-.turn-wait-time {
-  color: var(--ui-warning);
-}
-
 .message-markdown {
   min-width: 0;
   font-family: var(--font-sans-reading);
@@ -1935,62 +1918,6 @@ onBeforeUnmount(() => {
 
 .turn-process {
   margin: 0 0 12px;
-}
-
-.process-toggle {
-  display: inline-flex;
-  min-width: 0;
-  min-height: 32px;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
-  color: var(--ui-text-tertiary);
-  cursor: pointer;
-  text-align: left;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  transition: color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.process-toggle:hover:not(:disabled),
-.process-toggle:focus-visible {
-  color: var(--ui-text-primary);
-}
-
-.turn-status-counts {
-  color: var(--ui-text-tertiary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.process-toggle:focus-visible {
-  outline: 2px solid var(--ui-focus);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-
-.process-toggle:disabled {
-  cursor: default;
-  opacity: 1;
-}
-
-.process-toggle-icon {
-  display: inline-grid;
-  width: 14px;
-  height: 14px;
-  place-items: center;
-  color: var(--ui-text-tertiary);
-  font-size: 16px;
-  line-height: 1;
-  transform-origin: center;
-  transition: transform var(--motion-duration-base) var(--motion-ease-out);
-}
-
-.process-toggle-icon.is-expanded {
-  transform: rotate(90deg);
 }
 
 .process-content {
@@ -2436,25 +2363,6 @@ onBeforeUnmount(() => {
   opacity: 0.48;
 }
 
-.turn-timing {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  margin: 0;
-  color: var(--ui-text-tertiary);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.turn-timing--static {
-  min-height: 32px;
-  align-items: center;
-}
-
-.turn-timing[data-status='running'] {
-  color: var(--ui-accent);
-}
-
 .final-answer {
   min-width: 0;
   margin-top: 4px;
@@ -2609,13 +2517,6 @@ onBeforeUnmount(() => {
     overscroll-behavior: contain;
   }
 
-  /* 状态类控件不再撑到 44px：过程记录、文件变更是次要信息，
-     每条 44px 会把一屏挤掉半条对话。 */
-  .process-toggle {
-    min-height: 28px;
-    font-size: 12.5px;
-  }
-
   .turn-process {
     margin-bottom: 8px;
   }
@@ -2668,9 +2569,6 @@ onBeforeUnmount(() => {
 
   .process-reveal-enter-active,
   .process-reveal-leave-active,
-  .process-toggle-icon {
-    transition-duration: 1ms;
-  }
 
   [data-message-id].is-highlighted {
     animation: none;
