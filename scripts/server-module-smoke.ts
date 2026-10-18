@@ -4376,10 +4376,12 @@ function smokeSchemaAuditIdentityMatch(): void {
   ).status, 'matched')
 
   // The same target reached through different separators/case is still the same target on Windows.
-  assert.equal(compareSchemaAuditIdentity(
-    buildSummary({ launchPath: 'c:\\B4C-IDENTITY\\codex.exe' }),
-    buildActive({ launchPath: `${B4C_ROOT}/codex.exe` }),
-  ).status, 'matched')
+  if (process.platform === 'win32') {
+    assert.equal(compareSchemaAuditIdentity(
+      buildSummary({ launchPath: 'c:\\B4C-IDENTITY\\codex.exe' }),
+      buildActive({ launchPath: `${B4C_ROOT}/codex.exe` }),
+    ).status, 'matched')
+  }
 
   // Path / version / SHA each mismatch, and same-version-different-SHA is still a mismatch.
   assert.deepEqual(compareSchemaAuditIdentity(
