@@ -1,5 +1,13 @@
 # 发版说明
 
+## CLI 调试文件与运行包
+
+`npm run build:cli` 先构建带source map的CLI，再运行 `scripts/archive-cli-debug.mjs`。原始 `index.js`、`index.js.map` 和SHA-256清单保存在 `output/cli-debug/<内容哈希>/`；map包含源码内容，可与原始JS一起离线调试。归档失败会使构建失败，且不会丢弃尚未归档的map。
+
+`dist-cli/` 最终仅保留去掉尾部sourceMappingURL注释的运行JS；npm文件清单也只允许 `dist-cli/index.js`。普通发布ZIP复制此运行目录，不包含 `output/`。维护者应将对应调试目录单独保留，按清单中的 `runtimeSha256` 匹配安装的JS；重建时相同版本也可能有不同内容哈希。不要把调试归档混入运行包。本流程只在本地归档，不会自动上传、推送或发布。
+
+局部回归：`npm run verify:cli-debug`。CLI构建后应另外检查npm模拟打包清单不含 `.map` / `output/`；真实发版仍遵守下述分支与门禁。
+
 本仓库使用 GitHub Release 作为主发版方式。版本号统一采用纯数字语义版本：
 
 - `2.1`

@@ -90,6 +90,7 @@ $restartScript = Join-Path $repoRoot "scripts\restart-local-service.ps1"
 $hiddenCommandRunner = Join-Path $repoRoot "scripts\run-hidden-command.vbs"
 $hiddenPowerShellRunner = Join-Path $repoRoot "scripts\run-hidden-powershell.vbs"
 $serviceScript = Join-Path $repoRoot "scripts\manage-windows-service.ps1"
+$watchdogScript = Join-Path $repoRoot "scripts\watchdog-7420.ps1"
 $cliScript = Join-Path $repoRoot "src\cli\index.ts"
 $serviceAdapterScript = Join-Path $repoRoot "src\cli\windowsServiceCommand.ts"
 $testRoot = Join-Path $env:TEMP "cx-codex-productization-$PID"
@@ -97,6 +98,7 @@ $installSource = Get-Content -LiteralPath $installScript -Raw
 $bootstrapSource = Get-Content -LiteralPath $bootstrapScript -Raw
 $restartSource = Get-Content -LiteralPath $restartScript -Raw
 $serviceSource = Get-Content -LiteralPath $serviceScript -Raw
+$watchdogSource = Get-Content -LiteralPath $watchdogScript -Raw
 $cliSource = Get-Content -LiteralPath $cliScript -Raw
 $hiddenCommandSource = Get-Content -LiteralPath $hiddenCommandRunner -Raw
 $hiddenPowerShellSource = Get-Content -LiteralPath $hiddenPowerShellRunner -Raw
@@ -150,6 +152,15 @@ Assert-True `
   ($serviceSource -match 'if \(\$Action -eq "stop"\)[\s\S]*?Stop-ManagedProcessTree' -and $serviceSource -notmatch 'if \(\$Action -eq "stop"\)[\s\S]*?Set-TaskEnabledState') `
   "Windows service stop must control only the managed process tree."
 Assert-True `
+  ($serviceSource -match 'if \(\$Action -eq "stop"\)[\s\S]*?Enter-ServiceStandby[\s\S]*?Stop-ManagedProcessTree' -and $serviceSource -match 'if \(\$Action -eq "start"\)[\s\S]*?Exit-ServiceStandby[\s\S]*?exit 0[\s\S]*?Stop-ManagedProcessTree[\s\S]*?Exit-ServiceStandby[\s\S]*?Start-ManagedLauncher') `
+  "An explicit service stop must enter persistent standby before stopping, while start and restart must leave standby."
+Assert-True `
+  ($watchdogSource -match 'StandbyPath[\s\S]*?Test-Path\s+-LiteralPath\s+\$resolvedStandbyPath[\s\S]*?Write-WatchdogState[\s\S]*?exit\s+0') `
+  "The watchdog must honor persistent standby before health failure can trigger a restart."
+Assert-True `
+  ($installSource -match 'CX_CODEX_STANDBY_PATH[\s\S]*?if exist "%CX_CODEX_STANDBY_PATH%" exit /b 0') `
+  "The login launcher must honor the same standby marker as the watchdog."
+Assert-True `
   ($serviceSource -match 'if \(\$Action -eq "disable"\)[\s\S]*?Set-TaskEnabledState[\s\S]*?if \(\$Action -eq "enable"\)[\s\S]*?Set-TaskEnabledState') `
   "Windows service enable and disable must own scheduled-task state changes."
 Assert-True `
@@ -186,6 +197,33 @@ $originalManagementShortcutRoot = $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT
 $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT = Join-Path $testRoot "shortcuts"
 
 try {
+  $standbyFixtureRoot = Join-Path $testRoot "watchdog-standby"
+  $standbyStatePath = Join-Path $standbyFixtureRoot "watchdog.state.json"
+  $standbyLogPath = Join-Path $standbyFixtureRoot "watchdog.log"
+  $standbyMarkerPath = Join-Path $standbyFixtureRoot "cx-codex-17418.standby"
+  New-Item -ItemType Directory -Path $standbyFixtureRoot -Force | Out-Null
+  Set-Content -LiteralPath $standbyMarkerPath -Encoding UTF8 -Value '{"reason":"verification"}'
+  $standbyResult = Invoke-CapturedPowerShell `
+    -ScriptPath $watchdogScript `
+    -Arguments @(
+      "-Port", "17418",
+      "-ConfigPath", (Join-Path $standbyFixtureRoot "config.json"),
+      "-RepoRoot", (Join-Path $standbyFixtureRoot "missing-repo"),
+      "-NodePath", (Join-Path $standbyFixtureRoot "missing-node.exe"),
+      "-StandbyPath", $standbyMarkerPath,
+      "-StatePath", $standbyStatePath,
+      "-LogPath", $standbyLogPath
+    ) `
+    -CaptureRoot $testRoot `
+    -Label "watchdog-standby" `
+    -TimeoutSeconds 15
+  Assert-True ($standbyResult.ExitCode -eq 0) "Watchdog standby smoke exited with $($standbyResult.ExitCode). $($standbyResult.Stderr)"
+  $standbyState = Get-Content -LiteralPath $standbyStatePath -Raw | ConvertFrom-Json
+  Assert-True ([bool]$standbyState.standbyActive) "Watchdog standby smoke must persist standbyActive=true."
+  Assert-True ([int]$standbyState.localFailures -eq 0 -and [int]$standbyState.publicFailures -eq 0) "Watchdog standby smoke must reset failure counters."
+  Assert-True ((Get-Content -LiteralPath $standbyLogPath -Raw) -match 'automatic restart suspended') "Watchdog standby smoke must record the suspended restart once."
+  Write-Host "productization: watchdog standby passed"
+
   $nodePath = (Get-Command node -ErrorAction Stop).Source
   $nodeRoot = Split-Path -Parent $nodePath
   $npmCliPath = Join-Path $nodeRoot "node_modules\npm\bin\npm-cli.js"

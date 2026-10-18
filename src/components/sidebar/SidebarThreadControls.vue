@@ -108,4 +108,11 @@ defineEmits<{
   border-radius: var(--ui-radius-pill);
   background: var(--ui-warning);
 }
+
+@media (pointer: coarse) {
+  .sidebar-thread-controls-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 </style>

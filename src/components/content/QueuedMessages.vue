@@ -12,7 +12,7 @@
         compact
       />
       <p v-else-if="hasPausedFailure" class="queued-messages-caption queued-messages-caption-failed" role="status">
-        下一条未能发送，队列已暂停。重试、编辑或删除后继续。
+        下一条未能发送，队列已暂停。重试或删除后继续。
       </p>
       <p v-else-if="hasLocalPending" class="queued-messages-caption" role="status">
         已保存在本机，正在等待连接 7420；同步完成后才可脱离移动端执行。
@@ -24,7 +24,10 @@
         当前 Codex 版本仍占用此任务；关闭或切换桌面端任务后，7420 才能继续。
       </p>
       <p v-else class="queued-messages-caption">
-        已交给 7420 后台；切换会话或关闭移动端后仍会按顺序执行。点正文可编辑。
+        已交给 7420 后台；切换会话或关闭移动端后仍会按顺序执行。
+      </p>
+      <p class="queued-messages-caption queued-messages-edit-note">
+        为避免重复执行，排队消息暂不支持直接修改或立即引用。原内容已保留。
       </p>
 
       <div
@@ -33,7 +36,7 @@
         class="queued-row"
         :class="{ 'is-failed': msg.deliveryState === 'failed' }"
       >
-        <button class="queued-row-main" type="button" title="编辑这条排队消息" @click="$emit('edit', msg.id)">
+        <div class="queued-row-main">
           <span class="queued-row-order" :class="{ 'is-next': index === 0 }">
             {{ msg.deliveryState === 'failed' ? '未发送' : index === 0 ? '下一条' : String(index + 1).padStart(2, '0') }}
           </span>
@@ -41,9 +44,25 @@
             <span class="queued-row-text">{{ getMessagePreview(msg) }}</span>
             <span v-if="getMessageMeta(msg)" class="queued-row-meta">{{ getMessageMeta(msg) }}</span>
           </span>
-        </button>
+        </div>
 
         <div class="queued-row-actions">
+          <button
+            v-if="canReorderQueue && index > 0"
+            class="queued-row-move"
+            type="button"
+            :aria-label="`上移第 ${index + 1} 条排队消息`"
+            title="上移"
+            @click.stop="$emit('move', msg.id, 'up')"
+          >↑</button>
+          <button
+            v-if="canReorderQueue && index < messages.length - 1"
+            class="queued-row-move"
+            type="button"
+            :aria-label="`下移第 ${index + 1} 条排队消息`"
+            title="下移"
+            @click.stop="$emit('move', msg.id, 'down')"
+          >↓</button>
           <button
             v-if="msg.deliveryState === 'failed'"
             class="queued-row-retry"
@@ -52,9 +71,6 @@
             @click.stop="$emit('retry', msg.id)"
           >
             重试
-          </button>
-          <button v-else class="queued-row-quote" type="button" title="立即引用并执行这条队列消息" @click.stop="$emit('quote', msg.id)">
-            引用
           </button>
           <button class="queued-row-delete" type="button" aria-label="删除排队消息" title="删除排队消息" @click.stop="$emit('delete', msg.id)">
             <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true">
@@ -93,12 +109,20 @@ defineEmits<{
   quote: [messageId: string]
   retry: [messageId: string]
   delete: [messageId: string]
+  move: [messageId: string, direction: 'up' | 'down']
 }>()
 
 const hasPausedFailure = computed(() => props.messages[0]?.deliveryState === 'failed')
 const hasLocalPending = computed(() => props.messages.some((message) => message.backgroundPersisted !== true))
 const hasNativeWriterWait = computed(() => props.messages.some((message) => message.waitReason === 'native_writer'))
 const hasExternalWriterWait = computed(() => props.messages.some((message) => message.waitReason === 'external_writer'))
+const canReorderQueue = computed(() => {
+  if (props.messages.length < 2 || props.isProcessing === true || hasPausedFailure.value || hasLocalPending.value) {
+    return false
+  }
+  const ownershipKinds = new Set(props.messages.map((message) => message.waitReason ?? 'local'))
+  return ownershipKinds.size === 1
+})
 
 function getMessagePreview(message: QueuedMessageRow): string {
   const text = message.text.trim()
@@ -173,6 +197,10 @@ function getMessageMeta(message: QueuedMessageRow): string {
   color: color-mix(in srgb, var(--ui-warning) 78%, var(--ui-text-primary));
 }
 
+.queued-messages-edit-note {
+  color: var(--ui-text-secondary);
+}
+
 .queued-row {
   @apply flex min-w-0 items-start gap-2 border px-2.5 py-2;
   border-radius: var(--ui-radius-card);
@@ -188,6 +216,7 @@ function getMessageMeta(message: QueuedMessageRow): string {
 .queued-row-main {
   @apply flex min-w-0 flex-1 items-start gap-2 border-0 bg-transparent p-0 text-left;
   border-radius: var(--ui-radius-card);
+  user-select: text;
 }
 
 .queued-row-order {
@@ -213,10 +242,8 @@ function getMessageMeta(message: QueuedMessageRow): string {
 .queued-row-text {
   @apply min-w-0 text-sm leading-5;
   color: var(--ui-text-primary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .queued-row-meta {
@@ -225,10 +252,9 @@ function getMessageMeta(message: QueuedMessageRow): string {
 }
 
 .queued-row-actions {
-  @apply flex shrink-0 items-center gap-1 self-center;
+  @apply flex shrink-0 items-center gap-1 self-start;
 }
 
-.queued-row-quote,
 .queued-row-retry {
   @apply border px-2.5 py-1 text-xs font-medium transition;
   border-radius: var(--ui-radius-control);
@@ -237,24 +263,34 @@ function getMessageMeta(message: QueuedMessageRow): string {
   color: var(--ui-accent);
 }
 
-.queued-row-quote:hover,
 .queued-row-retry:hover {
   border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border-strong));
   background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
 }
 
+.queued-row-move,
 .queued-row-delete {
   @apply inline-flex h-7 w-7 items-center justify-center border-0 bg-transparent transition;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-tertiary);
 }
 
+.queued-row-move:hover,
 .queued-row-delete:hover {
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
 }
 
-@media (max-width: 767px) {
+.dark .queued-messages {
+  --ui-bg-surface: #18181b;
+  --ui-bg-surface-muted: #27272a;
+  --ui-bg-row-hover: #3f3f46;
+  --ui-border-subtle: #3f3f46;
+  --ui-border-strong: #52525b;
+  --ui-accent: #5eead4;
+}
+
+@media (max-width: 767px), (pointer: coarse) {
   .queued-messages {
     @apply px-2.5;
   }
@@ -267,12 +303,20 @@ function getMessageMeta(message: QueuedMessageRow): string {
     @apply px-2 py-2;
   }
 
-  .queued-row-quote {
+  .queued-row-retry {
     @apply px-2 py-0.5;
   }
 
-  .queued-row-retry {
-    @apply px-2 py-0.5;
+  .queued-row-retry,
+  .queued-row-move,
+  .queued-row-delete {
+    min-height: 44px;
+  }
+
+  .queued-row-retry,
+  .queued-row-move,
+  .queued-row-delete {
+    min-width: 44px;
   }
 }
 </style>

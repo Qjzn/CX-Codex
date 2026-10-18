@@ -10,6 +10,12 @@ import { rateLimit } from 'express-rate-limit'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
 import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
+import {
+  BACKEND_UPDATE_ROUTE_PREFIX,
+  createBackendUpdateController,
+  type BackendMetadataTransport,
+  type FrozenBackendIdentity,
+} from './backendUpdate.js'
 import { persistAccessPassword } from './localAccessConfig.js'
 import {
   resolveUploadedFilePath,
@@ -57,6 +63,9 @@ export type ServerOptions = {
   resolveUploadedFilePath?: typeof resolveUploadedFilePath
   resolveSessionAttachmentPath?: typeof resolveSessionAttachmentPath
   runtimeDatabasePath?: string
+  startupSkillsSync?: boolean
+  backendIdentity?: FrozenBackendIdentity | null
+  fetchBackendReleaseMetadata?: BackendMetadataTransport
   localFileRateLimit?: {
     limit: number
     windowMs: number
@@ -67,6 +76,12 @@ export type ServerInstance = {
   app: Express
   dispose: () => void
   attachWebSocket: (server: HttpServer) => void
+  /**
+   * Adds one concrete trusted update origin once the real startup binding (or a
+   * returned public endpoint) is known. It is never derived from request
+   * Host/Forwarded headers; a wildcard bind is not a trusted authority.
+   */
+  addTrustedUpdateOrigin: (origin: string) => void
 }
 
 const IMAGE_CONTENT_TYPES: Record<string, string> = {
@@ -313,6 +328,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const bridge = createBridgeMiddleware({
     remoteAccessProtected: Boolean(options.password),
     runtimeDatabasePath: options.runtimeDatabasePath,
+    startupSkillsSync: options.startupSkillsSync,
   })
   const authSession = options.password ? createAuthSession(options.password) : null
   const resolveLocalFilePath = options.resolveLocalFilePath ?? resolveWorkspaceLocalPath
@@ -320,12 +336,21 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const resolveSessionLocalAttachmentPath = options.resolveSessionAttachmentPath ?? resolveSessionAttachmentPath
   const localSetupToken = randomBytes(24).toString('hex')
   let invalidateWebSocketSessions = () => {}
+  const backendUpdateController = createBackendUpdateController(
+    {
+      identity: options.backendIdentity ?? null,
+    },
+    options.fetchBackendReleaseMetadata
+      ? { fetchMetadata: options.fetchBackendReleaseMetadata }
+      : {},
+  )
 
   app.get('/health', (_req, res) => {
     res.status(200).json({
       status: 'ok',
       service: 'cx-codex',
       atIso: new Date().toISOString(),
+      backend: backendUpdateController.readPublicIdentity(),
     })
   })
 
@@ -410,6 +435,19 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     legacyHeaders: false,
     message: { error: '本地文件请求过于频繁，请稍后重试。' },
   }))
+
+  // 1b. Read-only backend update identity / detection (auth already applied, bridge untouched)
+  app.use((req, res, next) => {
+    if (!(req.url ?? '').startsWith(BACKEND_UPDATE_ROUTE_PREFIX)) {
+      next()
+      return
+    }
+    void backendUpdateController.handleHttp(req, res).then((handled) => {
+      if (!handled) next()
+    }).catch(() => {
+      if (!res.headersSent) res.status(500).json({ error: '更新检测处理失败。' })
+    })
+  })
 
   // 2. Bridge middleware for /codex-api/*
   app.use(bridge)
@@ -674,7 +712,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
   return {
     app,
-    dispose: () => bridge.dispose(),
+    dispose: () => {
+      backendUpdateController.dispose()
+      bridge.dispose()
+    },
+    addTrustedUpdateOrigin: (origin: string) => backendUpdateController.addTrustedOrigin(origin),
     attachWebSocket: (server: HttpServer) => {
       const wss = new WebSocketServer({
         noServer: true,

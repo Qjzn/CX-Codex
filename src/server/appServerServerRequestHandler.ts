@@ -3,6 +3,10 @@ import {
   type PendingServerRequest,
 } from './pendingServerRequests.js'
 import {
+  isPermissionsApprovalRequestMethod,
+  validatePermissionsApprovalResult,
+} from '../permissionsRequestApproval.js'
+import {
   evaluateServerRequestPolicy,
   isImmediateServerRequestPolicyDecision,
   type WebBridgePermissionSettings,
@@ -31,6 +35,7 @@ export type HandleAppServerServerRequestDependencies = {
 }
 
 export type ResolveAppServerPendingServerRequestDependencies = {
+  getPendingServerRequest: (requestId: number) => PendingServerRequest | null
   consumePendingServerRequest: (requestId: number) => PendingServerRequest | null
   sendServerRequestReply: (requestId: number, reply: ServerRequestReply) => void
   emitNotification: (notification: AppServerServerRequestNotification) => void
@@ -94,12 +99,17 @@ export function resolveAppServerPendingServerRequest(
   reply: ServerRequestReply,
   dependencies: ResolveAppServerPendingServerRequestDependencies,
 ): void {
-  const pendingRequest = dependencies.consumePendingServerRequest(requestId)
+  // Lookup first: the pending request stays owned by its store until the reply was
+  // validated against it and written synchronously.
+  const pendingRequest = dependencies.getPendingServerRequest(requestId)
   if (!pendingRequest) {
     throw new Error(`No pending server request found for id ${String(requestId)}`)
   }
 
-  dependencies.sendServerRequestReply(requestId, reply)
+  const outgoingReply = buildResolvedReply(pendingRequest, reply)
+
+  dependencies.sendServerRequestReply(requestId, outgoingReply)
+  dependencies.consumePendingServerRequest(requestId)
   dependencies.emitNotification(createAppServerRequestResolvedNotification({
     requestId,
     method: pendingRequest.method,
@@ -107,4 +117,30 @@ export function resolveAppServerPendingServerRequest(
     mode: 'manual',
     readThreadIdFromPayload: dependencies.readThreadIdFromPayload,
   }))
+}
+
+/**
+ * The dedicated permissions approval only accepts a structured result that was rebuilt
+ * from the stored request; a generic error reply, a bare result or the legacy session
+ * decision can neither be sent nor consume the pending request. Other methods keep
+ * their previous pass-through semantics.
+ */
+function buildResolvedReply(pendingRequest: PendingServerRequest, reply: ServerRequestReply): ServerRequestReply {
+  if (!isPermissionsApprovalRequestMethod(pendingRequest.method)) return reply
+  if (reply.error) {
+    throw new Error(
+      `Invalid permissions approval reply for request ${String(pendingRequest.id)}: error replies are not accepted`,
+    )
+  }
+  try {
+    return { result: validatePermissionsApprovalResult(pendingRequest.params, reply.result) }
+  } catch (error) {
+    throw new Error(
+      `Invalid permissions approval reply for request ${String(pendingRequest.id)}: ${getErrorMessage(error)}`,
+    )
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

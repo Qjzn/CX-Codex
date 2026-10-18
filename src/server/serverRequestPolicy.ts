@@ -1,3 +1,5 @@
+import { isPermissionsApprovalRequestMethod } from '../permissionsRequestApproval.js'
+
 export type PermissionDecision = 'ask' | 'allowForSession'
 
 export type WebBridgePermissionSettings = {
@@ -96,16 +98,23 @@ function isApprovalPermissionRequest(method: string, params: unknown): boolean {
   )
 }
 
+// The dedicated permissions approval request is intentionally NOT part of
+// `isApprovalPermissionRequest`: that predicate is shared with the automatic approval
+// path, and this method must never inherit the legacy allowAll / allowForSession
+// semantics. It only ever queues for an explicit turn decision.
 export function shouldDeclinePlanModeServerRequest(
   method: string,
   params: unknown,
   isPlanModeRequest: boolean,
 ): boolean {
   if (!isPlanModeRequest) return false
-  return isApprovalPermissionRequest(method, params)
+  return isApprovalPermissionRequest(method, params) || isPermissionsApprovalRequestMethod(method)
 }
 
 export function buildPlanModeDeclineResult(method: string, params: unknown): unknown {
+  if (isPermissionsApprovalRequestMethod(method)) {
+    return { permissions: {}, scope: 'turn' }
+  }
   if (isMcpToolPermissionRequest(method, params)) {
     return { action: 'decline' }
   }
@@ -117,19 +126,17 @@ export function shouldAutoApproveServerRequest(
   params: unknown,
   permissions: WebBridgePermissionSettings,
 ): boolean {
-  if (permissions.allowAllPermissionRequests) {
-    return isApprovalPermissionRequest(method, params)
+  // P1: the single master switch is the only effective grant. Only a literal boolean `true`
+  // enables automatic approval; a missing, string, numeric or otherwise invalid value stays OFF.
+  // The legacy commandExecution / fileChange / mcpTools fields are still normalized and written
+  // back for wire compatibility, but they never participate in the effective policy.
+  if (permissions.allowAllPermissionRequests !== true) {
+    return false
   }
-  if (method === COMMAND_APPROVAL_METHOD) {
-    return permissions.commandExecution === 'allowForSession'
-  }
-  if (method === FILE_CHANGE_APPROVAL_METHOD) {
-    return permissions.fileChange === 'allowForSession'
-  }
-  if (isMcpToolPermissionRequest(method, params)) {
-    return permissions.mcpTools === 'allowForSession'
-  }
-  return false
+  // Even with the master switch ON, only the request kinds the existing recognizers already
+  // support are auto approved. The dedicated permissions approval request is deliberately not
+  // part of `isApprovalPermissionRequest`, so it keeps queueing for an explicit turn decision.
+  return isApprovalPermissionRequest(method, params)
 }
 
 export function buildAutoApprovalResult(method: string, params: unknown): unknown {
@@ -170,6 +177,12 @@ export function evaluateServerRequestPolicy(
 
   if (shouldDeclinePlanModeServerRequest(method, params, isPlanModeRequest)) {
     return { kind: 'plan-decline', result: buildPlanModeDeclineResult(method, params) }
+  }
+
+  // Non-plan dedicated permissions requests always wait for an explicit turn decision,
+  // even when allowAllPermissionRequests or an allowForSession preference is set.
+  if (isPermissionsApprovalRequestMethod(method)) {
+    return { kind: 'queue' }
   }
 
   if (shouldAutoApproveServerRequest(method, params, permissions)) {

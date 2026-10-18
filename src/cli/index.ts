@@ -19,6 +19,7 @@ import {
 import { resolveLaunchOptions, type LaunchCliOptions } from './config.js'
 import { assertPasswordProtectedBind } from './accessPolicy.js'
 import { createServer as createApp } from '../server/httpServer.js'
+import { captureFrozenBackendIdentity, resolveTrustedUpdateOrigins } from '../server/backendUpdate.js'
 import { generatePassword } from '../server/password.js'
 import { RuntimeStore } from '../server/runtimeStore.js'
 import {
@@ -453,10 +454,12 @@ async function startServer(options: {
     runOrFail(codexCommand, ['login'], 'Codex login')
   }
 
-  const { app, dispose, attachWebSocket } = createApp({
+  const backendIdentity = await captureFrozenBackendIdentity({ entryPath: fileURLToPath(import.meta.url) })
+  const { app, dispose, attachWebSocket, addTrustedUpdateOrigin } = createApp({
     password,
     configPath: options.configPath,
     host,
+    backendIdentity,
   })
   const server = createServer(app)
   server.keepAliveTimeout = 65_000
@@ -465,6 +468,15 @@ async function startServer(options: {
   server.timeout = 0
   attachWebSocket(server)
   const port = await listenOnRequestedPort(server, requestedPort, host)
+  // Trusted update origins come only from the real bound/returned endpoints of
+  // this process (never from request Host/Forwarded headers).
+  for (const trustedUpdateOrigin of resolveTrustedUpdateOrigins({
+    bindHost: host,
+    port,
+    advertisedUrls: getAccessibleUrls(host, port),
+  })) {
+    addTrustedUpdateOrigin(trustedUpdateOrigin)
+  }
   let tunnelUrl: string | null = null
   let resolvedCloudflaredCommand: string | null = null
   let stableTunnel = false
@@ -503,6 +515,9 @@ async function startServer(options: {
       }
     }
   }
+
+  // Only the actually returned public endpoint becomes a trusted update origin.
+  if (tunnelUrl) addTrustedUpdateOrigin(tunnelUrl)
 
   const lines = [
     '',

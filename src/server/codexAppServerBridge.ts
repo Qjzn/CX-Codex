@@ -27,6 +27,8 @@ import {
 import { startCodexBridgeStartupTasks } from './codexBridgeStartupTasks.js'
 import { createCodexBridgeRuntimeOperations } from './codexBridgeRuntimeOperations.js'
 import { createCodexBridgeMiddlewareState } from './codexBridgeMiddlewareState.js'
+import { readAssistantRoleBinding } from './assistantRuntime.js'
+import { createAssistantCoordinator } from './assistantCoordinator.js'
 import { MobilePushCoordinator } from './mobilePush.js'
 import {
   CodexSessionFileChangeObserver,
@@ -56,15 +58,18 @@ type SharedBridgeState = {
 }
 
 function getSharedBridgeState(): SharedBridgeState {
-  return getCodexBridgeSharedState({
+  return getCodexBridgeSharedState<AppServerProcess, AppServerMethodCatalog>({
     createAppServer: () => new AppServerProcess(),
-    createMethodCatalog: () => new AppServerMethodCatalog(),
+    createMethodCatalog: (appServer) => new AppServerMethodCatalog({
+      getActiveLaunchIdentity: () => appServer.getActiveLaunchIdentity(),
+    }),
   })
 }
 
 export type CodexBridgeMiddlewareOptions = {
   remoteAccessProtected?: boolean
   runtimeDatabasePath?: string
+  startupSkillsSync?: boolean
 }
 
 export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOptions = {}): CodexBridgeMiddleware {
@@ -87,6 +92,11 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     runtimeStore.getRestartBlockingRequestCount(),
     runtimeStateStore.getActiveThreadCount(),
   ))
+  let assistantCoordinator: ReturnType<typeof createAssistantCoordinator> | null = null
+  function requireAssistantCoordinator() {
+    if (!assistantCoordinator) throw new Error('Assistant coordinator is not ready')
+    return assistantCoordinator
+  }
   const mobilePushCoordinator = new MobilePushCoordinator({ store: runtimeStore })
   let runtimeMessageQueue: RuntimeMessageQueue | null = null
   const recentLiveRuntimeEventAtMsByThreadId = new Map<string, number>()
@@ -99,8 +109,19 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     runtimeReconcileScheduler,
     startRuntimeTurn,
     startRuntimeTurnSettled,
+    startAssistantConversation,
     interruptRuntimeTurn,
+    createAssistantWorkerStarter,
+    createAssistantWorkerInterrupter,
   } = createCodexBridgeRuntimeOperations({
+    assistantMainSetup: {
+      readInstructions: () => requireAssistantCoordinator().mainSetup.readInstructions(),
+      readTools: () => requireAssistantCoordinator().mainSetup.readTools(),
+      onThreadCreated: result => requireAssistantCoordinator().mainSetup.onThreadCreated(result),
+    },
+    resumeAssistantTask: payload => requireAssistantCoordinator().resumePending(payload),
+    readAssistantMainClientMessageId: () => runtimeStore.readAssistantMainConversation()?.clientMessageId ?? null,
+    isManagedThread: (threadId) => readAssistantRoleBinding(runtimeStore)?.threadId === threadId || !!assistantCoordinator?.isWorkerThread(threadId),
     appServer,
     runtimeStore,
     runtimeStateStore,
@@ -116,6 +137,16 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
       writeBridgeLog('warn', 'Runtime reconcile failed', details)
     },
   })
+  assistantCoordinator = createAssistantCoordinator({
+    appServer, store: runtimeStore,
+    runtime: { createAssistantWorkerStarter, createAssistantWorkerInterrupter, reconcileRuntimeThread },
+    readReportQueue: () => runtimeMessageQueue,
+    onError: error => writeBridgeLog('warn', 'Assistant task awaits verification', { error: getErrorMessage(error, 'assistant_task_failed') }),
+  })
+  appServer.setRpcPolicy(assistantCoordinator.policy)
+  appServer.setRpcWriteGuard(assistantCoordinator.beforeWrite)
+  appServer.setServerRequestInterceptor(assistantCoordinator.intercept)
+  void assistantCoordinator.kick()
 
   const {
     notificationReplay,
@@ -140,6 +171,9 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         }
       }
       runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId, event.params)
+      if (event.method === 'turn/completed' || event.method === 'turn/interrupted' || event.method === 'error' || event.method.endsWith('/failed')) {
+        void assistantCoordinator?.kick()
+      }
       void mobilePushCoordinator.handleRuntimeEvent(event).catch((error) => {
         writeBridgeLog('warn', 'Mobile push terminal wake failed', {
           method: event.method,
@@ -152,12 +186,14 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   })
   runtimeMessageQueue = new RuntimeMessageQueue({
     store: runtimeStore,
-    startRuntimeTurn: startRuntimeTurnSettled,
+    startRuntimeTurn: payload => requireAssistantCoordinator().startReport(payload) ?? startRuntimeTurnSettled(payload),
+    shouldApplyQueuedSpeedMode: payload => readAssistantRoleBinding(runtimeStore)?.threadId !== (payload as { threadId?: unknown } | null)?.threadId,
     rpc: (method, params) => appServer.rpc(method, params),
     publishNotification: (notification) => { publishBridgeNotification(notification) },
     getErrorMessage,
   })
   runtimeMessageQueue.start()
+  void assistantCoordinator.kick()
   const sessionFileChangeObserver = new CodexSessionFileChangeObserver({
     onChange: (change) => {
       if (shouldInvalidateThreadCollectionForCxSessionFileChange(change)) {
@@ -194,6 +230,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   })
 
   startCodexBridgeStartupTasks({
+    startupSkillsSync: options.startupSkillsSync,
     initializeSkillsSyncOnStartup: () => initializeSkillsSyncOnStartup(appServer),
     warmupAppServer: () => appServer.warmup(),
     getWebBridgeSettingsPath,
@@ -212,6 +249,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
       const url = new URL(req.url, 'http://localhost')
 
       if (await runCodexBridgeRouteHandlers(createCodexBridgeRouteHandlers(req, res, url, {
+        assistant: requireAssistantCoordinator(),
         appServer,
         methodCatalog,
         readJsonBody,
@@ -226,6 +264,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         subscribeNotifications: middleware.subscribeNotifications,
         persistRuntimeSnapshot,
         startRuntimeTurn,
+        startAssistantConversation,
         interruptRuntimeTurn,
         enqueueRuntimeTurn: (payload) => runtimeMessageQueue!.enqueue(payload),
         listRuntimeQueue: (threadId = '') => runtimeMessageQueue!.list(threadId),
@@ -233,7 +272,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         restoreQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.restore(requestId),
         retryQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.retry(requestId),
         reorderQueuedRuntimeTurns: (threadId, requestIds) => runtimeMessageQueue!.reorder(threadId, requestIds),
-        augmentThreadListRpcResult,
+        augmentThreadListRpcResult: async (params, result) => requireAssistantCoordinator().annotateThreadList(await augmentThreadListRpcResult(params, result)),
         reconcileRuntimeThread,
         readLocalRuntimeSnapshot,
         readThreadRuntimeSnapshot,
@@ -258,6 +297,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   }
 
   middleware.dispose = () => {
+    assistantCoordinator?.dispose()
     disposeCodexBridgeMiddlewareResources({
       runtimeReconcileScheduler,
       runtimeMessageQueue,

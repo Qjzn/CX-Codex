@@ -124,20 +124,153 @@ function hasDrift(comparison) {
   return Object.values(comparison).some((row) => row.addedCount > 0 || row.removedCount > 0)
 }
 
-function buildSummary(raw, repoRoot, existingSummary = null) {
-  const comparison = sanitizeComparison(raw.comparison, existingSummary?.comparison)
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
+function readString(value, fallback = '') {
+  return typeof value === 'string' ? value : fallback
+}
+
+/** Raw-preserving: `versionRaw` keeps its original stdout bytes (CRLF/trailing newline). */
+function readRawStringOrNull(value) {
+  return typeof value === 'string' ? value : null
+}
+
+function readStringList(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item) => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+}
+
+/**
+ * Carries the raw summary's provenance verbatim. It never consults the existing output summary, so a
+ * raw audit that lost or changed its identity can never inherit a previous identity. Missing/absent
+ * provenance stays null rather than being back-filled from the current install or process.env.
+ */
+function buildGeneratedBy(raw) {
+  const generatedBy = asRecord(raw?.generatedBy)
+  if (!generatedBy) return null
+
+  const verification = asRecord(generatedBy.verification) ?? {}
+  const generation = asRecord(generatedBy.generation) ?? {}
+  const baseline = asRecord(generatedBy.baseline) ?? {}
+  const generated = asRecord(generatedBy.generated) ?? {}
+
+  return {
+    launchPath: readString(generatedBy.launchPath),
+    versionRaw: readRawStringOrNull(generatedBy.versionRaw),
+    sha256: readRawStringOrNull(generatedBy.sha256),
+    identityKind: generatedBy.identityKind === 'native' || generatedBy.identityKind === 'launcher'
+      ? generatedBy.identityKind
+      : 'unknown',
+    selectionSource: generatedBy.selectionSource === 'explicit'
+      || generatedBy.selectionSource === 'env'
+      || generatedBy.selectionSource === 'path'
+      ? generatedBy.selectionSource
+      : 'unknown',
+    verification: {
+      status: readString(verification.status, 'unknown'),
+      reason: readString(verification.reason),
+    },
+    generation: {
+      status: generation.status === 'complete' || generation.status === 'failed' || generation.status === 'changed'
+        ? generation.status
+        : 'unknown',
+      mode: readString(generation.mode),
+      args: readStringList(generation.args),
+    },
+    baseline: {
+      typescript: readString(baseline.typescript),
+      json: readString(baseline.json),
+    },
+    generated: {
+      typescript: readString(generated.typescript),
+      json: readString(generated.json),
+    },
+  }
+}
+
+/**
+ * A content-diff entry is only a real diff result when its label and its actual integer child exit
+ * agree: `matched`↔0, `drift`↔1, anything else↔`error`. A missing or fractional exit, or a label
+ * that contradicts the exit, is `unknown` — it can never be normalized into a trusted `matched`/0.
+ */
+function readContentDiffEntry(value) {
+  const entry = asRecord(value)
+  const exitCode = typeof entry?.exitCode === 'number' && Number.isInteger(entry.exitCode)
+    ? entry.exitCode
+    : null
+  const declared = entry?.status
+  const declaredStatus = declared === 'matched' || declared === 'drift' || declared === 'error'
+    ? declared
+    : 'unknown'
+
+  if (declaredStatus === 'unknown' || exitCode === null) {
+    return { status: 'unknown', exitCode }
+  }
+
+  const expected = exitCode === 0 ? 'matched' : exitCode === 1 ? 'drift' : 'error'
+  return {
+    status: declaredStatus === expected ? expected : 'unknown',
+    exitCode,
+  }
+}
+
+function buildContentDiff(raw) {
+  const contentDiff = asRecord(raw?.contentDiff)
+  if (!contentDiff) return null
+  return {
+    status: readString(contentDiff.status, 'unknown'),
+    typescript: readContentDiffEntry(contentDiff.typescript),
+    json: readContentDiffEntry(contentDiff.json),
+  }
+}
+
+/** Only a completed content generation (status `complete`) may back a review verdict. */
+function isCompleteGeneration(generatedBy) {
+  return asRecord(generatedBy)?.generation?.status === 'complete'
+}
+
+/**
+ * Content review status is driven by the real full-directory diff result, and a verdict is only
+ * published when the generation that produced it actually completed. Every entry must pair its
+ * label with the recorded integer exit, so a `complete` summary with two matched *labels* but a
+ * missing/contradicting exit (or an unverified/failed/changed generation) is `unknown` instead of
+ * `baseline-matched`. Add/remove name counts stay a positive drift signal only: they can never
+ * produce `baseline-matched`.
+ */
+function resolveReviewStatus(comparison, contentDiff, generatedBy) {
+  if (contentDiff?.status === 'complete' && isCompleteGeneration(generatedBy)) {
+    const entries = [contentDiff.typescript, contentDiff.json]
+    if (entries.every((entry) => entry.status === 'matched')) return 'baseline-matched'
+    if (entries.some((entry) => entry.status === 'drift')) return 'drift-recorded'
+  }
+  return hasDrift(comparison) ? 'drift-recorded' : 'unknown'
+}
+
+function buildSummary(raw, repoRoot) {
+  // Legacy input is never merged with a previously published summary: both the comparison rows and
+  // the provenance are built from this raw audit alone, so an input that lost its identity/content
+  // can neither inherit them here nor pass an old identity off as its own.
+  const comparison = sanitizeComparison(raw.comparison)
+  const generatedBy = buildGeneratedBy(raw)
+  const contentDiff = buildContentDiff(raw)
   return {
     generatedAtIso: raw.generatedAtIso,
     officialDocsUrl: OFFICIAL_DOCS_URL,
     auditCommand: 'npm.cmd run audit:app-server-schemas',
     auditOutput: toRepoRelative(raw.auditRoot, repoRoot),
     codexCommand: raw.codexCommand || 'codex',
+    generatedBy,
+    contentDiff,
     baseline: {
       typescript: toRepoRelative(raw.baseline?.typescript, repoRoot),
       json: toRepoRelative(raw.baseline?.json, repoRoot),
     },
     comparison,
-    reviewStatus: hasDrift(comparison) ? 'drift-recorded' : 'baseline-matched',
+    reviewStatus: resolveReviewStatus(comparison, contentDiff, generatedBy),
     notes: [
       'This committed summary is a release-governance checkpoint, not a schema baseline update.',
       'Do not copy generated output directories into the repository; regenerate and review before updating documentation/app-server-schemas.',
@@ -154,8 +287,7 @@ function main() {
   const outputPath = path.resolve(repoRoot, options.output)
 
   const raw = readJson(inputPath)
-  const existingSummary = fs.existsSync(outputPath) ? readJson(outputPath) : null
-  const summary = buildSummary(raw, repoRoot, existingSummary)
+  const summary = buildSummary(raw, repoRoot)
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   fs.writeFileSync(outputPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8')
 

@@ -221,6 +221,36 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
   background: var(--ui-border-subtle);
 }
 
+@media (pointer: coarse) {
+  .desktop-resize-handle {
+    z-index: 2;
+  }
+
+  .desktop-resize-handle::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: 50%;
+    width: 44px;
+    transform: translateX(-50%);
+  }
+}
+
+@media (forced-colors: active) {
+  .desktop-resize-handle {
+    forced-color-adjust: auto;
+  }
+
+  .desktop-resize-handle:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .desktop-resize-handle::before {
+    background: ButtonText;
+  }
+}
+
 .desktop-resize-handle:hover::before,
 .desktop-resize-handle:focus-visible::before,
 .desktop-resize-handle:active::before {

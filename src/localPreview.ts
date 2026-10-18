@@ -1,8 +1,6 @@
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
-import { renderAsync } from 'docx-preview'
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
-import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url'
+import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 declare global {
   interface Window {
@@ -46,8 +44,6 @@ if (!root) {
   throw new Error('Missing local preview root element.')
 }
 const previewRoot = root
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 const markdown = new MarkdownIt({
   html: false,
@@ -550,6 +546,7 @@ async function renderDocx(): Promise<void> {
   container.className = 'preview-content docx-body'
   container.replaceChildren()
   try {
+    const { renderAsync } = await import('docx-preview')
     await renderAsync(await blob.arrayBuffer(), container, undefined, {
       className: 'docx',
       inWrapper: true,
@@ -597,6 +594,8 @@ async function rerenderPdf(): Promise<void> {
   container.replaceChildren()
   setStatus(`正在渲染 PDF，缩放 ${Math.round(state.zoom * 100)}%...`)
 
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
   const doc = await pdfjsLib.getDocument({ data: state.pdfData.slice() }).promise
   for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
     if (generation !== state.renderGeneration) return

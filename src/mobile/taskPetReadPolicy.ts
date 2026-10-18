@@ -1,7 +1,7 @@
 export interface TaskPetThreadViewState {
   routeThreadId: string
   displayedThreadId: string
-  messageCount: number
+  visibleTurnCount: number
   loading: boolean
   switching: boolean
 }
@@ -13,7 +13,7 @@ export function shouldAcknowledgeMobileShellTaskPetThreadOpen(
   return (
     routeThreadId.length > 0
     && state.displayedThreadId.trim() === routeThreadId
-    && state.messageCount > 0
+    && state.visibleTurnCount > 0
     && !state.loading
     && !state.switching
   )

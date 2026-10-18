@@ -1,4 +1,7 @@
-import { isRpcOutcomeUncertainError } from './appServerRpcErrors.js'
+import {
+  AppServerJsonRpcError,
+  isRpcOutcomeUncertainError,
+} from './appServerRpcErrors.js'
 import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
@@ -12,6 +15,7 @@ import {
   createRuntimePromptHash,
   createDurableRuntimeSendPayload,
   normalizePlanModeTurnStartParams,
+  prepareNativeCollaborationTurnStartParams,
   parseRuntimeSendPayload,
   shouldRetryPlanModeWithoutNativeMode,
   type ParsedRuntimeSendPayload,
@@ -29,6 +33,8 @@ export type RuntimeStartResult = {
 }
 
 export type RuntimeStartDependencies = {
+  /** Backend binding, independent of the public client message identifier. */
+  isManagedThread?(threadId: string): boolean
   createRequest(record: {
     requestId: string
     clientMessageId: string
@@ -128,9 +134,13 @@ async function startParsedRuntimeTurnWithAppServer(
   dependencies: RuntimeStartDependencies,
 ): Promise<RuntimeStartResult> {
   const durablePayload = createDurableRuntimeSendPayload(parsed)
+  const managedRequest = isManagedAssistantClientMessageId(parsed.clientMessageId)
+    || Boolean(parsed.threadId && dependencies.isManagedThread?.(parsed.threadId))
   let threadId = parsed.threadId
   let requestId = parsed.requestId
   let shouldCreateRequest = true
+  let threadStartAttempted = false
+  let turnStartAttempted = false
 
   if (parsed.clientMessageId) {
     const existing = dependencies.getLatestRequestByClientMessageId(parsed.clientMessageId)
@@ -177,18 +187,31 @@ async function startParsedRuntimeTurnWithAppServer(
   try {
     if (!threadId) {
       const threadParams = createRuntimeThreadStartParams(parsed)
+      if (managedRequest) {
+        // Managed assistant sends must persist a synchronous durable marker
+        // before the thread/start boundary, so a crash after external thread
+        // creation but before local binding cannot resume stale durable input
+        // or blindly retry the external call.
+        const marked = dependencies.updateRequest(requestId, {
+          status: 'starting',
+          payload: parsed.payloadSummary,
+        })
+        if (!marked) throw new RuntimeStartMarkerPersistError(requestId)
+        threadStartAttempted = true
+      }
       const startedThread = await dependencies.rpc('thread/start', threadParams)
       threadId = readThreadIdFromPayload(startedThread)
       if (!threadId) throw new Error('thread/start did not return a thread id')
       dependencies.clearThreadSearchIndex()
       dependencies.updateRequest(requestId, {
         threadId,
-        status: 'pending_start',
+        status: managedRequest ? 'starting' : 'pending_start',
       })
     }
 
     const turnParams = createRuntimeTurnStartParams({
       threadId,
+      clientMessageId: parsed.clientMessageId,
       input: parsed.input,
       attachments: parsed.attachments,
       model: parsed.model,
@@ -196,22 +219,40 @@ async function startParsedRuntimeTurnWithAppServer(
       mode: parsed.mode,
     })
 
-    dependencies.updateRequest(requestId, {
+    // Managed assistant sends must also persist a synchronous durable
+    // pre-turn/start marker (same 'starting' contract as the pre-thread/start
+    // marker) before the native turn boundary, so a crash between local
+    // acceptance and the native receipt cannot silently resume or retry an
+    // unrecorded turn.
+    const turnMarker = dependencies.updateRequest(requestId, {
       status: 'starting',
       threadId,
       payload: parsed.payloadSummary,
     })
+    if (managedRequest && !turnMarker) throw new RuntimeStartMarkerPersistError(requestId)
     dependencies.markStarting(threadId)
     dependencies.persistRuntimeSnapshot(threadId)
 
-    const rpcResult = await startRuntimeTurnRpc(turnParams, parsed.mode, dependencies)
+    // A managed request is now committed to the native turn boundary. The flag
+    // is set before the whole startRuntimeTurnRpc call, including its model
+    // prelookup, which is deliberately conservative: if the prelookup fails the
+    // turn/start call may never have happened, yet the external outcome cannot
+    // be disproven, so the failure path reports start_uncertain rather than
+    // claiming the turn was never attempted.
+    if (managedRequest) turnStartAttempted = true
+    const rpcResult = await startRuntimeTurnRpc(turnParams, parsed.mode, dependencies, managedRequest)
     const turnId = readTurnIdFromPayload(rpcResult)
+    if (managedRequest && !turnId) {
+      // Managed sends require the exact native receipt. Never substitute the
+      // active-turn snapshot, which may describe an unrelated active turn.
+      throw new Error('turn/start did not return a turn id for a managed request')
+    }
     if (parsed.mode === 'plan') {
       dependencies.markPlanModeTurn(threadId, turnId)
     }
     dependencies.markRunning(threadId, turnId)
     const snapshot = dependencies.persistRuntimeSnapshot(threadId)
-    const effectiveTurnId = turnId || snapshot.activeTurnId
+    const effectiveTurnId = managedRequest ? turnId : turnId || snapshot.activeTurnId
     const request = dependencies.updateRequest(requestId, {
       status: 'running',
       threadId,
@@ -226,6 +267,42 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'running',
     }
   } catch (error) {
+    if (error instanceof RuntimeStartMarkerPersistError) throw error
+
+    if (
+      managedRequest
+      && !(error instanceof AppServerJsonRpcError)
+      && ((!threadId && threadStartAttempted) || (threadId && turnStartAttempted))
+    ) {
+      // Timeout, transport disconnect, malformed successful response, or any
+      // other post-boundary failure leaves the native outcome unknown: an
+      // unbound thread may already exist, and a bound thread may already have a
+      // running turn. Keep the request non-terminal and non-resumable instead
+      // of marking it failed or retrying the native call.
+      const lastError = dependencies.getErrorMessage(
+        error,
+        threadId
+          ? (isRpcOutcomeUncertainError(error) ? 'turn/start timed out' : 'turn/start outcome unknown')
+          : 'thread/start outcome unknown',
+      )
+      if (threadId) {
+        dependencies.markStartUncertain(threadId, lastError)
+        dependencies.persistRuntimeSnapshot(threadId)
+      }
+      const request = dependencies.updateRequest(requestId, {
+        status: 'start_uncertain',
+        ...(threadId ? { threadId } : {}),
+        lastError,
+        payload: parsed.payloadSummary,
+      }) ?? dependencies.getRequest(requestId)
+      return {
+        request: request as RuntimeRequestRecord,
+        threadId,
+        turnId: '',
+        status: 'start_uncertain',
+      }
+    }
+
     if (threadId && isRpcOutcomeUncertainError(error)) {
       const lastError = dependencies.getErrorMessage(error, 'turn/start timed out')
       dependencies.markStartUncertain(threadId, lastError)
@@ -304,6 +381,31 @@ function isActiveWriterConflict(message: string): boolean {
   return message.trim().toLowerCase().includes('already has an active writer')
 }
 
+const MANAGED_ASSISTANT_CLIENT_MESSAGE_ID_PREFIXES = [
+  'assistant-main:',
+  'assistant-task:',
+  'assistant-report:',
+] as const
+
+function isManagedAssistantClientMessageId(clientMessageId: string | undefined | null): boolean {
+  if (!clientMessageId) return false
+  return MANAGED_ASSISTANT_CLIENT_MESSAGE_ID_PREFIXES.some((prefix) => clientMessageId.startsWith(prefix))
+}
+
+/**
+ * Thrown when the synchronous pre-boundary durable start marker for a managed
+ * assistant request could not be persisted — either the pre-thread/start
+ * 'starting' marker or the pre-turn/start 'starting' marker (same contract).
+ * Fail closed before the corresponding native call: the outer catch must not
+ * classify or transition the request.
+ */
+class RuntimeStartMarkerPersistError extends Error {
+  constructor(readonly requestId: string) {
+    super(`failed to persist managed start marker for request ${requestId}`)
+    this.name = 'RuntimeStartMarkerPersistError'
+  }
+}
+
 function runtimeRequestMatchesParsed(
   existing: RuntimeRequestRecord,
   parsed: ParsedRuntimeSendPayload,
@@ -354,6 +456,7 @@ function runtimeSendIdempotencySignature(parsed: ParsedRuntimeSendPayload, promp
 
 function createRuntimeTurnStartParams(args: {
   threadId: string
+  clientMessageId: string
   input: unknown[]
   attachments: unknown
   model: string
@@ -364,13 +467,14 @@ function createRuntimeTurnStartParams(args: {
     threadId: args.threadId,
     input: args.input,
   }
+  if (args.clientMessageId) turnParams.clientUserMessageId = args.clientMessageId
   if (Array.isArray(args.attachments) && args.attachments.length > 0) {
     turnParams.attachments = args.attachments
   }
   if (args.model) turnParams.model = args.model
   const effort = typeof args.effort === 'string' ? args.effort.trim() : ''
   if (effort) turnParams.effort = effort
-  if (args.mode === 'plan') turnParams.collaborationMode = 'plan'
+  turnParams.collaborationMode = args.mode === 'plan' ? 'plan' : 'execute'
   return turnParams
 }
 
@@ -378,28 +482,33 @@ async function startRuntimeTurnRpc(
   turnParams: Record<string, unknown>,
   mode: string,
   dependencies: RuntimeStartDependencies,
+  managed = false,
 ): Promise<unknown> {
-  let rpcParams: unknown = mode === 'plan'
-    ? normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: true })
-    : turnParams
+  let rpcParams: unknown = await prepareNativeCollaborationTurnStartParams(turnParams, dependencies.rpc)
   try {
-    return await startRuntimeTurnRpcWithResume(rpcParams, dependencies)
+    return await startRuntimeTurnRpcWithResume(rpcParams, dependencies, managed)
   } catch (error) {
     if (mode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
       throw error
     }
     rpcParams = normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: false })
-    return await startRuntimeTurnRpcWithResume(rpcParams, dependencies)
+    return await startRuntimeTurnRpcWithResume(rpcParams, dependencies, managed)
   }
 }
 
 async function startRuntimeTurnRpcWithResume(
   rpcParams: unknown,
   dependencies: RuntimeStartDependencies,
+  managed = false,
 ): Promise<unknown> {
   try {
     return await dependencies.rpc('turn/start', rpcParams)
   } catch (error) {
+    // Only an explicit native JSON-RPC rejection may justify a managed
+    // resume+retry: any other failure (timeout, transport disconnect) leaves
+    // the native outcome unknown, so it must fall through to the caller's
+    // start_uncertain classification instead of being retried here.
+    if (managed && !(error instanceof AppServerJsonRpcError)) throw error
     const threadId = readRuntimeThreadId(rpcParams)
     const message = dependencies.getErrorMessage(error, '').toLowerCase()
     if (!threadId || !message.includes('thread not found')) throw error

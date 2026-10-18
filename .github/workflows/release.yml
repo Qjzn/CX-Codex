@@ -68,6 +68,11 @@ jobs:
       - name: Audit dependency security
         run: npm run verify:dependency-security
 
+      - name: Verify conversation and core workflow contracts
+        run: |
+          npm run verify:conversation-transcript
+          npm run verify:core-flows
+
       - name: Verify release metadata
         id: release-metadata
         shell: pwsh

@@ -15,6 +15,8 @@ console.log('Welcome to CX-Codex. GitHub: https://github.com/Qjzn/CX-Codex')
 if (typeof window !== 'undefined') {
   void initializeCapacitorBridge()
   const nativeFetch = window.fetch.bind(window)
+  const isFrontendRegressionMode = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+    .get('regression') === 'frontend'
   let authReloadScheduled = false
 
   const persistAuthExpiryNotice = (message = WEB_AUTH_EXPIRED_MESSAGE): void => {
@@ -40,7 +42,7 @@ if (typeof window !== 'undefined') {
 
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await nativeFetch(input, init)
-    if (isWebAuthRequiredResponse(response)) {
+    if (!isFrontendRegressionMode && isWebAuthRequiredResponse(response)) {
       let authMessage = WEB_AUTH_EXPIRED_MESSAGE
       try {
         const payload = await response.clone().json() as { error?: unknown }
@@ -60,7 +62,8 @@ if (typeof window !== 'undefined') {
         ? input.toString()
         : input.url
     if (
-      url.includes('/codex-api/')
+      !isFrontendRegressionMode
+      && url.includes('/codex-api/')
       && response.ok
       && response.headers.get('content-type')?.toLowerCase().includes('text/html')
     ) {

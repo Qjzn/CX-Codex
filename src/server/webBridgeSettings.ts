@@ -4,11 +4,15 @@ import {
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
 
+// P1: the single master switch defaults to OFF and every legacy per-item field defaults to
+// `ask`, so a settings file with missing fields can never normalize into the old automatic
+// allow. Existing files are not rewritten; `normalizeWebBridgeSettings` still round-trips the
+// legacy fields verbatim and only a literal boolean true turns the master switch ON.
 export const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   permissions: {
     allowAllPermissionRequests: false,
-    commandExecution: 'allowForSession',
-    fileChange: 'allowForSession',
+    commandExecution: 'ask',
+    fileChange: 'ask',
     mcpTools: 'ask',
   },
 }

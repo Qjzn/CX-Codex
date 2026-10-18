@@ -1,7 +1,7 @@
 <template>
   <header class="content-header">
     <div class="content-header-main">
-      <div class="content-leading">
+      <div v-if="hasLeading" class="content-leading">
         <slot name="leading" />
       </div>
       <div class="content-title-wrap">
@@ -10,17 +10,19 @@
             <slot name="title-prefix" />
           </div>
           <h1 class="content-title">{{ title }}</h1>
-          <div v-if="hasTitleSuffix" class="content-title-suffix">
-            <slot name="title-suffix" />
+          <div v-if="hasSubtitle" class="content-subtitle">
+            <slot name="subtitle" />
           </div>
         </div>
-        <slot name="subtitle" />
       </div>
-      <div class="content-actions">
-        <slot name="actions" />
+      <div v-if="hasTitleSuffix" class="content-title-suffix">
+        <slot name="title-suffix" />
       </div>
       <div v-if="hasMeta" class="content-meta">
         <slot name="meta" />
+      </div>
+      <div v-if="hasActions" class="content-actions">
+        <slot name="actions" />
       </div>
     </div>
   </header>
@@ -34,7 +36,10 @@ defineProps<{
 }>()
 
 const slots = useSlots()
+const hasLeading = computed(() => Boolean(slots.leading))
+const hasSubtitle = computed(() => Boolean(slots.subtitle))
 const hasMeta = computed(() => Boolean(slots.meta))
+const hasActions = computed(() => Boolean(slots.actions))
 const hasTitlePrefix = computed(() => Boolean(slots['title-prefix']))
 const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 </script>
@@ -44,32 +49,31 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 
 .content-header {
   @apply sticky top-0 z-20 w-full px-3 sm:px-4 border-b;
+  height: var(--ui-topbar-height);
   min-height: var(--ui-topbar-height);
   border-color: var(--ui-border-subtle);
-  background: color-mix(in srgb, var(--ui-bg-surface) 94%, transparent);
-  backdrop-filter: blur(10px);
+  background: var(--ui-bg-surface);
 }
 
 .content-header-main {
-  @apply w-full min-w-0 flex items-center gap-2 sm:gap-3;
-  height: var(--ui-topbar-height);
+  @apply w-full h-full min-h-0 flex items-center gap-2;
   width: min(100%, var(--content-shell-max-width, var(--ui-content-max)));
   margin-inline: auto;
 }
 
 .content-title {
-  @apply m-0 min-w-0 flex-1 truncate text-[16px] sm:text-[17px] font-semibold leading-6;
+  @apply m-0 min-w-0 truncate text-[14px] font-semibold leading-5;
   color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   letter-spacing: var(--tracking-tight-soft);
 }
 
 .content-title-wrap {
-  @apply min-w-0 flex-1 flex items-center gap-2.5;
+  @apply min-w-0 flex-1;
 }
 
 .content-title-line {
-  @apply min-w-0 flex items-center gap-1.5;
+  @apply min-w-0 flex items-baseline gap-1.5;
 }
 
 .content-title-prefix {
@@ -77,33 +81,30 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 }
 
 .content-title-suffix {
-  @apply shrink-0 flex items-center;
+  @apply shrink-0 flex items-center gap-1;
+}
+
+.content-subtitle {
+  @apply min-w-0 flex-1 truncate;
 }
 
 .content-actions {
-  @apply flex shrink-0 items-center justify-end gap-2;
+  @apply shrink-0 flex items-center justify-end gap-1.5;
 }
 
 .content-leading {
   @apply flex items-center gap-1;
 }
 
-.content-actions:empty,
-.content-leading:empty {
-  display: none;
-}
-
 .content-meta {
-  @apply flex min-w-0 shrink items-center gap-1.5;
-}
-
-.content-meta:empty {
-  display: none;
+  @apply min-w-0 shrink-0 flex items-center;
+  max-width: min(48%, 24rem);
 }
 
 @media (max-width: 767px) {
   .content-header {
-    @apply px-2.5;
+    @apply px-2;
+    height: calc(var(--ui-topbar-height) + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
   }
 
@@ -112,11 +113,16 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
   }
 
   .content-title {
-    @apply text-[15px] leading-5;
+    @apply text-[14px] leading-5;
     letter-spacing: 0;
   }
 
-  .content-title-wrap { @apply gap-1.5; }
-  .content-meta { @apply gap-1; }
+  .content-subtitle {
+    @apply hidden;
+  }
+
+  .content-meta {
+    max-width: 5rem;
+  }
 }
 </style>

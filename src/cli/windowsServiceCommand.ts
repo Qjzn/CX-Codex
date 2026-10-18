@@ -61,6 +61,7 @@ function writeAdapterError(
       config: { path: options.config?.trim() || null, exists: false },
       startupTask: { name: taskName, exists: false, enabled: false, state: 'Unknown' },
       watchdogTask: { name: watchdogTaskName, exists: false, enabled: false, state: 'Unknown' },
+      standby: { path: null, active: false },
     }))
     return
   }

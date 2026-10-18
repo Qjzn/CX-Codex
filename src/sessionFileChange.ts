@@ -1,3 +1,8 @@
+import {
+  latestConversationTurnIsTerminal,
+  type ConversationExecutionState,
+} from './conversation-transcript/index.js'
+
 export const CX_SESSION_FILES_CHANGED_METHOD = 'cx/session-files/changed'
 
 export type CxSessionFileChangeSource = 'session-index' | 'session-log'
@@ -28,30 +33,16 @@ export function getSessionLogAuthoritativeRefreshAction(
   return 'refresh'
 }
 
-export type SessionLogMessageEvidence = {
-  role: 'user' | 'assistant' | 'system'
-  messageType?: string
-  phase?: 'commentary' | 'final'
+export type SessionLogProjectionEvidence = {
+  turns: ReadonlyArray<{
+    state: ConversationExecutionState
+  }>
 }
 
-export function hasSettledSessionLogMessageEvidence(
-  messages: readonly SessionLogMessageEvidence[],
+export function hasSettledSessionLogProjectionEvidence(
+  projection: SessionLogProjectionEvidence,
 ): boolean {
-  let latestUserIndex = -1
-  let latestAssistantIndex = -1
-  let latestAssistantIsFinal = false
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]
-    if (message?.role === 'user') {
-      latestUserIndex = index
-      continue
-    }
-    if (message?.role === 'assistant' && message.messageType === 'agentMessage') {
-      latestAssistantIndex = index
-      latestAssistantIsFinal = message.phase !== 'commentary'
-    }
-  }
-  return latestAssistantIndex > latestUserIndex && latestAssistantIsFinal
+  return latestConversationTurnIsTerminal(projection)
 }
 
 export function isCxSessionFilesChangedMethod(method: string): boolean {

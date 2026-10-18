@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from 'node:fs'
+import { lstatSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 
 import {
@@ -6,6 +6,7 @@ import {
   type CxSessionFileChangeOrigin,
 } from '../sessionFileChange.js'
 import { getCodexHomeDir } from './codexPaths.js'
+import { isCodexSessionLogRelativePath, readCodexSessionLogIdentity } from './codexSessionIdentity.js'
 
 export type CodexSessionFileChange = {
   source: 'session-index' | 'session-log'
@@ -36,9 +37,10 @@ type PendingChange = {
   timer: ReturnType<typeof setTimeout>
 }
 
+type PendingFileRead = { burstStartedAtMs: number; timer: ReturnType<typeof setTimeout> }
+
 const SESSION_INDEX_PATH = 'session_index.jsonl'
 const SESSION_LOG_ROOTS = new Set(['sessions', 'archived_sessions'])
-const THREAD_ID_PATTERN = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\.jsonl$)/iu
 const DEFAULT_DEBOUNCE_MS = 700
 const DEFAULT_MAX_WAIT_MS = 2_500
 const DEFAULT_LIVE_EVENT_COVERAGE_MS = 5_000
@@ -54,7 +56,10 @@ export function resolveCodexSessionFileChangeOrigin(
   return ageMs >= 0 && ageMs <= Math.max(0, coverageMs) ? 'live-app-server' : 'external'
 }
 
-export function classifyCodexSessionFileChange(filename: string | Buffer | null): CodexSessionFileChange | null {
+export async function classifyCodexSessionFileChange(
+  filename: string | Buffer | null,
+  codexHomeDir = getCodexHomeDir(),
+): Promise<CodexSessionFileChange | null> {
   if (filename === null) return null
   const normalizedPath = filename.toString().replace(/\\/gu, '/').replace(/^\.\//u, '')
   const normalizedLowerPath = normalizedPath.toLowerCase()
@@ -63,12 +68,8 @@ export function classifyCodexSessionFileChange(filename: string | Buffer | null)
     return { source: 'session-index', threadId: '' }
   }
 
-  const segments = normalizedPath.split('/').filter(Boolean)
-  if (segments.length < 2 || !SESSION_LOG_ROOTS.has(segments[0]?.toLowerCase() ?? '')) return null
-  const basename = segments[segments.length - 1] ?? ''
-  const threadId = basename.match(THREAD_ID_PATTERN)?.[1]?.toLowerCase() ?? ''
-  if (!threadId) return null
-  return { source: 'session-log', threadId }
+  const identity = await readCodexSessionLogIdentity(normalizedPath, codexHomeDir)
+  return identity ? { source: 'session-log', threadId: identity.threadId } : null
 }
 
 export function createCodexSessionFileChangedNotification(change: CodexSessionFileChange): {
@@ -89,12 +90,14 @@ export class CodexSessionFileChangeObserver {
   private readonly onChange: (change: CodexSessionFileChange) => void
   private readonly onError: (error: unknown) => void
   private readonly pendingByKey = new Map<string, PendingChange>()
+  private readonly pendingFileReads = new Map<string, PendingFileRead>()
   private readonly lastEmittedAtMsByKey = new Map<string, number>()
   private readonly sessionWatchers = new Map<string, FSWatcher>()
   private rootWatcher: FSWatcher | null = null
   private emittedChangeCount = 0
   private lastChangeAtIso = ''
   private lastErrorCode = ''
+  private lifecycleGeneration = 0
 
   constructor(options: CodexSessionFileChangeObserverOptions) {
     this.codexHomeDir = options.codexHomeDir ?? getCodexHomeDir()
@@ -107,7 +110,10 @@ export class CodexSessionFileChangeObserver {
 
   start(): void {
     if (this.rootWatcher) return
+    this.lifecycleGeneration += 1
     try {
+      const homeStats = lstatSync(this.codexHomeDir)
+      if (homeStats.isSymbolicLink() || !homeStats.isDirectory()) return
       const rootWatcher = watch(this.codexHomeDir, { persistent: false }, (_eventType, filename) => {
         const normalizedName = filename?.toString().replace(/\\/gu, '/').toLowerCase() ?? ''
         if (normalizedName === SESSION_INDEX_PATH) {
@@ -139,6 +145,7 @@ export class CodexSessionFileChangeObserver {
   }
 
   dispose(): void {
+    this.lifecycleGeneration += 1
     this.rootWatcher?.close()
     this.rootWatcher = null
     for (const watcher of this.sessionWatchers.values()) watcher.close()
@@ -147,19 +154,23 @@ export class CodexSessionFileChangeObserver {
       clearTimeout(pending.timer)
     }
     this.pendingByKey.clear()
+    for (const pending of this.pendingFileReads.values()) clearTimeout(pending.timer)
+    this.pendingFileReads.clear()
     this.lastEmittedAtMsByKey.clear()
   }
 
   private startSessionWatcher(rootName: string): void {
     if (this.sessionWatchers.has(rootName)) return
     try {
-      const watcher = watch(join(this.codexHomeDir, rootName), {
+      const rootPath = join(this.codexHomeDir, rootName)
+      const rootStats = lstatSync(rootPath)
+      if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return
+      const watcher = watch(rootPath, {
         recursive: true,
         persistent: false,
       }, (_eventType, filename) => {
         if (filename === null) return
-        const change = classifyCodexSessionFileChange(`${rootName}/${filename.toString()}`)
-        if (change) this.schedule(change)
+        this.scheduleSessionFileRead(`${rootName}/${filename.toString()}`)
       })
       watcher.on('error', (error) => {
         this.sessionWatchers.delete(rootName)
@@ -172,13 +183,37 @@ export class CodexSessionFileChangeObserver {
     }
   }
 
-  private schedule(change: CodexSessionFileChange): void {
+  private scheduleSessionFileRead(relativePath: string): void {
+    if (!isCodexSessionLogRelativePath(relativePath)) return
+    const nowMs = Date.now()
+    const existing = this.pendingFileReads.get(relativePath)
+    if (existing) clearTimeout(existing.timer)
+    const burstStartedAtMs = existing?.burstStartedAtMs ?? nowMs
+    const targetAtMs = Math.min(nowMs + this.debounceMs, burstStartedAtMs + this.maxWaitMs)
+    const generation = this.lifecycleGeneration
+    const timer = setTimeout(() => {
+      this.pendingFileReads.delete(relativePath)
+      // Validate metadata after combining file notifications, not on every
+      // token append. Failed/partial headers are never cached.
+      void classifyCodexSessionFileChange(relativePath, this.codexHomeDir)
+        .then((change) => {
+          if (change && this.rootWatcher && this.lifecycleGeneration === generation) this.schedule(change, 0)
+        })
+        .catch((error) => {
+          if (this.rootWatcher && this.lifecycleGeneration === generation) this.reportError(error)
+        })
+    }, Math.max(0, targetAtMs - nowMs))
+    timer.unref?.()
+    this.pendingFileReads.set(relativePath, { burstStartedAtMs, timer })
+  }
+
+  private schedule(change: CodexSessionFileChange, debounceMs = this.debounceMs): void {
     const key = change.threadId || change.source
     const nowMs = Date.now()
     const existing = this.pendingByKey.get(key)
     if (existing) clearTimeout(existing.timer)
     const burstStartedAtMs = existing?.burstStartedAtMs ?? nowMs
-    const quietAtMs = nowMs + this.debounceMs
+    const quietAtMs = nowMs + debounceMs
     const maxWaitAtMs = burstStartedAtMs + this.maxWaitMs
     const intervalAtMs = (this.lastEmittedAtMsByKey.get(key) ?? 0) + this.minEmitIntervalMs
     const targetAtMs = Math.max(intervalAtMs, Math.min(quietAtMs, maxWaitAtMs))
@@ -203,7 +238,12 @@ export class CodexSessionFileChangeObserver {
 
   private reportError(error: unknown): void {
     this.lastErrorCode = readErrorCode(error)
-    this.onError(error)
+    try {
+      this.onError(error)
+    } catch {
+      // An observer's error callback must not turn an async metadata read
+      // failure into an unhandled rejection.
+    }
   }
 }
 
