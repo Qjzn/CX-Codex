@@ -38,6 +38,8 @@ export function isThreadMaterializingError(error: unknown): boolean {
   // 按整句匹配会在 CLI 换词时退化成“空线程首次读取报错”，所以按稳定片段判断。
   return (
     message.includes('is not materialized yet') ||
+    message.includes('includeturns is unavailable before first user message') ||
+    message.includes('turns/list is unavailable before first user message') ||
     message.includes('no rollout found for') ||
     (message.includes('rollout') && message.includes('is empty')) ||
     message.includes('does not start with session metadata') ||

@@ -28,6 +28,8 @@ const { isThreadMaterializingError, isThreadNotLoadedError } = compiled.exports
 const materializing = [
   'thread 019abc is not materialized yet; includeTurns is unavailable before first user message',
   'thread 019abc is not materialized yet; thread/turns/list is unavailable before first user message',
+  'includeTurns is unavailable before first user message',
+  'thread/turns/list is unavailable before first user message',
   'no rollout found for thread id 019abc',
   'no rollout found for conversation id 019abc',
   'rollout file is empty',
