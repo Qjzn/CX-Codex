@@ -138,7 +138,7 @@
               :disabled="isActiveTurn(turn)"
               @click="toggleProcess(turn)"
             >
-              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" />
+              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" :detail="turnStatusSummary(turn)" />
               <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
               <span
                 v-if="!isActiveTurn(turn)"
@@ -152,7 +152,7 @@
               class="turn-timing turn-timing--static"
               :data-status="turn.timingStatus"
             >
-              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" />
+              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" :detail="turnStatusSummary(turn)" />
               <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
             </div>
             <span class="turn-divider-line" aria-hidden="true" />
@@ -805,6 +805,13 @@ function hasProcessContent(turn: ConversationTurn): boolean {
 
 function hasVisibleTiming(turn: ConversationTurn): boolean {
   return isActiveTurn(turn) || turn.activeElapsedMs !== null || turn.waitedMs > 0
+}
+
+// 状态行里只放"这一步做了多少事"，时长由 TurnExecutionClock 提供；
+// 文件数放在下面的文件变更汇总行，避免同一数字出现两次。
+function turnStatusSummary(turn: ConversationTurn): string {
+  const steps = turn.commentary.length + turn.activities.length
+  return steps > 0 ? `${String(steps)} 步` : ''
 }
 
 function isProcessExpanded(turn: ConversationTurn): boolean {
@@ -1992,6 +1999,13 @@ onBeforeUnmount(() => {
   color: var(--ui-text-primary);
 }
 
+.turn-status-counts {
+  color: var(--ui-text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .process-toggle:focus-visible {
   outline: 2px solid var(--ui-focus);
   outline-offset: 3px;
@@ -2769,7 +2783,7 @@ onBeforeUnmount(() => {
   /* 状态类控件不再撑到 44px：过程记录、文件变更是次要信息，
      每条 44px 会把一屏挤掉半条对话。 */
   .process-toggle {
-    min-height: 34px;
+    min-height: 28px;
     font-size: 12.5px;
   }
 

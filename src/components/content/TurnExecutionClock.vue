@@ -10,6 +10,7 @@
   >
     <span v-if="turn.state === 'running'" class="execution-pulse turn-live-dot" aria-hidden="true" />
     <span role="status">{{ label }}</span>
+    <span v-if="detail" class="execution-detail" aria-live="off">· {{ detail }}</span>
     <span v-if="elapsed !== null" class="execution-elapsed" aria-live="off">· {{ formattedElapsed }}</span>
   </span>
 </template>
@@ -18,7 +19,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ConversationTurn } from '../../conversation-transcript'
 
-const props = defineProps<{ turn: ConversationTurn; generatedAtMs: number; threadId: string }>()
+const props = defineProps<{ turn: ConversationTurn; generatedAtMs: number; threadId: string; detail?: string }>()
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | undefined
 const ticking = computed(() => props.turn.state === 'running'
@@ -42,7 +43,7 @@ const label = computed(() => {
     case 'waiting': return '等待你的处理'
     case 'queued': return '等待执行'
     case 'sync-degraded': return '正在更新状态'
-    default: return elapsed.value === null ? '过程记录' : '耗时'
+    default: return elapsed.value === null ? '过程记录' : '已完成'
   }
 })
 
@@ -68,6 +69,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .execution-clock { display: inline-flex; align-items: center; gap: 6px; }
+.execution-detail { color: var(--ui-text-tertiary); font-variant-numeric: tabular-nums; }
 .execution-elapsed { font-variant-numeric: tabular-nums; }
 .execution-pulse { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--ui-accent); animation: execution-pulse 1.6s ease-in-out infinite; }
 @keyframes execution-pulse { 50% { opacity: .35; } }
