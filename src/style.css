@@ -1,5 +1,39 @@
 @import "tailwindcss" source("./");
 
+/* ── 浏览器自带表面：让选择、占位符、滚动条也属于这套设计 ── */
+::placeholder {
+  /* 原占位符 #8f8f8f 在白底只有 3.2:1；用 tertiary（白底 5.0:1）保持可读。 */
+  color: var(--ui-text-tertiary);
+  opacity: 1;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--ui-accent) 22%, transparent);
+  color: var(--ui-text-primary);
+}
+
+.transcript-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-border-strong) transparent;
+}
+
+.transcript-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.transcript-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--ui-border-strong);
+  background-clip: content-box;
+}
+
+.transcript-list::-webkit-scrollbar-thumb:hover {
+  background: var(--ui-text-tertiary);
+  background-clip: content-box;
+}
+
+
 :root {
   --ui-bg-window: #f7f7f6;
   --ui-bg-sidebar: #f3f3f2;

@@ -1779,7 +1779,7 @@ onBeforeUnmount(() => {
   height: 4px;
   border-radius: 999px;
   background: currentColor;
-  animation: transcript-dot-bounce 1.2s ease-in-out infinite;
+  animation: transcript-dot-bounce 1.2s var(--motion-ease-out) infinite;
 }
 
 .run-dots i:nth-child(2) { animation-delay: 150ms; }

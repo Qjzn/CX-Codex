@@ -39,11 +39,13 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
 
 <style scoped>
 .file-summary {
+  /* 扁平化：不再是一张卡里套一行行文件；用一条上分隔线表明这是一段附属信息。 */
   margin: 6px 0 14px;
-  border: 1px solid var(--ui-border-subtle);
-  border-radius: 12px;
-  background: var(--ui-bg-surface);
-  overflow: hidden;
+  border: 0;
+  border-top: 1px solid var(--ui-border-subtle);
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
 }
 
 .file-summary > summary,
@@ -180,12 +182,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
 
 @media (max-width: 767px) {
   .file-summary {
-    /* 完全去边框会让它和正文混在一起；留一条 2px 左侧色条做最轻的分组。 */
-    border: 0;
-    border-inline-start: 2px solid var(--ui-border-subtle);
-    background: transparent;
-    padding-inline-start: 8px;
-    border-radius: 0;
+    padding-inline-start: 2px;
   }
 
   .file-summary > summary {
