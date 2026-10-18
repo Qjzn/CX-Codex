@@ -2325,12 +2325,16 @@ onBeforeUnmount(() => {
 
 .file-list {
   display: grid;
+  /* 手机宽度下 details 的 min-content（长路径 + 行数）会把网格列撑到 419px，
+     父级 overflow hidden 后右侧被裁掉；把列锁成可收缩的 minmax(0, 1fr)。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   padding: 4px;
   border-top: 1px solid var(--ui-border-subtle);
 }
 
 .file-row {
+  min-width: 0;
   margin: 0;
   border: 0;
 }
