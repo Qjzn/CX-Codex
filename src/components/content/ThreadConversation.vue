@@ -353,14 +353,14 @@
               <span class="file-summary-chevron" aria-hidden="true">›</span>
             </summary>
             <div class="file-list">
-              <details v-for="file in turn.fileChanges" :key="file.path" class="file-row">
-                <summary>
+              <div v-for="file in turn.fileChanges" :key="file.path" class="file-row">
+                <div class="file-row-head">
                   <span class="file-kind" :data-kind="file.kind">{{ fileKindLabel(file.kind) }}</span>
                   <code :title="file.path">{{ file.path }}</code>
                   <span class="file-stats"><b>+{{ file.additions }}</b> <i>-{{ file.removals }}</i></span>
-                </summary>
-                <pre v-if="file.diff">{{ file.diff }}</pre>
-              </details>
+                </div>
+                <pre v-if="file.diff" class="file-diff">{{ file.diff }}</pre>
+              </div>
             </div>
           </details>
 
@@ -2196,8 +2196,7 @@ onBeforeUnmount(() => {
 }
 
 .activity-details summary,
-.file-summary > summary,
-.file-row > summary {
+.file-summary > summary {
   cursor: pointer;
   color: var(--ui-text-secondary);
   font-size: 12.5px;
@@ -2276,7 +2275,7 @@ onBeforeUnmount(() => {
 }
 
 .file-summary > summary,
-.file-row > summary {
+.file-row-head {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -2353,15 +2352,10 @@ onBeforeUnmount(() => {
   border: 0;
 }
 
-.file-row > summary {
+.file-row-head {
   min-height: 34px;
   padding: 4px 8px;
   border-radius: 6px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.file-row > summary:hover {
-  background: var(--ui-bg-row-hover);
 }
 
 .file-row code {
@@ -2770,8 +2764,7 @@ onBeforeUnmount(() => {
   .activity-details > summary,
   .request-field select,
   .request-field input,
-  .request-field textarea,
-  .file-row > summary {
+  .request-field textarea {
     min-height: 44px;
   }
 
@@ -2801,6 +2794,12 @@ onBeforeUnmount(() => {
     padding-inline: 0;
   }
 
+  /* 去掉逐文件折叠后 diff 直接展开，单块超过 340px 时内部滚动，避免一轮吃掉整屏。 */
+  .file-diff {
+    max-height: 340px;
+    overflow: auto;
+  }
+
   .file-summary-icon {
     width: 20px;
     height: 20px;
@@ -2817,7 +2816,7 @@ onBeforeUnmount(() => {
     padding-block: 5px;
   }
 
-  .file-row > summary {
+  .file-row-head {
     align-items: center;
     flex-wrap: nowrap;
     gap: 7px;
@@ -2866,8 +2865,7 @@ onBeforeUnmount(() => {
   .activity-details > summary,
   .request-field select,
   .request-field input,
-  .request-field textarea,
-  .file-row > summary {
+  .request-field textarea {
     min-height: 44px;
   }
 }
