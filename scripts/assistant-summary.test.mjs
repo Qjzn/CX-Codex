@@ -9,12 +9,13 @@ const file=path.join(out,'summary.mjs')
 await build({stdin:{resolveDir:process.cwd(),contents:"export * from './src/api/assistantGateway.ts';export * from './src/api/normalizers/v2.ts';export * from './src/utils/projectGroupOrdering.ts';export * from './src/conversation-transcript/projectConversation.ts';"},outfile:file,bundle:true,platform:'node',format:'esm',packages:'external',logLevel:'silent'})
 const m=await import(pathToFileURL(file).href)
 const task={taskId:'at-synthetic',title:'Synthetic task',permissions:'read-only',threadId:'worker',turnId:'turn',stopRequested:false,executionStatus:'completed',requiresReview:false,createdAt:'2026-10-18T00:00:00.000Z'}
-const state={data:null,allowedWorkspaces:[],capabilities:{conversation:true,dispatch:true,backgroundExecution:true},tasks:[task]}
+const state={data:null,allowedWorkspaces:[],capabilities:{conversation:true,dispatch:false,backgroundExecution:true},tasks:[task]}
 test('task DTO retains real status and dispatch capabilities, drops private fields, rejects invalid authority',async()=>{
  const original=globalThis.fetch
  try{
   globalThis.fetch=async()=>Response.json({...state,tasks:[{...task,sourceText:'private',host:'private'}]})
-  const result=await m.getAssistantState();assert.deepEqual(result.tasks,[task]);assert.equal(result.capabilities.dispatch,true);assert.equal(result.capabilities.resultReturn,undefined)
+  const result=await m.getAssistantState();assert.deepEqual(result.tasks,[task]);assert.equal(result.capabilities.dispatch,false);assert.equal(result.capabilities.resultReturn,undefined)
+  globalThis.fetch=async()=>Response.json({...state,capabilities:{conversation:true,dispatch:true,backgroundExecution:false}});await assert.rejects(m.getAssistantState(),/未开放的 dispatch/)
   for(const patch of [{permissions:'write'},{executionStatus:null},{requiresReview:'false'},{taskId:''}]){
    globalThis.fetch=async()=>Response.json({...state,tasks:[{...task,...patch}]});await assert.rejects(m.getAssistantState())
   }
