@@ -81,6 +81,7 @@
     "verify:conversation-rich-text": "node ./scripts/verify-conversation-rich-text.mjs",
     "verify:runtime-slimming": "node ./scripts/verify-runtime-slimming.mjs",
     "verify:cli-debug": "node --test ./scripts/cli-debug-archive.test.mjs",
+    "verify:design-contract": "node ./scripts/verify-design-contract.mjs",
     "verify:core-flows": "node ./scripts/verify-core-flows.mjs",
     "verify:session-identity": "node ./scripts/verify-session-identity.mjs",
     "test:send-feedback:browser": "node ./scripts/send-feedback-browser-smoke.mjs",

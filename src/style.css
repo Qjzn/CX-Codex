@@ -67,6 +67,7 @@
   --ui-composer-max: calc(48rem + 2.5rem);
   --ui-composer-min-height: 92px;
   --ui-row-height: 40px;
+  --ui-radius-xs: 6px;
   --ui-radius-row: 10px;
   --ui-radius-card: 8px;
   --ui-radius-control: 10px;

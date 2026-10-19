@@ -16,6 +16,7 @@ const checks = [
   ['--test', 'scripts/session-log-history-source.test.mjs'],
   ['--test', 'scripts/thread-read-error-classification.test.mjs'],
   ['--test', 'scripts/conversation-format.test.mjs'],
+  ['scripts/verify-design-contract.mjs'],
   ['--test', 'scripts/session-log-lifecycle.test.mjs'],
   ['scripts/verify-native-collaboration.mjs'],
   ['--experimental-strip-types', '--test', 'scripts/plan-implementation.test.mjs'],
