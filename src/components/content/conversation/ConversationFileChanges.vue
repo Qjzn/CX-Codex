@@ -40,7 +40,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
 <style scoped>
 .file-summary {
   /* 扁平化：不再是一张卡里套一行行文件；用一条上分隔线表明这是一段附属信息。 */
-  margin: 6px 0 14px;
+  margin: 8px 0 16px;
   border: 0;
   border-top: 1px solid var(--ui-border-subtle);
   border-radius: 0;
@@ -53,13 +53,13 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   list-style: none;
 }
 
 .file-summary > summary {
   min-height: 46px;
-  padding: 5px 10px;
+  padding: 5px 12px;
   cursor: pointer;
   color: var(--ui-text-secondary);
   font-size: var(--ui-text-sm);
@@ -148,7 +148,7 @@ const summaryLabel = computed(() => fileSummaryLabel({ fileChanges: props.fileCh
   box-sizing: border-box;
   max-width: 100%;
   margin: 3px 8px 8px;
-  padding: 12px 14px;
+  padding: 12px 16px;
   overflow: auto;
   border: 1px solid var(--ui-border-subtle);
   border-radius: 10px;

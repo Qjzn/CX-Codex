@@ -52,7 +52,7 @@ const emit = defineEmits<{ toggle: [] }>()
 .turn-timing {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 6px 12px;
+  gap: 8px 12px;
   margin: 0;
   color: var(--ui-text-tertiary);
   font-size: var(--ui-text-sm);
@@ -73,7 +73,7 @@ const emit = defineEmits<{ toggle: [] }>()
   min-width: 0;
   min-height: 32px;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 3px 0;
   border: 0;
   background: transparent;
