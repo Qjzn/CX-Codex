@@ -428,7 +428,7 @@ onUnmounted(() => {
   padding: 8px 9px;
   background: var(--ui-bg-surface-muted);
   color: var(--ui-text-secondary);
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -476,7 +476,7 @@ onUnmounted(() => {
   padding: 3px 7px;
   background: var(--ui-bg-surface-muted);
   color: var(--ui-text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .remote-access-checks span[data-ok='true'] {

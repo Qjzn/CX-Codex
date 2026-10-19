@@ -5821,7 +5821,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-title-connection-label {
-  @apply max-w-20 truncate text-[10px] font-semibold leading-none;
+  @apply max-w-20 truncate text-[11px] font-semibold leading-none;
 }
 
 .content-title-refresh-button-icon {
@@ -5864,7 +5864,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-favorites-button-badge {
-  @apply inline-flex min-w-5 items-center justify-center rounded-full bg-[#0f766e] px-1.5 py-0.5 text-[10px] text-white;
+  @apply inline-flex min-w-5 items-center justify-center rounded-full bg-[#0f766e] px-1.5 py-0.5 text-[11px] text-white;
 }
 
 @keyframes content-title-refresh-spin {
@@ -5936,12 +5936,12 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-status-pill {
-  @apply inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium whitespace-nowrap;
+  @apply inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium whitespace-nowrap;
   box-shadow: none;
 }
 
 .content-status-pill-label {
-  @apply text-[9px] font-semibold opacity-60;
+  @apply text-[11px] font-semibold opacity-60;
   letter-spacing: 0.01em;
 }
 
@@ -5966,7 +5966,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-desktop-sync-button {
-  @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-full border border-[#e7d9b0] bg-[#fcf7e8] px-2.5 text-[10px] font-semibold text-[#7a5b0c] transition-[background-color,border-color,color,transform] duration-150 hover:border-[#d7c17b] hover:bg-[#f8edc5] hover:text-[#4a3808] disabled:cursor-not-allowed disabled:opacity-70;
+  @apply inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-full border border-[#e7d9b0] bg-[#fcf7e8] px-2.5 text-[11px] font-semibold text-[#7a5b0c] transition-[background-color,border-color,color,transform] duration-150 hover:border-[#d7c17b] hover:bg-[#f8edc5] hover:text-[#4a3808] disabled:cursor-not-allowed disabled:opacity-70;
   font-family: var(--font-sans-ui);
   letter-spacing: -0.006em;
   touch-action: manipulation;
@@ -6613,7 +6613,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-settings-brand-kicker {
-  @apply text-[9px] font-semibold uppercase tracking-[0.08em];
+  @apply text-[11px] font-semibold uppercase tracking-[0.08em];
   color: var(--ui-text-tertiary);
 }
 
@@ -6676,7 +6676,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-settings-about-update-badge {
-  @apply inline-flex shrink-0 items-center rounded-full border border-[#bfdbfe] bg-[#e8f1ff] px-2 py-0.5 text-[10px] font-semibold text-[#1d4ed8];
+  @apply inline-flex shrink-0 items-center rounded-full border border-[#bfdbfe] bg-[#e8f1ff] px-2 py-0.5 text-[11px] font-semibold text-[#1d4ed8];
 }
 
 @keyframes settings-version-spin {
@@ -6858,7 +6858,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   }
 
   .content-context-badge {
-    @apply gap-1 px-1 py-0.5 text-[10px];
+    @apply gap-1 px-1 py-0.5 text-[11px];
   }
 
   .content-title-refresh-button {
@@ -6874,7 +6874,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   }
 
   .content-context-badge-number {
-    @apply min-w-[1.1rem] text-[10px];
+    @apply min-w-[1.1rem] text-[11px];
   }
 
   .content-status-strip {

@@ -242,7 +242,7 @@ const displaySnapshots = computed(() => {
 }
 
 .rate-limit-card-plan {
-  @apply shrink-0 rounded-full bg-[#f1ebde] px-2 py-0.5 text-[10px] font-medium text-[#7b7062];
+  @apply shrink-0 rounded-full bg-[#f1ebde] px-2 py-0.5 text-[11px] font-medium text-[#7b7062];
 }
 
 .rate-limit-card-metrics {
