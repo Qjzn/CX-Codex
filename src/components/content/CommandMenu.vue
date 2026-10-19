@@ -796,7 +796,7 @@ function activate(item: MenuItem): void {
 .command-menu-enter-hint,
 .command-menu-item-shortcut,
 .command-menu-footer kbd {
-  @apply inline-flex min-w-5 items-center justify-center border px-1.5 font-mono text-[10px] leading-5;
+  @apply inline-flex min-w-5 items-center justify-center border px-1.5 font-mono text-[11px] leading-5;
   border-radius: 5px;
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface-muted);

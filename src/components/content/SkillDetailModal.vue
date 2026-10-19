@@ -367,7 +367,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-badge-disabled {
-  @apply shrink-0 rounded-md border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 leading-none;
+  @apply shrink-0 rounded-md border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 leading-none;
 }
 
 .sdm-owner {
@@ -379,7 +379,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-meta-pill {
-  @apply max-w-full truncate rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500;
+  @apply max-w-full truncate rounded-md bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-500;
 }
 
 .sdm-close {

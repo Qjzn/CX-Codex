@@ -142,11 +142,11 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-badge {
-  @apply shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 leading-none;
+  @apply shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 leading-none;
 }
 
 .skill-card-badge-disabled {
-  @apply shrink-0 rounded-md border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 leading-none;
+  @apply shrink-0 rounded-md border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 leading-none;
 }
 
 .skill-card-owner {
@@ -166,7 +166,7 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-meta {
-  @apply flex min-w-0 items-center gap-2 text-[10px] text-zinc-400;
+  @apply flex min-w-0 items-center gap-2 text-[11px] text-zinc-400;
 }
 
 .skill-card-source {
@@ -174,6 +174,6 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-date {
-  @apply shrink-0 text-[10px] text-zinc-400;
+  @apply shrink-0 text-[11px] text-zinc-400;
 }
 </style>

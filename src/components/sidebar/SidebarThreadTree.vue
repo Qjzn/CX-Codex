@@ -2851,7 +2851,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-identity {
-  @apply inline-flex shrink-0 items-center rounded px-1 text-[10px] font-medium leading-4;
+  @apply inline-flex shrink-0 items-center rounded px-1 text-[11px] font-medium leading-4;
   color: var(--ui-text-tertiary);
   background: var(--ui-bg-surface-muted);
   border: 1px solid var(--ui-border-subtle);
@@ -2906,7 +2906,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-time {
-  @apply block self-center text-[10px] font-medium;
+  @apply block self-center text-[11px] font-medium;
   color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
   font-variant-numeric: tabular-nums;
@@ -3193,7 +3193,7 @@ onBeforeUnmount(() => {
   }
 
   .project-summary {
-    @apply text-[10px];
+    @apply text-[11px];
   }
 
   .thread-row-time {

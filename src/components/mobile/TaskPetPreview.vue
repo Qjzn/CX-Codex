@@ -394,7 +394,7 @@ function confirmClose() {
 .task-pet-preview-compact small {
   overflow: hidden;
   color: var(--color-text-secondary, #596579);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -415,7 +415,7 @@ function confirmClose() {
   align-items: center;
   justify-content: space-between;
   color: color-mix(in srgb, var(--color-accent, #2a72e8) 78%, #263449);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .task-pet-preview-compact b {
@@ -446,7 +446,7 @@ function confirmClose() {
 
 .task-pet-preview-header small {
   color: var(--color-text-secondary, #596579);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 500;
 }
 
@@ -584,12 +584,12 @@ function confirmClose() {
 
 .task-pet-preview-copy small {
   color: var(--color-text-secondary, #596579);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .task-pet-preview-copy .task-pet-preview-live {
   color: color-mix(in srgb, var(--color-accent, #2a72e8) 78%, #263449);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .task-pet-preview-copy .task-pet-preview-live.is-no-progress {
@@ -598,7 +598,7 @@ function confirmClose() {
 }
 
 .task-pet-preview-copy .task-pet-preview-context {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -650,7 +650,7 @@ function confirmClose() {
 
 .task-pet-preview-recents button small {
   color: var(--color-text-secondary, #596579);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .task-pet-preview-reply {
@@ -796,7 +796,7 @@ function confirmClose() {
   padding: 0 5px;
   background: #2a72e8;
   color: white;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .task-pet-preview-badge[data-waiting='true'] {
@@ -846,7 +846,7 @@ function confirmClose() {
   border-radius: 999px;
   background: #2a72e8;
   color: white;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
 }
 

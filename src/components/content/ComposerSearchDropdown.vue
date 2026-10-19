@@ -340,7 +340,7 @@ onBeforeUnmount(() => {
 }
 
 .search-dropdown-count {
-  @apply absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0f766e] px-1 text-[10px] font-semibold leading-none text-white shadow-sm;
+  @apply absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0f766e] px-1 text-[11px] font-semibold leading-none text-white shadow-sm;
 }
 
 .search-dropdown-chevron {
