@@ -126,7 +126,7 @@
     "markdown-it": "^15.0.1",
     "pdfjs-dist": "^6.3.289",
     "tailwindcss": "^4.1.18",
-    "tsup": "^8.4.0",
+    "tsup": "^9.0.0",
     "typescript": "^5.7.3",
     "vite": "^8.2.2",
     "vue": "^3.5.42",
