@@ -1,12 +1,158 @@
-# CX-Codex Conversation Design
+---
+version: alpha
+name: CX Codex
+description: Quiet, compact conversation surface for a coding agent; restrained neutrals, one teal accent, three text sizes, four spacing steps.
+colors:
+  primary: "#1f1f1f"
+  secondary: "#5f5f5c"
+  tertiary: "#6f6f6c"
+  neutral: "#f7f7f6"
+  surface: "#ffffff"
+  border: "#e3e3df"
+  accent: "#0f766e"
+  warning: "#9a6700"
+  danger: "#c2410c"
+typography:
+  body:
+    fontFamily: PingFang SC
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.55
+  status:
+    fontFamily: PingFang SC
+    fontSize: 13px
+    fontWeight: 400
+    lineHeight: 1.5
+  meta:
+    fontFamily: PingFang SC
+    fontSize: 12px
+    fontWeight: 400
+    lineHeight: 1.5
+  title:
+    fontFamily: PingFang SC
+    fontSize: 14px
+    fontWeight: 650
+    lineHeight: 1.3
+  code:
+    fontFamily: JetBrains Mono
+    fontSize: 12.5px
+    fontWeight: 400
+    lineHeight: 1.55
+rounded:
+  sm: 6px
+  md: 10px
+  lg: 12px
+  pill: 999px
+spacing:
+  sm: 8px
+  md: 12px
+  lg: 16px
+  xl: 24px
+components:
+  status-line:
+    typography: "{typography.status}"
+    textColor: "{colors.tertiary}"
+    padding: 3px
+  file-summary:
+    typography: "{typography.meta}"
+    textColor: "{colors.secondary}"
+    backgroundColor: "{colors.surface}"
+    rounded: "{rounded.sm}"
+    padding: 8px
+  code-block:
+    typography: "{typography.code}"
+    textColor: "{colors.primary}"
+    backgroundColor: "{colors.neutral}"
+    rounded: "{rounded.md}"
+    padding: 12px
+  user-bubble:
+    typography: "{typography.body}"
+    textColor: "{colors.primary}"
+    backgroundColor: "{colors.neutral}"
+    rounded: "{rounded.lg}"
+    padding: 12px
+  divider:
+    backgroundColor: "{colors.border}"
+    height: 1px
+  status-line-running:
+    typography: "{typography.status}"
+    textColor: "{colors.accent}"
+  status-line-waiting:
+    typography: "{typography.status}"
+    textColor: "{colors.warning}"
+  error-banner:
+    typography: "{typography.meta}"
+    textColor: "{colors.danger}"
+    backgroundColor: "{colors.surface}"
+    rounded: "{rounded.sm}"
+    padding: 12px
+---
 
-This document is the durable visual and interaction contract for the 7420 conversation surface. It keeps the product quiet, compact, reliable, and efficient. It does not define session semantics; `src/conversation-transcript/` owns those semantics. Product scope belongs to `PRODUCT.md`, mandatory completion gates to `PRODUCT_GOAL.md`, and verified implementation facts to `PROJECT_SPEC.md`; feature PRDs may refine but not weaken those contracts.
+# CX Codex Conversation Design
+
+This document is the durable visual and interaction contract for the conversation surface. It keeps the product quiet, compact, reliable, and efficient. It does not define session semantics; `src/conversation-transcript/` owns those semantics. Product scope belongs to `PRODUCT.md`, mandatory completion gates to `PRODUCT_GOAL.md`, and verified implementation facts to `PROJECT_SPEC.md`; feature PRDs may refine but not weaken those contracts.
+
+## Overview
+
+CX Codex is a developer tool that is read for hours. The surface is a conversation, so the design earns trust by staying quiet: one reading column, one accent, no decorative cards, and chrome that appears only when it carries information. Density is a feature; everything that repeats per turn is one line.
+
+Three rules derive every decision below:
+
+- **One line per turn.** Process, file changes, and timing collapse into a single status line; detail lives behind it, never as nested expanders in the timeline.
+- **Borders over shadows.** Surfaces are flat and opaque; separation comes from a 1px rule or spacing, not elevation.
+- **Tokens over values.** Sizes, spacing, and motion come from the scales in this file; new hardcoded values are a regression.
+
+## Colors
+
+The palette is a warm neutral ramp with exactly one accent.
+
+- **Primary (#1f1f1f):** body text and headings. 15.4:1 on the window surface.
+- **Secondary (#5f5f5c):** labels and file paths. 6.0:1 on the window surface.
+- **Tertiary (#6f6f6c):** metadata, counts, placeholders. 4.7:1 on the window surface and 5.0:1 on white — this is the floor for any small text.
+- **Neutral (#f7f7f6):** window and user-bubble surface. **Surface (#ffffff):** raised rows only.
+- **Border (#e3e3df):** every divider. Never combine a border with a wide shadow.
+- **Accent (#0f766e):** running state, links, selection tint at 22% opacity. Not used for decoration.
+- **Warning (#9a6700) / Danger (#c2410c):** waits and failures only; never as brand color.
+
+Dark mode swaps the same roles to `#09090b` window with light text; the accent stays teal. A light bubble on a dark surface is a regression.
+
+## Typography
+
+Three sizes, no more:
+
+- **Body 14px / 1.55:** answers, commentary, user messages.
+- **Status 13px / 1.5:** the per-turn status line, file paths.
+- **Meta 12px / 1.5:** counts, kinds, timestamps, placeholders.
+- **Title 14px / 650:** the one label a disclosure row carries.
+- **Code 12.5px / 1.55:** monospace, always inside a bordered block.
+
+Tabular numerals wherever numbers update in place. The reading measure stays 48rem; long Chinese paragraphs wrap rather than truncate.
+
+## Layout
+
+Four spacing steps only: 8, 12, 16, 24.
+
+- Conversation list padding: 16 horizontal, 24 bottom.
+- Between turns: 16. Inside a turn: 12 between blocks, 8 inside a disclosure.
+- The status line and the file-changes row are single 28–38px rows; nothing in the timeline exceeds 44px unless it is a control.
+- 48rem reading column, 288px sidebar, 44px header; below 768px the sidebar becomes a drawer and the column takes the viewport.
+
+## Shapes
+
+Radii carry hierarchy, not decoration: 6px for rows, 10px for code blocks and controls, 12px for bubbles and panels, 999px for pills only. A rounded box inside a rounded box is a defect.
+
+## Components
+
+- `status-line` — one row per turn: label, step count, elapsed time, disclosure chevron. It is the only entry to process detail.
+- `file-summary` — one flat row: icon, "文件变更", counts. Expanding reveals flat file rows; it is never a card inside a card.
+- `code-block` — one bordered container with a 34px toolbar (language, copy). Long lines wrap on coarse pointers instead of scrolling horizontally.
+- `user-bubble` — neutral, right aligned, 12px radius; actions sit 4px below and stay 44px tall on touch.
 
 ## Reference baseline
 
 The mandatory reference is [`midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283`](https://github.com/midea-ai/sema-code-core/tree/f564e8d930053becdd5c31fe53f65fd863b6f283).
 
-| Sema source | Design fact used by CX-Codex | CX implementation |
+| Sema source | Design fact used by CX Codex | CX implementation |
 | --- | --- | --- |
 | `webui/client/src/features/chat/ChatView.tsx` | A turn uses a user opener, an elapsed/process divider, expanded live work, collapsed completed work, and one concluding answer | `ThreadConversation.vue`: `.turn-shell`, `.turn-divider`, `.process-toggle`, `.final-answer` |
 | `webui/client/src/features/chat/Blocks.tsx` | Tool work is a compact verb/target/status row; file changes remain a first-class card with file-level diff stats | `.activity-block`, `.activity-heading`, `.file-summary`, `.file-row` |
@@ -14,7 +160,7 @@ The mandatory reference is [`midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f
 | `webui/client/src/common/ui.tsx` | State feedback is small: spinner, chevron, restrained hover/focus transitions | Active dots, disclosure chevrons, focus rings, and the return-to-latest control |
 | `webui/client/src/index.css` | Neutral surfaces, 14px UI text, readable Markdown, subtle borders, running dots, and minimal continuous animation | Existing CX semantic tokens and Chinese reading typography; Sema motion patterns are reimplemented without copying React/Tailwind code |
 
-The Vue implementation may preserve CX-Codex infrastructure and accessibility improvements, but it must not recreate the removed 7420 flat-message, inferred-final, accumulated-command-time, staged-reply, or tail-overlay presentation rules.
+The Vue implementation may preserve CX Codex infrastructure and accessibility improvements, but it must not recreate the removed 7420 flat-message, inferred-final, accumulated-command-time, staged-reply, or tail-overlay presentation rules.
 
 ## Quiet shell and header
 
