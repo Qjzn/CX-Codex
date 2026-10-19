@@ -52,6 +52,11 @@
   --ui-danger: #c2410c;
   --ui-focus: #2563eb;
   /* 字号阶梯：只保留三档，元信息/次要正文/正文 */
+  /* 间距阶梯：4px 网格，只用四档 */
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-6: 24px;
   --ui-text-xs: 12px;
   --ui-text-sm: 13px;
   --ui-text-base: 14px;

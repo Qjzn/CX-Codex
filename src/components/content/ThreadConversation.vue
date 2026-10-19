@@ -1787,8 +1787,8 @@ onBeforeUnmount(() => {
 
 .turn-shell {
   display: grid;
-  gap: 10px;
-  margin: 0 0 34px;
+  gap: 12px;
+  margin: 0 0 24px;
 }
 
 .user-message {
@@ -1815,7 +1815,7 @@ onBeforeUnmount(() => {
 .turn-divider {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
   margin: 2px 0 10px;
 }
@@ -1847,7 +1847,7 @@ onBeforeUnmount(() => {
 .activity-details pre {
   box-sizing: border-box;
   max-width: 100%;
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   padding: 12px 14px;
   overflow: auto;
   border: 1px solid var(--ui-border-subtle);
@@ -1894,13 +1894,13 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .attachment-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-top: 9px;
 }
 
@@ -2045,7 +2045,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px 10px;
+  gap: 8px 12px;
   color: var(--ui-text-tertiary);
   font-size: 12px;
 }
@@ -2066,7 +2066,7 @@ onBeforeUnmount(() => {
 
 .activity-subtitle,
 .activity-error {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   color: var(--ui-text-secondary);
   font-size: 13px;
   line-height: 1.55;
@@ -2108,7 +2108,7 @@ onBeforeUnmount(() => {
 }
 
 .plan-action {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .plan-proposal {
@@ -2138,7 +2138,7 @@ onBeforeUnmount(() => {
 .resolved-interactions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   padding-top: 8px;
 }
 
@@ -2152,12 +2152,12 @@ onBeforeUnmount(() => {
 
 .request-stack {
   display: grid;
-  gap: 10px;
-  margin: 10px 0 16px;
+  gap: 12px;
+  margin: 12px 0 16px;
 }
 
 .request-card {
-  padding: 14px;
+  padding: 16px;
   border: 1px solid color-mix(in srgb, var(--ui-warning) 34%, var(--ui-border-subtle));
   border-radius: 12px;
   background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-bg-surface));
@@ -2183,21 +2183,21 @@ onBeforeUnmount(() => {
 .request-dot {
   width: 8px;
   height: 8px;
-  margin-top: 6px;
+  margin-top: 8px;
   border-radius: 999px;
   background: var(--ui-warning);
 }
 
 .request-context {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   margin: 11px 0 0 19px;
 }
 
 .request-context-row {
   display: grid;
   grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
-  gap: 10px;
+  gap: 12px;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2229,7 +2229,7 @@ onBeforeUnmount(() => {
 
 .request-permission-unavailable {
   margin: 10px 0 0 19px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid color-mix(in srgb, var(--ui-danger) 30%, var(--ui-border-subtle));
   border-radius: 9px;
   background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
@@ -2241,7 +2241,7 @@ onBeforeUnmount(() => {
 
 .request-permission-error {
   margin: 10px 0 0 19px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid color-mix(in srgb, var(--ui-danger) 36%, var(--ui-border-subtle));
   border-radius: 9px;
   color: var(--ui-danger);
@@ -2299,7 +2299,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   width: 100%;
   min-height: 38px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--ui-border-strong);
   border-radius: 9px;
   background: var(--ui-bg-surface);
@@ -2316,7 +2316,7 @@ onBeforeUnmount(() => {
 
 .request-link {
   display: inline-block;
-  margin-top: 10px;
+  margin-top: 12px;
   font-size: 12.5px;
 }
 
@@ -2401,7 +2401,7 @@ onBeforeUnmount(() => {
 }
 
 .turn-notice {
-  margin-top: 10px;
+  margin-top: 12px;
   font-size: 12px;
 }
 
@@ -2437,7 +2437,7 @@ onBeforeUnmount(() => {
 .history-row {
   display: flex;
   justify-content: center;
-  margin: 0 0 28px;
+  margin: 0 0 24px;
 }
 
 .history-button {
@@ -2471,13 +2471,13 @@ onBeforeUnmount(() => {
 @media (max-width: 767px) {
   .transcript-list {
     /* 手机上 22/48 的上下内边距加上 28px 的轮次间距，一屏只能放下一条半对话。 */
-    padding: 14px 14px 24px;
+    padding: 16px 16px 24px;
     scrollbar-gutter: auto;
   }
 
   .turn-shell {
-    gap: 6px;
-    margin-bottom: 18px;
+    gap: 8px;
+    margin-bottom: 16px;
   }
 
   .conversation-jump-to-latest {
@@ -2544,7 +2544,7 @@ onBeforeUnmount(() => {
   }
 
   .transcript-alert-actions {
-    margin-top: 10px;
+    margin-top: 12px;
   }
 }
 
