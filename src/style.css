@@ -74,9 +74,9 @@
   --ui-radius-composer: 12px;
   --ui-shadow-float: 0 14px 40px rgb(0 0 0 / 0.08);
   --ui-z-popover: 70;
-  --motion-duration-press: 80ms;
+  --motion-duration-press: 120ms;
   --motion-duration-fast: 120ms;
-  --motion-duration-base: 180ms;
+  --motion-duration-base: 220ms;
   --motion-duration-panel: 220ms;
   --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
