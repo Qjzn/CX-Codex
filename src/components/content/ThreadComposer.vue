@@ -2814,7 +2814,7 @@ watch(
 }
 
 .thread-composer-attachment-status {
-  @apply absolute inset-0 flex items-center justify-center rounded-lg bg-black/20 text-[10px] font-semibold text-white;
+  @apply absolute inset-0 flex items-center justify-center rounded-lg bg-black/20 text-[11px] font-semibold text-white;
   backdrop-filter: blur(1px);
 }
 
@@ -2823,7 +2823,7 @@ watch(
 }
 
 .thread-composer-attachment-retry {
-  @apply absolute bottom-1 left-1 z-10 rounded-md border-0 bg-white/90 px-1.5 py-0.5 text-[10px] font-semibold text-red-700;
+  @apply absolute bottom-1 left-1 z-10 rounded-md border-0 bg-white/90 px-1.5 py-0.5 text-[11px] font-semibold text-red-700;
 }
 
 .thread-composer-attachment-remove {
@@ -3020,7 +3020,7 @@ watch(
 }
 
 .thread-composer-file-mention-icon-badge {
-  @apply inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none;
+  @apply inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[11px] font-semibold leading-none;
 }
 
 .thread-composer-file-mention-icon-badge.is-ts {
@@ -3801,7 +3801,7 @@ watch(
   }
 
   .thread-composer-input {
-    @apply min-h-11 py-1 text-[14px];
+    @apply min-h-11 py-1 text-sm;
     line-height: 1.42;
   }
 

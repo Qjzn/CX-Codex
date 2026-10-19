@@ -38,6 +38,11 @@ typography:
     fontSize: 12.5px
     fontWeight: 400
     lineHeight: 1.55
+  badge:
+    fontFamily: PingFang SC
+    fontSize: 11px
+    fontWeight: 600
+    lineHeight: 1.2
 rounded:
   sm: 6px
   md: 10px
@@ -80,6 +85,12 @@ components:
   status-line-waiting:
     typography: "{typography.status}"
     textColor: "{colors.warning}"
+  count-badge:
+    typography: "{typography.badge}"
+    textColor: "{colors.primary}"
+    backgroundColor: "{colors.neutral}"
+    rounded: "{rounded.sm}"
+    padding: 2px
   error-banner:
     typography: "{typography.meta}"
     textColor: "{colors.danger}"
@@ -123,6 +134,7 @@ Three sizes, no more:
 - **Body 14px / 1.55:** answers, commentary, user messages.
 - **Status 13px / 1.5:** the per-turn status line, file paths.
 - **Meta 12px / 1.5:** counts, kinds, timestamps, placeholders.
+- **Badge 11px / 1.2:** the only sub-12 size, reserved for count badges inside 20px chips; never for prose.
 - **Title 14px / 650:** the one label a disclosure row carries.
 - **Code 12.5px / 1.55:** monospace, always inside a bordered block.
 
